@@ -1,0 +1,11 @@
+services:
+  - type: web
+    name: rag-api
+    env: docker
+    plan: free
+    dockerfilePath: ./Dockerfile
+    envVars:
+      - key: OPENROUTER_API_KEY
+        value: your-api-key-here
+    autoDeploy: true
+
