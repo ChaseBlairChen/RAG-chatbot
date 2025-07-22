@@ -1,3 +1,4 @@
+#generate_db.py
 import os
 import shutil
 import glob
