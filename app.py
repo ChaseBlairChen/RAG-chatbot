@@ -11,6 +11,12 @@ from typing import Optional
 
 CHROMA_PATH = os.path.join(os.getcwd(), "my_chroma_db")
 
+print("Checking CHROMA_PATH:", CHROMA_PATH)
+if os.path.exists(CHROMA_PATH):
+    print("Contents:", os.listdir(CHROMA_PATH))
+else:
+    print("Folder not found")
+
 
 PROMPT_TEMPLATE = """
 Answer the question based only on the following factual context and use a little bit of your understanding as well:
