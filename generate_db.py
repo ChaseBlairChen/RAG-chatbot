@@ -9,7 +9,7 @@ from langchain.embeddings import HuggingFaceEmbeddings
 from langchain.schema import Document
 
 # Use home directory to avoid permission issues
-CHROMA_PATH = os.path.join(os.path.expanduser("~"), "my_chroma_db")
+CHROMA_PATH = os.path.join(os.getcwd(), "my_chroma_db")
 DOCUMENTS_FOLDER = "documents"  # Change this to your folder path
 
 def main():
