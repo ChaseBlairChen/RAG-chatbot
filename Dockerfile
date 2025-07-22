@@ -8,7 +8,7 @@ RUN pip install --upgrade pip && \
     pip install --no-cache-dir -r requirements.txt
 
 # Run preprocessing to generate Chroma DB
-RUN python generate_db.py
+#RUN python generate_db.py
 
 EXPOSE 8000
 
