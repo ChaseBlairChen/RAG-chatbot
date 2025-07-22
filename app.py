@@ -9,7 +9,8 @@ from langchain.prompts import ChatPromptTemplate
 from langchain_openai import ChatOpenAI
 from typing import Optional
 
-CHROMA_PATH = os.path.join(os.path.expanduser("~"), "my_chroma_db")
+CHROMA_PATH = os.path.join(os.getcwd(), "my_chroma_db")
+
 
 PROMPT_TEMPLATE = """
 Answer the question based only on the following factual context and use a little bit of your understanding as well:
