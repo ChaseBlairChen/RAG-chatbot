@@ -79,7 +79,7 @@ def ask_question(query: Query):
             )
 
         llm = ChatOpenAI(
-            model="deepseek/deepseek-chat",
+            model="deepseek/deepseek-chat-v3-0324:free",
             temperature=0.2,
             max_tokens=200,
             openai_api_key=api_key,
