@@ -48,7 +48,7 @@ def ask_question(query: Query):
                 context_found=False
             )
 
-        embedding_function = HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
+        embedding_function = HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2")
         
         # Check if Chroma database exists
         if not os.path.exists(CHROMA_PATH):
