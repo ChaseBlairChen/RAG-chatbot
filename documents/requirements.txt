@@ -1,0 +1,12 @@
+fastapi
+uvicorn[standard]
+langchain
+langchain-community
+langchain-openai
+chromadb
+sentence-transformers
+huggingface-hub
+python-dotenv
+httpx
+pypdf
+
