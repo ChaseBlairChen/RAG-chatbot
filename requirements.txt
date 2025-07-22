@@ -8,4 +8,5 @@ sentence-transformers
 huggingface-hub
 python-dotenv
 httpx
+pypdf
 
