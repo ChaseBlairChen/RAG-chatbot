@@ -108,6 +108,7 @@ def ask_question(query: Query):
             context_found=False
         )
 
+
 @app.get("/health")
 def health_check():
     """Health check endpoint"""
@@ -119,3 +120,15 @@ if __name__ == "__main__":
     import uvicorn
     port = int(os.environ.get("PORT", 8000))  # Use Render's port or fallback to 8000 locally
     uvicorn.run(app, host="0.0.0.0", port=port)
+
+
+
+app = FastAPI()
+
+@app.get("/")
+def read_root():
+    return {"message": "RAG API is running"}
+
+@app.get("/health")
+def health_check():
+    return {"status": "ok"}
