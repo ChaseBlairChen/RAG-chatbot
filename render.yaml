@@ -5,7 +5,8 @@ services:
     plan: free
     dockerfilePath: ./Dockerfile
     envVars:
-      - key: OPENROUTER_API_KEY
-        value: your-api-key-here
+      - key: OPENAI_API_KEY  # or OPENROUTER_API_KEY if you use OpenRouter
+        value: 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
+      - key: OPENAI_API_BASE
+        value: https://openrouter.ai/v1  # or your API base URL
     autoDeploy: true
-
