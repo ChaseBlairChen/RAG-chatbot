@@ -16,12 +16,22 @@ if os.path.exists(CHROMA_PATH):
 else:
     print("Folder not found")
 
-PROMPT_TEMPLATE = """
-Answer the question based only on the following factual context and use a little bit of your understanding as well:
+PROMPT_TEMPLATE_STRICT = """
+You are a precise legal assistant. Answer the question using ONLY the information provided in the context below. Do not add information from your general knowledge.
+
+CONTEXT:
 {context}
 
-Question: {question}
-Answer using as many words as possible with a serious tone like a lawyer:
+QUESTION: {question}
+
+INSTRUCTIONS:
+- Base your answer strictly on the provided context
+- If the context doesn't contain enough information to fully answer the question, state what information is missing
+- Use precise legal language and cite specific details from the context
+- If the question cannot be answered from the context, say "The provided documents do not contain sufficient information to answer this question"
+- Be thorough but only use facts explicitly stated in the context
+
+ANSWER:
 """
 
 class Query(BaseModel):
