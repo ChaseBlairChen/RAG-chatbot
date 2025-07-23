@@ -1,5 +1,6 @@
 # app.py
 from fastapi import FastAPI, Request, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import os
 import json
@@ -34,6 +35,15 @@ class QueryResponse(BaseModel):
 
 # Create FastAPI app instance ONCE
 app = FastAPI(title="RAG API", description="Retrieval-Augmented Generation API", version="1.0.0")
+
+# Add CORS middleware
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # Or ["http://localhost:3000"] for stricter
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 @app.get("/")
 def read_root():
