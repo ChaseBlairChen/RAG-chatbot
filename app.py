@@ -60,62 +60,126 @@ def health_check():
 def call_openrouter_api(prompt: str, api_key: str, api_base: str) -> str:
     """Make API call to OpenRouter with proper error handling"""
     try:
+        # Clean the API base URL
+        if api_base.endswith('/'):
+            api_base = api_base.rstrip('/')
+        
+        # Ensure we're using the correct OpenRouter URL
+        if 'openrouter.ai' in api_base and not api_base.endswith('/api/v1'):
+            api_base = "https://openrouter.ai/api/v1"
+        
         headers = {
             "Authorization": f"Bearer {api_key}",
             "Content-Type": "application/json",
-            "HTTP-Referer": "http://localhost:8000",  # Optional: for OpenRouter
+            "HTTP-Referer": "http://localhost:8000",  # Required for OpenRouter
             "X-Title": "RAG Application"  # Optional: for OpenRouter
         }
         
-        payload = {
-            "model": "deepseek/deepseek-chat",  # Updated model name
-            "messages": [
-                {"role": "user", "content": prompt}
-            ],
-            "temperature": 0.2,
-            "max_tokens": 500
-        }
+        # Try different model names that are known to work
+        models_to_try = [
+            "meta-llama/llama-3.2-3b-instruct:free",
+            "microsoft/phi-3-mini-128k-instruct:free",
+            "google/gemma-2-9b-it:free",
+            "deepseek/deepseek-chat"
+        ]
         
-        print(f"Making request to: {api_base}")
-        print(f"Headers: {headers}")
-        print(f"Payload model: {payload['model']}")
+        for model in models_to_try:
+            payload = {
+                "model": model,
+                "messages": [
+                    {"role": "user", "content": prompt}
+                ],
+                "temperature": 0.2,
+                "max_tokens": 500
+            }
+            
+            print(f"Trying model: {model}")
+            print(f"Making request to: {api_base}/chat/completions")
+            print(f"API key starts with: {api_key[:10]}...")
+            
+            response = requests.post(
+                f"{api_base}/chat/completions",
+                headers=headers,
+                json=payload,
+                timeout=30
+            )
+            
+            print(f"Response status: {response.status_code}")
+            print(f"Response headers: {dict(response.headers)}")
+            
+            # If we get HTML, it's likely an error page - let's see what it says
+            content_type = response.headers.get('content-type', '')
+            if 'text/html' in content_type:
+                print(f"Got HTML response for model {model}")
+                print(f"Response content (first 1000 chars): {response.text[:1000]}")
+                
+                # If it's the last model to try, raise the error
+                if model == models_to_try[-1]:
+                    # Try to extract error message from HTML
+                    error_msg = "HTML response received instead of JSON"
+                    if "error" in response.text.lower():
+                        # Simple extraction - look for common error patterns
+                        import re
+                        error_pattern = r'error["\s:]*([^"<>\n]{10,100})'
+                        match = re.search(error_pattern, response.text, re.IGNORECASE)
+                        if match:
+                            error_msg = f"API Error: {match.group(1).strip()}"
+                    
+                    raise HTTPException(
+                        status_code=500,
+                        detail=f"{error_msg}. Status: {response.status_code}"
+                    )
+                continue
+            
+            if response.status_code != 200:
+                print(f"Error response for model {model}: {response.text}")
+                if model == models_to_try[-1]:  # Last model to try
+                    raise HTTPException(
+                        status_code=response.status_code,
+                        detail=f"All models failed. Last error: {response.text}"
+                    )
+                continue
+            
+            # Check if response is JSON
+            if 'application/json' not in content_type:
+                print(f"Unexpected content type for model {model}: {content_type}")
+                if model == models_to_try[-1]:
+                    raise HTTPException(
+                        status_code=500,
+                        detail=f"Expected JSON response, got {content_type}"
+                    )
+                continue
+            
+            try:
+                result = response.json()
+            except json.JSONDecodeError as e:
+                print(f"JSON decode error for model {model}: {e}")
+                if model == models_to_try[-1]:
+                    raise HTTPException(
+                        status_code=500,
+                        detail=f"Invalid JSON response: {str(e)}"
+                    )
+                continue
+            
+            if 'choices' not in result or not result['choices']:
+                print(f"No choices in response for model {model}")
+                if model == models_to_try[-1]:
+                    raise HTTPException(
+                        status_code=500,
+                        detail="No choices in API response"
+                    )
+                continue
+            
+            # Success! Return the response
+            response_text = result['choices'][0]['message']['content']
+            print(f"Success with model {model}: {response_text[:100]}...")
+            return response_text
         
-        response = requests.post(
-            f"{api_base}/chat/completions",
-            headers=headers,
-            json=payload,
-            timeout=30
+        # This shouldn't be reached, but just in case
+        raise HTTPException(
+            status_code=500,
+            detail="All models failed to generate a response"
         )
-        
-        print(f"Response status: {response.status_code}")
-        print(f"Response headers: {dict(response.headers)}")
-        
-        if response.status_code != 200:
-            print(f"Error response content: {response.text}")
-            raise HTTPException(
-                status_code=response.status_code,
-                detail=f"API call failed: {response.text}"
-            )
-        
-        # Check if response is JSON
-        content_type = response.headers.get('content-type', '')
-        if 'application/json' not in content_type:
-            print(f"Unexpected content type: {content_type}")
-            print(f"Response content: {response.text[:500]}...")
-            raise HTTPException(
-                status_code=500,
-                detail=f"Expected JSON response, got {content_type}"
-            )
-        
-        result = response.json()
-        
-        if 'choices' not in result or not result['choices']:
-            raise HTTPException(
-                status_code=500,
-                detail="No choices in API response"
-            )
-        
-        return result['choices'][0]['message']['content']
         
     except requests.exceptions.Timeout:
         raise HTTPException(status_code=504, detail="API request timed out")
@@ -236,6 +300,42 @@ def test_api():
         return {"success": True, "response": response_text}
     except Exception as e:
         return {"error": str(e)}
+
+@app.get("/debug-api")
+def debug_api():
+    """Debug endpoint to check API configuration"""
+    api_key = os.environ.get("OPENAI_API_KEY")
+    api_base = os.environ.get("OPENAI_API_BASE", "https://openrouter.ai/api/v1")
+    
+    # Make a simple request to see what we get
+    headers = {
+        "Authorization": f"Bearer {api_key}" if api_key else "Bearer MISSING",
+        "Content-Type": "application/json",
+        "HTTP-Referer": "http://localhost:8000",
+        "X-Title": "RAG Application Debug"
+    }
+    
+    try:
+        response = requests.get(
+            f"{api_base}/models",  # Get available models
+            headers=headers,
+            timeout=10
+        )
+        
+        return {
+            "api_key_set": bool(api_key),
+            "api_key_prefix": api_key[:10] + "..." if api_key else "Not set",
+            "api_base": api_base,
+            "models_endpoint_status": response.status_code,
+            "models_content_type": response.headers.get('content-type'),
+            "models_response_preview": response.text[:500] if response.text else "No content"
+        }
+    except Exception as e:
+        return {
+            "api_key_set": bool(api_key),
+            "api_base": api_base,
+            "error": str(e)
+        }
 
 if __name__ == "__main__":
     import uvicorn
