@@ -42,19 +42,19 @@ class EnhancedLegalRAG:
         # Legal domain knowledge
         self.legal_keywords = {
             'contract_law': ['contract', 'agreement', 'breach', 'performance', 'consideration', 
-                           'offer', 'acceptance', 'capacity', 'legality', 'discharge'],
+                            'offer', 'acceptance', 'capacity', 'legality', 'discharge'],
             'tort_law': ['negligence', 'liability', 'damages', 'duty of care', 'causation', 
-                        'foreseeability', 'reasonable person', 'proximate cause'],
+                         'foreseeability', 'reasonable person', 'proximate cause'],
             'employment_law': ['employment', 'termination', 'discrimination', 'harassment', 
-                             'wrongful termination', 'at-will', 'benefits', 'wage', 'overtime'],
+                               'wrongful termination', 'at-will', 'benefits', 'wage', 'overtime'],
             'property_law': ['property', 'lease', 'rent', 'tenant', 'landlord', 'title', 
-                           'deed', 'easement', 'zoning', 'eminent domain'],
+                             'deed', 'easement', 'zoning', 'eminent domain'],
             'corporate_law': ['corporation', 'LLC', 'partnership', 'merger', 'acquisition', 
-                            'fiduciary duty', 'board of directors', 'shareholders'],
+                              'fiduciary duty', 'board of directors', 'shareholders'],
             'ip_law': ['intellectual property', 'copyright', 'trademark', 'patent', 'license', 
-                      'trade secret', 'infringement', 'fair use'],
+                       'trade secret', 'infringement', 'fair use'],
             'regulatory': ['compliance', 'regulation', 'statute', 'rule', 'violation', 
-                          'penalty', 'enforcement', 'administrative law']
+                           'penalty', 'enforcement', 'administrative law']
         }
         
         self.legal_phrases = [
@@ -210,48 +210,49 @@ class EnhancedLegalRAG:
             return self._generate_standard_prompt(query_text, results)
 
     def _generate_scenario_prompt(self, query_text: str, results: List[SearchResult]) -> str:
-        """Generate prompt optimized for scenario analysis"""
+        """Generate a prompt optimized for direct and professional scenario analysis."""
         context_sections = []
         
-        # Group results by type for better organization
+        # Group results for clarity
         direct_matches = [r for r in results if r.chunk_type == 'direct']
         supporting_context = [r for r in results if r.chunk_type != 'direct']
         
-        # Primary context from direct matches
+        # Primary context from the most relevant documents
         if direct_matches:
             primary_context = "\n\n---\n\n".join([r.content for r in direct_matches[:4]])
-            context_sections.append(f"PRIMARY RELEVANT PROVISIONS:\n{primary_context}")
+            context_sections.append(f"RELEVANT LEGAL PROVISIONS:\n{primary_context}")
         
-        # Supporting context
+        # Additional context for broader understanding
         if supporting_context:
             support_context = "\n\n---\n\n".join([r.content for r in supporting_context[:3]])
-            context_sections.append(f"ADDITIONAL CONTEXT:\n{support_context}")
-        
+            context_sections.append(f"ADDITIONAL CONTEXTUAL PROVISIONS:\n{support_context}")
+            
         full_context = "\n\n" + "="*50 + "\n\n".join(context_sections)
-        
-        return f"""As a legal expert, analyze this scenario using the provided legal context as your primary authority.
 
-LEGAL CONTEXT FROM DOCUMENTS:{full_context}
+        # This new prompt is more direct and demands a conclusive answer.
+        return f"""You are a legal analyst AI. Your task is to answer a specific question based on the provided legal text.
 
-SCENARIO TO ANALYZE: {query_text}
+**LEGAL CONTEXT:**
+{full_context}
 
-ANALYSIS FRAMEWORK:
-1. **Legal Issue Identification**: What specific legal principles, rules, or regulations from the context apply?
-2. **Factual Analysis**: What are the key facts in the scenario that have legal significance?
-3. **Rule Application**: How do the specific provisions from the context apply to these facts?
-4. **Multi-Factor Consideration**: What conditions, exceptions, or requirements must be met?
-5. **Practical Outcome**: What would likely happen based on the legal framework provided?
-6. **Knowledge Limitations**: What additional information from the documents would be needed for a complete analysis?
+**QUESTION:**
+{query_text}
 
-RESPONSE REQUIREMENTS:
-- Ground your analysis strictly in the provided context
-- Quote specific provisions when applying them to the scenario
-- Distinguish clearly between what the documents state vs. general legal principles
-- Use professional legal terminology
-- If the context is insufficient, specify exactly what additional documentary evidence would be needed
-- Provide practical, actionable conclusions where possible
+**INSTRUCTIONS:**
+1.  **Direct Answer:** Begin with a direct answer to the question (e.g., "Yes, RCW 10.01.140 allows..." or "No, based on the text...").
+2.  **Governing Rule:** Identify and quote the specific language from the legal context that governs the answer.
+3.  **Application:** Briefly explain how the rule applies to the question.
+4.  **Conclusion:** Conclude with a concise summary of the legal determination.
 
-LEGAL ANALYSIS:"""
+**RESPONSE REQUIREMENTS:**
+-   **Rely exclusively on the provided `LEGAL CONTEXT`.** Do not use external knowledge.
+-   If the context directly answers the question, state the answer decisively.
+-   If the context does not contain the information needed to answer, state that "The provided text does not address this specific issue."
+-   **Do not ask for more information or suggest alternative questions.**
+-   Maintain a formal, objective, and professional tone.
+
+**LEGAL ANALYSIS:**
+"""
 
     def _generate_standard_prompt(self, query_text: str, results: List[SearchResult]) -> str:
         """Generate prompt for standard legal questions"""
