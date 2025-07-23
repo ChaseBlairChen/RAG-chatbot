@@ -9,4 +9,5 @@ huggingface-hub
 python-dotenv
 httpx
 pypdf
-
+langchain-chroma
+langchain-huggingface
