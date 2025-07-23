@@ -99,6 +99,10 @@ def ask_question(query: Query):
             question=query_text
         )
         
+        # Debug: Print the formatted prompt type and length
+        print(f"Formatted prompt type: {type(formatted_prompt)}")
+        print(f"Formatted prompt length: {len(formatted_prompt)}")
+        
         # Check for required environment variables
         api_key = os.environ.get("OPENAI_API_KEY")
         api_base = os.environ.get("OPENAI_API_BASE")
@@ -114,33 +118,26 @@ def ask_question(query: Query):
             model="deepseek/deepseek-chat-v3-0324:free",
             temperature=0.2,
             max_tokens=200,
-            openai_api_key=api_key,
-            openai_api_base=api_base
+            api_key=api_key,  # Changed from openai_api_key
+            base_url=api_base  # Changed from openai_api_base
         )
         
-        # Try the most basic approach - direct string invocation
+        # For LangChain 0.3.x - use the correct message format
+        print(f"Creating HumanMessage with content type: {type(formatted_prompt)}")
+        messages = [HumanMessage(content=formatted_prompt)]
+        print(f"Messages created: {len(messages)} messages")
+        
         try:
-            # Method 1: Try with list of messages (most compatible)
-            messages = [{"role": "user", "content": formatted_prompt}]
+            print("Attempting to invoke LLM...")
             response = llm.invoke(messages)
-            response_text = response.content if hasattr(response, 'content') else str(response)
-        except Exception as e1:
-            try:
-                # Method 2: Try with HumanMessage object
-                messages = [HumanMessage(content=formatted_prompt)]
-                response = llm.invoke(messages)
-                response_text = response.content if hasattr(response, 'content') else str(response)
-            except Exception as e2:
-                try:
-                    # Method 3: Direct string (might work with some versions)
-                    response = llm.invoke(formatted_prompt)
-                    response_text = response.content if hasattr(response, 'content') else str(response)
-                except Exception as e3:
-                    # Method 4: Last resort - use the old predict method if available
-                    if hasattr(llm, 'predict'):
-                        response_text = llm.predict(formatted_prompt)
-                    else:
-                        raise Exception(f"All methods failed: {str(e1)}, {str(e2)}, {str(e3)}")
+            print(f"Response type: {type(response)}")
+            response_text = response.content
+            print(f"Response content type: {type(response_text)}")
+        except Exception as e:
+            # Debug: let's see what the actual error is
+            print(f"Error details: {str(e)}")
+            print(f"Error type: {type(e)}")
+            raise Exception(f"LLM invoke failed: {str(e)}, Type of formatted_prompt: {type(formatted_prompt)}")
         
         return QueryResponse(
             response=response_text if response_text else None,
