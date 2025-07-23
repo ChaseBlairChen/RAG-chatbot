@@ -10,13 +10,11 @@ from langchain_openai import ChatOpenAI
 from typing import Optional
 
 CHROMA_PATH = os.path.join(os.getcwd(), "my_chroma_db")
-
 print("Checking CHROMA_PATH:", CHROMA_PATH)
 if os.path.exists(CHROMA_PATH):
     print("Contents:", os.listdir(CHROMA_PATH))
 else:
     print("Folder not found")
-
 
 PROMPT_TEMPLATE = """
 Answer the question based only on the following factual context and use a little bit of your understanding as well:
@@ -34,7 +32,21 @@ class QueryResponse(BaseModel):
     error: Optional[str] = None
     context_found: bool = False
 
-app = FastAPI()
+# Create FastAPI app instance ONCE
+app = FastAPI(title="RAG API", description="Retrieval-Augmented Generation API", version="1.0.0")
+
+@app.get("/")
+def read_root():
+    return {"message": "RAG API is running"}
+
+@app.get("/health")
+def health_check():
+    """Health check endpoint"""
+    return {
+        "status": "healthy", 
+        "database_exists": os.path.exists(CHROMA_PATH),
+        "database_path": CHROMA_PATH
+    }
 
 @app.post("/ask", response_model=QueryResponse)
 def ask_question(query: Query):
@@ -47,7 +59,7 @@ def ask_question(query: Query):
                 error="Question cannot be empty",
                 context_found=False
             )
-
+        
         embedding_function = HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2")
         
         # Check if Chroma database exists
@@ -67,13 +79,13 @@ def ask_question(query: Query):
                 error=None,
                 context_found=False
             )
-
+        
         context_text = "\n\n---\n\n".join([doc.page_content for doc, _ in results])
         prompt = ChatPromptTemplate.from_template(PROMPT_TEMPLATE).format(
             context=context_text, 
             question=query_text
         )
-
+        
         # Check for required environment variables
         api_key = os.environ.get("OPENAI_API_KEY")
         api_base = os.environ.get("OPENAI_API_BASE")
@@ -84,7 +96,7 @@ def ask_question(query: Query):
                 error="API configuration missing",
                 context_found=True
             )
-
+        
         llm = ChatOpenAI(
             model="deepseek/deepseek-chat-v3-0324:free",
             temperature=0.2,
@@ -108,27 +120,7 @@ def ask_question(query: Query):
             context_found=False
         )
 
-
-@app.get("/health")
-def health_check():
-    """Health check endpoint"""
-    return {"status": "healthy", "database_exists": os.path.exists(CHROMA_PATH)}
-
-
-
 if __name__ == "__main__":
     import uvicorn
     port = int(os.environ.get("PORT", 8000))  # Use Render's port or fallback to 8000 locally
     uvicorn.run(app, host="0.0.0.0", port=port)
-
-
-
-app = FastAPI()
-
-@app.get("/")
-def read_root():
-    return {"message": "RAG API is running"}
-
-@app.get("/health")
-def health_check():
-    return {"status": "ok"}
