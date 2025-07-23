@@ -114,67 +114,42 @@ def ask_question(query: Query):
                 context_found=True
             )
         
-        llm = ChatOpenAI(
-            model="deepseek/deepseek-chat-v3-0324:free",
-            temperature=0.2,
-            max_tokens=200,
-            api_key=api_key,  # Changed from openai_api_key
-            base_url=api_base  # Changed from openai_api_base
-        )
-        
-        # For LangChain 0.3.x - try different message creation approaches
-        print(f"Creating HumanMessage with content type: {type(formatted_prompt)}")
-        
+        # Use OpenAI client directly instead of LangChain wrapper
         try:
-            # Method 1: Try with explicit HumanMessage creation
-            from langchain_core.messages import HumanMessage
-            message = HumanMessage(content=str(formatted_prompt))  # Ensure it's a string
-            messages = [message]
-            print(f"Method 1 - Messages created: {len(messages)} messages")
-            print(f"Message type: {type(message)}")
-            print(f"Message content type: {type(message.content)}")
+            import openai
             
-            print("Attempting to invoke LLM with Method 1...")
-            response = llm.invoke(messages)
-            print(f"Response type: {type(response)}")
-            response_text = response.content
-            print(f"Response content type: {type(response_text)}")
+            # Set up the OpenAI client for OpenRouter
+            client = openai.OpenAI(
+                api_key=api_key,
+                base_url=api_base
+            )
             
-        except Exception as e1:
-            print(f"Method 1 failed: {str(e1)}")
-            try:
-                # Method 2: Try with dictionary format
-                messages = [{"role": "user", "content": str(formatted_prompt)}]
-                print("Attempting to invoke LLM with Method 2 (dict format)...")
-                response = llm.invoke(messages)
-                response_text = response.content
-                
-            except Exception as e2:
-                print(f"Method 2 failed: {str(e2)}")
-                try:
-                    # Method 3: Try direct string invocation
-                    print("Attempting to invoke LLM with Method 3 (direct string)...")
-                    response = llm.invoke(str(formatted_prompt))
-                    response_text = response.content if hasattr(response, 'content') else str(response)
-                    
-                except Exception as e3:
-                    print(f"Method 3 failed: {str(e3)}")
-                    # Method 4: Last resort - create a simple message manually
-                    try:
-                        from langchain_core.messages.base import BaseMessage
-                        
-                        class SimpleHumanMessage(BaseMessage):
-                            def __init__(self, content: str):
-                                super().__init__(content=content, type="human")
-                        
-                        message = SimpleHumanMessage(content=str(formatted_prompt))
-                        messages = [message]
-                        print("Attempting to invoke LLM with Method 4 (custom message)...")
-                        response = llm.invoke(messages)
-                        response_text = response.content
-                        
-                    except Exception as e4:
-                        raise Exception(f"All methods failed: 1:{str(e1)}, 2:{str(e2)}, 3:{str(e3)}, 4:{str(e4)}")
+            # Make the API call directly
+            response = client.chat.completions.create(
+                model="deepseek/deepseek-chat-v3-0324:free",
+                messages=[
+                    {"role": "user", "content": formatted_prompt}
+                ],
+                temperature=0.2,
+                max_tokens=200
+            )
+            
+            response_text = response.choices[0].message.content
+            print(f"Direct OpenAI call successful. Response length: {len(response_text) if response_text else 0}")
+            
+        except ImportError:
+            return QueryResponse(
+                response=None,
+                error="OpenAI package not installed. Please install: pip install openai",
+                context_found=True
+            )
+        except Exception as e:
+            print(f"Direct OpenAI call failed: {str(e)}")
+            return QueryResponse(
+                response=None,
+                error=f"API call failed: {str(e)}",
+                context_found=True
+            )
         
         return QueryResponse(
             response=response_text if response_text else None,
