@@ -118,12 +118,29 @@ def ask_question(query: Query):
             openai_api_base=api_base
         )
         
-        # Use proper message format for newer LangChain versions
-        messages = [HumanMessage(content=formatted_prompt)]
-        response = llm.invoke(messages)
-        
-        # Extract the content from the response
-        response_text = response.content if hasattr(response, 'content') else str(response)
+        # Try the most basic approach - direct string invocation
+        try:
+            # Method 1: Try with list of messages (most compatible)
+            messages = [{"role": "user", "content": formatted_prompt}]
+            response = llm.invoke(messages)
+            response_text = response.content if hasattr(response, 'content') else str(response)
+        except Exception as e1:
+            try:
+                # Method 2: Try with HumanMessage object
+                messages = [HumanMessage(content=formatted_prompt)]
+                response = llm.invoke(messages)
+                response_text = response.content if hasattr(response, 'content') else str(response)
+            except Exception as e2:
+                try:
+                    # Method 3: Direct string (might work with some versions)
+                    response = llm.invoke(formatted_prompt)
+                    response_text = response.content if hasattr(response, 'content') else str(response)
+                except Exception as e3:
+                    # Method 4: Last resort - use the old predict method if available
+                    if hasattr(llm, 'predict'):
+                        response_text = llm.predict(formatted_prompt)
+                    else:
+                        raise Exception(f"All methods failed: {str(e1)}, {str(e2)}, {str(e3)}")
         
         return QueryResponse(
             response=response_text if response_text else None,
