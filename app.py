@@ -124,6 +124,9 @@ def ask_question(query: Query):
                 base_url=api_base
             )
             
+            print(f"Making API call to {api_base} with model deepseek/deepseek-chat-v3-0324:free")
+            print(f"API key starts with: {api_key[:10]}...")
+            
             # Make the API call directly
             response = client.chat.completions.create(
                 model="deepseek/deepseek-chat-v3-0324:free",
@@ -134,8 +137,22 @@ def ask_question(query: Query):
                 max_tokens=200
             )
             
-            response_text = response.choices[0].message.content
-            print(f"Direct OpenAI call successful. Response length: {len(response_text) if response_text else 0}")
+            print(f"Response type: {type(response)}")
+            print(f"Response: {response}")
+            
+            # Handle different response types
+            if hasattr(response, 'choices') and response.choices:
+                response_text = response.choices[0].message.content
+                print(f"Extracted response text: {response_text[:100]}...")
+            elif isinstance(response, dict) and 'choices' in response:
+                response_text = response['choices'][0]['message']['content']
+                print(f"Dict response - Extracted text: {response_text[:100]}...")
+            elif isinstance(response, str):
+                response_text = response
+                print(f"String response: {response_text[:100]}...")
+            else:
+                print(f"Unexpected response format: {response}")
+                response_text = str(response)
             
         except ImportError:
             return QueryResponse(
@@ -145,6 +162,7 @@ def ask_question(query: Query):
             )
         except Exception as e:
             print(f"Direct OpenAI call failed: {str(e)}")
+            print(f"Error type: {type(e)}")
             return QueryResponse(
                 response=None,
                 error=f"API call failed: {str(e)}",
