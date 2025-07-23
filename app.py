@@ -6,7 +6,7 @@ import os
 import json
 from langchain_community.vectorstores import Chroma
 from langchain.embeddings import HuggingFaceEmbeddings
-from langchain.prompts import ChatPromptTemplate
+# from langchain.prompts import ChatPromptTemplate  # Not needed anymore
 from langchain_openai import ChatOpenAI
 from typing import Optional
 
@@ -92,9 +92,8 @@ def ask_question(query: Query):
         
         context_text = "\n\n---\n\n".join([doc.page_content for doc, _ in results])
         
-        # Fix: Create the prompt template and format it properly
-        prompt_template = ChatPromptTemplate.from_template(PROMPT_TEMPLATE)
-        formatted_prompt = prompt_template.format(
+        # Simple string formatting - avoid ChatPromptTemplate complications
+        formatted_prompt = PROMPT_TEMPLATE.format(
             context=context_text, 
             question=query_text
         )
@@ -118,12 +117,20 @@ def ask_question(query: Query):
             openai_api_base=api_base
         )
         
-        # Fix: Use invoke instead of predict (newer LangChain versions)
-        # and pass the formatted prompt properly
-        response = llm.invoke(formatted_prompt)
-        
-        # Extract the content from the response
-        response_text = response.content if hasattr(response, 'content') else str(response)
+        # Use invoke with a simple string - try different approaches
+        try:
+            response = llm.invoke(formatted_prompt)
+            response_text = response.content if hasattr(response, 'content') else str(response)
+        except Exception as invoke_error:
+            # Fallback to predict method if invoke fails
+            try:
+                response_text = llm.predict(formatted_prompt)
+            except Exception as predict_error:
+                # If both fail, try with messages format
+                from langchain_core.messages import HumanMessage
+                messages = [HumanMessage(content=formatted_prompt)]
+                response = llm.invoke(messages)
+                response_text = response.content if hasattr(response, 'content') else str(response)
         
         return QueryResponse(
             response=response_text if response_text else None,
