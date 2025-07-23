@@ -12,3 +12,4 @@ pypdf
 langchain-chroma
 langchain-huggingface
 openai
+PyMuPDF
