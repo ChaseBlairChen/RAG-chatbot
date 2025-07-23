@@ -17,21 +17,22 @@ else:
     print("Folder not found")
 
 PROMPT_TEMPLATE = """
-You are a precise legal assistant. Answer the question using ONLY the information provided in the context below. Do not add information from your general knowledge.
+As a legal expert, provide a comprehensive answer to the question below using the provided context as your primary source.
 
 CONTEXT:
 {context}
 
 QUESTION: {question}
 
-INSTRUCTIONS:
-- Base your answer strictly on the provided context
-- If the context doesn't contain enough information to fully answer the question, state what information is missing
-- Use precise legal language and cite specific details from the context
-- If the question cannot be answered from the context, say "The provided documents do not contain sufficient information to answer this question"
-- Be thorough but only use facts explicitly stated in the context
+GUIDELINES:
+- Prioritize information from the provided context above all else
+- Only supplement with general legal knowledge if it directly supports or clarifies the context
+- Clearly distinguish between what's stated in the documents vs. general legal principles
+- Use professional legal terminology and maintain a formal tone
+- Provide detailed explanations with specific references to the context
+- If the context is insufficient, explicitly state what additional information would be needed
 
-ANSWER:
+RESPONSE:
 """
 
 class Query(BaseModel):
