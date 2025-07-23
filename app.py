@@ -122,22 +122,59 @@ def ask_question(query: Query):
             base_url=api_base  # Changed from openai_api_base
         )
         
-        # For LangChain 0.3.x - use the correct message format
+        # For LangChain 0.3.x - try different message creation approaches
         print(f"Creating HumanMessage with content type: {type(formatted_prompt)}")
-        messages = [HumanMessage(content=formatted_prompt)]
-        print(f"Messages created: {len(messages)} messages")
         
         try:
-            print("Attempting to invoke LLM...")
+            # Method 1: Try with explicit HumanMessage creation
+            from langchain_core.messages import HumanMessage
+            message = HumanMessage(content=str(formatted_prompt))  # Ensure it's a string
+            messages = [message]
+            print(f"Method 1 - Messages created: {len(messages)} messages")
+            print(f"Message type: {type(message)}")
+            print(f"Message content type: {type(message.content)}")
+            
+            print("Attempting to invoke LLM with Method 1...")
             response = llm.invoke(messages)
             print(f"Response type: {type(response)}")
             response_text = response.content
             print(f"Response content type: {type(response_text)}")
-        except Exception as e:
-            # Debug: let's see what the actual error is
-            print(f"Error details: {str(e)}")
-            print(f"Error type: {type(e)}")
-            raise Exception(f"LLM invoke failed: {str(e)}, Type of formatted_prompt: {type(formatted_prompt)}")
+            
+        except Exception as e1:
+            print(f"Method 1 failed: {str(e1)}")
+            try:
+                # Method 2: Try with dictionary format
+                messages = [{"role": "user", "content": str(formatted_prompt)}]
+                print("Attempting to invoke LLM with Method 2 (dict format)...")
+                response = llm.invoke(messages)
+                response_text = response.content
+                
+            except Exception as e2:
+                print(f"Method 2 failed: {str(e2)}")
+                try:
+                    # Method 3: Try direct string invocation
+                    print("Attempting to invoke LLM with Method 3 (direct string)...")
+                    response = llm.invoke(str(formatted_prompt))
+                    response_text = response.content if hasattr(response, 'content') else str(response)
+                    
+                except Exception as e3:
+                    print(f"Method 3 failed: {str(e3)}")
+                    # Method 4: Last resort - create a simple message manually
+                    try:
+                        from langchain_core.messages.base import BaseMessage
+                        
+                        class SimpleHumanMessage(BaseMessage):
+                            def __init__(self, content: str):
+                                super().__init__(content=content, type="human")
+                        
+                        message = SimpleHumanMessage(content=str(formatted_prompt))
+                        messages = [message]
+                        print("Attempting to invoke LLM with Method 4 (custom message)...")
+                        response = llm.invoke(messages)
+                        response_text = response.content
+                        
+                    except Exception as e4:
+                        raise Exception(f"All methods failed: 1:{str(e1)}, 2:{str(e2)}, 3:{str(e3)}, 4:{str(e4)}")
         
         return QueryResponse(
             response=response_text if response_text else None,
