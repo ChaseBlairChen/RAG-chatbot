@@ -91,7 +91,10 @@ def ask_question(query: Query):
             )
         
         context_text = "\n\n---\n\n".join([doc.page_content for doc, _ in results])
-        prompt = ChatPromptTemplate.from_template(PROMPT_TEMPLATE).format(
+        
+        # Fix: Create the prompt template and format it properly
+        prompt_template = ChatPromptTemplate.from_template(PROMPT_TEMPLATE)
+        formatted_prompt = prompt_template.format(
             context=context_text, 
             question=query_text
         )
@@ -115,10 +118,15 @@ def ask_question(query: Query):
             openai_api_base=api_base
         )
         
-        response = llm.predict(prompt)
+        # Fix: Use invoke instead of predict (newer LangChain versions)
+        # and pass the formatted prompt properly
+        response = llm.invoke(formatted_prompt)
+        
+        # Extract the content from the response
+        response_text = response.content if hasattr(response, 'content') else str(response)
         
         return QueryResponse(
-            response=response if response else None,
+            response=response_text if response_text else None,
             error=None,
             context_found=True
         )
