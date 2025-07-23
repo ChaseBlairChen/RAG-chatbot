@@ -11,3 +11,4 @@ httpx
 pypdf
 langchain-chroma
 langchain-huggingface
+openai
