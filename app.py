@@ -4,11 +4,9 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import os
 import json
+import requests
 from langchain_chroma import Chroma
 from langchain_huggingface import HuggingFaceEmbeddings
-# from langchain.prompts import ChatPromptTemplate  # Not needed anymore
-from langchain_openai import ChatOpenAI
-from langchain_core.messages import HumanMessage
 from typing import Optional
 
 CHROMA_PATH = os.path.join(os.getcwd(), "my_chroma_db")
@@ -59,6 +57,75 @@ def health_check():
         "database_path": CHROMA_PATH
     }
 
+def call_openrouter_api(prompt: str, api_key: str, api_base: str) -> str:
+    """Make API call to OpenRouter with proper error handling"""
+    try:
+        headers = {
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+            "HTTP-Referer": "http://localhost:8000",  # Optional: for OpenRouter
+            "X-Title": "RAG Application"  # Optional: for OpenRouter
+        }
+        
+        payload = {
+            "model": "deepseek/deepseek-chat",  # Updated model name
+            "messages": [
+                {"role": "user", "content": prompt}
+            ],
+            "temperature": 0.2,
+            "max_tokens": 500
+        }
+        
+        print(f"Making request to: {api_base}")
+        print(f"Headers: {headers}")
+        print(f"Payload model: {payload['model']}")
+        
+        response = requests.post(
+            f"{api_base}/chat/completions",
+            headers=headers,
+            json=payload,
+            timeout=30
+        )
+        
+        print(f"Response status: {response.status_code}")
+        print(f"Response headers: {dict(response.headers)}")
+        
+        if response.status_code != 200:
+            print(f"Error response content: {response.text}")
+            raise HTTPException(
+                status_code=response.status_code,
+                detail=f"API call failed: {response.text}"
+            )
+        
+        # Check if response is JSON
+        content_type = response.headers.get('content-type', '')
+        if 'application/json' not in content_type:
+            print(f"Unexpected content type: {content_type}")
+            print(f"Response content: {response.text[:500]}...")
+            raise HTTPException(
+                status_code=500,
+                detail=f"Expected JSON response, got {content_type}"
+            )
+        
+        result = response.json()
+        
+        if 'choices' not in result or not result['choices']:
+            raise HTTPException(
+                status_code=500,
+                detail="No choices in API response"
+            )
+        
+        return result['choices'][0]['message']['content']
+        
+    except requests.exceptions.Timeout:
+        raise HTTPException(status_code=504, detail="API request timed out")
+    except requests.exceptions.RequestException as e:
+        raise HTTPException(status_code=500, detail=f"Request failed: {str(e)}")
+    except json.JSONDecodeError as e:
+        raise HTTPException(status_code=500, detail=f"Invalid JSON response: {str(e)}")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Unexpected error: {str(e)}")
+
 @app.post("/ask", response_model=QueryResponse)
 def ask_question(query: Query):
     try:
@@ -105,63 +172,42 @@ def ask_question(query: Query):
         
         # Check for required environment variables
         api_key = os.environ.get("OPENAI_API_KEY")
-        api_base = os.environ.get("OPENAI_API_BASE")
+        api_base = os.environ.get("OPENAI_API_BASE", "https://openrouter.ai/api/v1")
         
-        if not api_key or not api_base:
+        if not api_key:
             return QueryResponse(
                 response=None,
-                error="API configuration missing",
+                error="OPENAI_API_KEY environment variable is required",
                 context_found=True
             )
         
-        # Use OpenAI client directly instead of LangChain wrapper
-        try:
-            import openai
-            
-            # Set up the OpenAI client for OpenRouter
-            client = openai.OpenAI(
-                api_key=api_key,
-                base_url=api_base
-            )
-            
-            print(f"Making API call to {api_base} with model deepseek/deepseek-chat-v3-0324:free")
-            print(f"API key starts with: {api_key[:10]}...")
-            
-            # Make the API call directly
-            response = client.chat.completions.create(
-                model="deepseek/deepseek-chat-v3-0324:free",
-                messages=[
-                    {"role": "user", "content": formatted_prompt}
-                ],
-                temperature=0.2,
-                max_tokens=200
-            )
-            
-            print(f"Response type: {type(response)}")
-            print(f"Response: {response}")
-            
-            # Handle different response types
-            if hasattr(response, 'choices') and response.choices:
-                response_text = response.choices[0].message.content
-                print(f"Extracted response text: {response_text[:100]}...")
-            elif isinstance(response, dict) and 'choices' in response:
-                response_text = response['choices'][0]['message']['content']
-                print(f"Dict response - Extracted text: {response_text[:100]}...")
-            elif isinstance(response, str):
-                response_text = response
-                print(f"String response: {response_text[:100]}...")
-            else:
-                print(f"Unexpected response format: {response}")
-                response_text = str(response)
-            
-        except ImportError:
+        if not api_base:
             return QueryResponse(
                 response=None,
-                error="OpenAI package not installed. Please install: pip install openai",
+                error="OPENAI_API_BASE environment variable is required",
+                context_found=True
+            )
+        
+        # Make the API call using requests
+        try:
+            response_text = call_openrouter_api(formatted_prompt, api_key, api_base)
+            
+            print(f"Successfully got response: {response_text[:100]}...")
+            
+            return QueryResponse(
+                response=response_text if response_text else "No response generated",
+                error=None,
+                context_found=True
+            )
+            
+        except HTTPException as he:
+            return QueryResponse(
+                response=None,
+                error=str(he.detail),
                 context_found=True
             )
         except Exception as e:
-            print(f"Direct OpenAI call failed: {str(e)}")
+            print(f"API call failed: {str(e)}")
             print(f"Error type: {type(e)}")
             return QueryResponse(
                 response=None,
@@ -169,18 +215,27 @@ def ask_question(query: Query):
                 context_found=True
             )
         
-        return QueryResponse(
-            response=response_text if response_text else None,
-            error=None,
-            context_found=True
-        )
-        
     except Exception as e:
         return QueryResponse(
             response=None,
             error=f"An error occurred: {str(e)}",
             context_found=False
         )
+
+@app.get("/test-api")
+def test_api():
+    """Test endpoint to check API connectivity"""
+    api_key = os.environ.get("OPENAI_API_KEY")
+    api_base = os.environ.get("OPENAI_API_BASE", "https://openrouter.ai/api/v1")
+    
+    if not api_key:
+        return {"error": "OPENAI_API_KEY not set"}
+    
+    try:
+        response_text = call_openrouter_api("Hello, this is a test.", api_key, api_base)
+        return {"success": True, "response": response_text}
+    except Exception as e:
+        return {"error": str(e)}
 
 if __name__ == "__main__":
     import uvicorn
