@@ -16,7 +16,7 @@ if os.path.exists(CHROMA_PATH):
 else:
     print("Folder not found")
 
-PROMPT_TEMPLATE_STRICT = """
+PROMPT_TEMPLATE = """
 You are a precise legal assistant. Answer the question using ONLY the information provided in the context below. Do not add information from your general knowledge.
 
 CONTEXT:
