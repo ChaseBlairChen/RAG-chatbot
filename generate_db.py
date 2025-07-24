@@ -89,12 +89,13 @@ def load_pdf_with_enhanced_extraction(pdf_path: str) -> List[Document]:
     try:
         pdf_document = fitz.open(pdf_path)
         file_name = os.path.basename(pdf_path)
+        total_pages = len(pdf_document)  # Store this before processing
         
         # Extract text from all pages first
         all_text = ""
         page_breaks = []
         
-        for page_num in range(len(pdf_document)):
+        for page_num in range(total_pages):
             page = pdf_document.load_page(page_num)
             page_text = page.get_text()
             
@@ -102,6 +103,7 @@ def load_pdf_with_enhanced_extraction(pdf_path: str) -> List[Document]:
                 page_breaks.append(len(all_text))
                 all_text += page_text + "\n\n--- PAGE BREAK ---\n\n"
         
+        # Close the PDF document after we're done extracting text
         pdf_document.close()
         
         # Clean the text
@@ -120,7 +122,7 @@ def load_pdf_with_enhanced_extraction(pdf_path: str) -> List[Document]:
                         "file_type": "pdf",
                         "section_title": section['title'],
                         "page_number": section['page'],
-                        "total_pages": len(pdf_document),
+                        "total_pages": total_pages,  # Use the stored value
                         "extraction_method": "enhanced_pymupdf",
                         "section_type": section['type']
                     }
@@ -139,8 +141,9 @@ def load_pdf_with_pymupdf_basic(pdf_path: str) -> List[Document]:
     
     try:
         pdf_document = fitz.open(pdf_path)
+        total_pages = len(pdf_document)  # Store this before processing
         
-        for page_num in range(len(pdf_document)):
+        for page_num in range(total_pages):
             page = pdf_document.load_page(page_num)
             text = page.get_text()
             text = clean_pdf_text(text)
@@ -152,13 +155,14 @@ def load_pdf_with_pymupdf_basic(pdf_path: str) -> List[Document]:
                         "source": pdf_path,
                         "file_type": "pdf",
                         "page_number": page_num + 1,
-                        "total_pages": len(pdf_document),
+                        "total_pages": total_pages,  # Use the stored value
                         "extraction_method": "basic_pymupdf",
                         "file_name": os.path.basename(pdf_path)
                     }
                 )
                 documents.append(doc)
         
+        # Close the PDF document after processing all pages
         pdf_document.close()
         
     except Exception as e:
