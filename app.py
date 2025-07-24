@@ -74,20 +74,35 @@ def enhanced_retrieval(db, query_text: str, k: int = 5):
     
     return filtered_results[:k]
 
-def create_enhanced_context(results, questions: list) -> str:
-    """Create context that's optimized for multiple questions"""
+def create_enhanced_context(results, questions: list) -> tuple:
+    """Create context that's optimized for multiple questions and return source info"""
     context_parts = []
+    source_info = []
     
     for i, (doc, score) in enumerate(results):
         # Add source information for better reference
         source = doc.metadata.get('source', 'Unknown')
+        file_name = doc.metadata.get('file_name', os.path.basename(source) if source != 'Unknown' else 'Unknown')
         page = doc.metadata.get('page_number', '')
         page_info = f" (Page {page})" if page else ""
         
-        context_part = f"DOCUMENT {i+1} - {source}{page_info} (Relevance: {score:.2f}):\n{doc.page_content}"
+        # Clean up source path for display
+        display_source = file_name if file_name != 'Unknown' else source
+        
+        context_part = f"[SOURCE {i+1}] {display_source}{page_info} (Relevance: {score:.2f}):\n{doc.page_content}"
         context_parts.append(context_part)
+        
+        # Store source information for citation
+        source_info.append({
+            'id': i+1,
+            'file_name': display_source,
+            'page': page,
+            'relevance': score,
+            'full_path': source
+        })
     
-    return "\n\n" + "="*50 + "\n\n".join(context_parts)
+    context_text = "\n\n" + "="*50 + "\n\n".join(context_parts)
+    return context_text, source_info
 
 ENHANCED_PROMPT_TEMPLATE = """
 As a legal expert, provide a comprehensive answer to the question below using the provided context as your primary source.
@@ -99,13 +114,14 @@ QUESTION: {questions}
 
 GUIDELINES:
 - Prioritize information from the provided context above all else
+- When referencing information, cite the source using the format [SOURCE X] where X is the source number from the context
 - Only supplement with general legal knowledge if it directly supports or clarifies the context
-- Clearly distinguish between what's stated in the documents vs. general legal principles
 - Use professional legal terminology and maintain a formal tone
-- Provide detailed explanations with specific references to the context
+- Provide detailed explanations with specific references to the context sources
 - If the context is insufficient, explicitly state what additional information would be needed
 - Use bullet points with proper spacing for clarity when listing multiple items
 - Provide a direct, focused answer without unnecessary repetition
+- Always include source citations for specific claims
 
 RESPONSE:
 """
@@ -117,6 +133,7 @@ class QueryResponse(BaseModel):
     response: Optional[str] = None
     error: Optional[str] = None
     context_found: bool = False
+    sources: Optional[list] = None
 
 # Create FastAPI app instance ONCE
 app = FastAPI(title="RAG API", description="Retrieval-Augmented Generation API", version="1.0.0")
@@ -315,13 +332,13 @@ def ask_question(query: Query):
                 context_found=False
             )
         
-        # Create enhanced context
-        context_text = create_enhanced_context(results, questions)
+        # Create enhanced context with source tracking
+        context_text, source_info = create_enhanced_context(results, questions)
         
         # Format questions for the prompt
         if len(questions) > 1:
             formatted_questions = "\n".join(f"{i+1}. {q}" for i, q in enumerate(questions))
-            # Use multi-question template
+            # Use multi-question template with source citations
             multi_question_template = """
 As a legal expert, provide comprehensive answers to the questions below using the provided context as your primary source.
 
@@ -334,11 +351,12 @@ QUESTIONS:
 GUIDELINES:
 - Answer each question separately and clearly
 - Number your responses to match the question numbers
+- When referencing information, cite the source using the format [SOURCE X] where X is the source number from the context
 - Prioritize information from the provided context above all else
-- Reference specific documents when citing information
 - Use professional legal terminology and maintain a formal tone
 - If a question cannot be answered from the context, explicitly state this
 - Use bullet points with proper spacing for clarity when listing multiple items
+- Always include source citations for specific claims
 
 RESPONSE:
 """
@@ -385,14 +403,16 @@ RESPONSE:
             return QueryResponse(
                 response=response_text if response_text else "No response generated",
                 error=None,
-                context_found=True
+                context_found=True,
+                sources=source_info
             )
             
         except HTTPException as he:
             return QueryResponse(
                 response=None,
                 error=str(he.detail),
-                context_found=True
+                context_found=True,
+                sources=source_info
             )
         except Exception as e:
             print(f"API call failed: {str(e)}")
@@ -400,7 +420,8 @@ RESPONSE:
             return QueryResponse(
                 response=None,
                 error=f"API call failed: {str(e)}",
-                context_found=True
+                context_found=True,
+                sources=source_info
             )
         
     except Exception as e:
@@ -460,6 +481,48 @@ def debug_api():
             "api_base": api_base,
             "error": str(e)
         }
+
+@app.get("/sources")
+def get_sources_info():
+    """Get information about available sources in the database"""
+    if not os.path.exists(CHROMA_PATH):
+        return {"error": "Database not found"}
+    
+    try:
+        embedding_function = HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2")
+        db = Chroma(persist_directory=CHROMA_PATH, embedding_function=embedding_function)
+        
+        # Get a sample of documents to show available sources
+        sample_docs = db.similarity_search("sample query", k=20)
+        
+        sources = {}
+        for doc in sample_docs:
+            source = doc.metadata.get('source', 'Unknown')
+            file_name = doc.metadata.get('file_name', os.path.basename(source) if source != 'Unknown' else 'Unknown')
+            page = doc.metadata.get('page_number', 'N/A')
+            
+            if file_name not in sources:
+                sources[file_name] = {
+                    'full_path': source,
+                    'pages': set(),
+                    'chunks': 0
+                }
+            
+            if page != 'N/A':
+                sources[file_name]['pages'].add(str(page))
+            sources[file_name]['chunks'] += 1
+        
+        # Convert sets to sorted lists for JSON serialization
+        for source_info in sources.values():
+            source_info['pages'] = sorted(source_info['pages'], key=lambda x: int(x) if x.isdigit() else 0)
+        
+        return {
+            "total_sources": len(sources),
+            "sources": sources
+        }
+    
+    except Exception as e:
+        return {"error": f"Failed to get sources info: {str(e)}"}
 
 if __name__ == "__main__":
     import uvicorn
