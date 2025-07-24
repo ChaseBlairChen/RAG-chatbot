@@ -5,6 +5,7 @@ from pydantic import BaseModel
 import os
 import json
 import requests
+import re
 from langchain_chroma import Chroma
 from langchain_huggingface import HuggingFaceEmbeddings
 from typing import Optional
@@ -16,22 +17,85 @@ if os.path.exists(CHROMA_PATH):
 else:
     print("Folder not found")
 
-PROMPT_TEMPLATE = """
-As a legal expert, provide a comprehensive answer to the question below using the provided context as your primary source.
+# Helper functions for enhanced query processing
+def parse_multiple_questions(query_text: str) -> list:
+    """Parse multiple questions from a single input"""
+    questions = []
+    
+    # First try to split by numbered patterns (1., 2., etc.)
+    numbered_pattern = r'(?:^|\n)\s*\d+[\.\)]\s*(.+?)(?=(?:\n\s*\d+[\.\)])|$)'
+    numbered_matches = re.findall(numbered_pattern, query_text, re.MULTILINE | re.DOTALL)
+    
+    if numbered_matches:
+        questions = [q.strip() for q in numbered_matches if q.strip()]
+    else:
+        # Split by question marks and filter
+        potential_questions = query_text.split('?')
+        for q in potential_questions:
+            q = q.strip()
+            if q and len(q) > 10:  # Minimum question length
+                questions.append(q + '?')
+    
+    # If no clear splits, treat as single question
+    if not questions:
+        questions = [query_text.strip()]
+    
+    return questions
+
+def enhanced_retrieval(db, query_text: str, k: int = 5):
+    """Enhanced retrieval with better scoring"""
+    # Get more results initially
+    results = db.similarity_search_with_relevance_scores(query_text, k=k*2)
+    
+    # Filter and re-rank results
+    filtered_results = []
+    seen_content = set()
+    
+    for doc, score in results:
+        # Avoid duplicate content
+        content_hash = hash(doc.page_content[:200])
+        if content_hash in seen_content:
+            continue
+        seen_content.add(content_hash)
+        
+        # Lower threshold for multiple questions
+        if score >= 0.3:  # Reduced from 0.5
+            filtered_results.append((doc, score))
+    
+    return filtered_results[:k]
+
+def create_enhanced_context(results, questions: list) -> str:
+    """Create context that's optimized for multiple questions"""
+    context_parts = []
+    
+    for i, (doc, score) in enumerate(results):
+        # Add source information for better reference
+        source = doc.metadata.get('source', 'Unknown')
+        page = doc.metadata.get('page_number', '')
+        page_info = f" (Page {page})" if page else ""
+        
+        context_part = f"DOCUMENT {i+1} - {source}{page_info} (Relevance: {score:.2f}):\n{doc.page_content}"
+        context_parts.append(context_part)
+    
+    return "\n\n" + "="*50 + "\n\n".join(context_parts)
+
+ENHANCED_PROMPT_TEMPLATE = """
+As a legal expert, provide comprehensive answers to the question(s) below using the provided context as your primary source.
 
 CONTEXT:
 {context}
 
-QUESTION: {question}
+QUESTION(S): 
+{questions}
 
 GUIDELINES:
+- Answer each question separately and clearly
+- Number your responses if there are multiple questions
 - Prioritize information from the provided context above all else
-- Only supplement with general legal knowledge if it directly supports or clarifies the context
-- Clearly distinguish between what's stated in the documents vs. general legal principles
+- Reference specific documents when citing information
 - Use professional legal terminology and maintain a formal tone
-- Provide detailed explanations with specific references to the context
-- If the context is insufficient, explicitly state what additional information would be needed
-- Use space when asked to create bullet points to make things easy to read 
+- If a question cannot be answered from the context, explicitly state this
+- Use bullet points with proper spacing for clarity when listing multiple items
 
 RESPONSE:
 """
@@ -214,6 +278,10 @@ def ask_question(query: Query):
                 context_found=False
             )
         
+        # Parse multiple questions
+        questions = parse_multiple_questions(query_text)
+        print(f"Parsed {len(questions)} questions: {questions}")
+        
         embedding_function = HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2")
         
         # Check if Chroma database exists
@@ -225,21 +293,31 @@ def ask_question(query: Query):
             )
         
         db = Chroma(persist_directory=CHROMA_PATH, embedding_function=embedding_function)
-        results = db.similarity_search_with_relevance_scores(query_text, k=3)
         
-        if not results or results[0][1] < 0.5:
+        # Combine all questions for retrieval
+        combined_query = " ".join(questions)
+        results = enhanced_retrieval(db, combined_query, k=5)
+        
+        if not results:
             return QueryResponse(
-                response="Nothing in the records.",
+                response="No relevant information found in the documents.",
                 error=None,
                 context_found=False
             )
         
-        context_text = "\n\n---\n\n".join([doc.page_content for doc, _ in results])
+        # Create enhanced context
+        context_text = create_enhanced_context(results, questions)
         
-        # Simple string formatting - avoid ChatPromptTemplate complications
-        formatted_prompt = PROMPT_TEMPLATE.format(
-            context=context_text, 
-            question=query_text
+        # Format questions for the prompt
+        if len(questions) > 1:
+            formatted_questions = "\n".join(f"{i+1}. {q}" for i, q in enumerate(questions))
+        else:
+            formatted_questions = questions[0]
+        
+        # Use the enhanced prompt template
+        formatted_prompt = ENHANCED_PROMPT_TEMPLATE.format(
+            context=context_text,
+            questions=formatted_questions
         )
         
         # Debug: Print the formatted prompt type and length
