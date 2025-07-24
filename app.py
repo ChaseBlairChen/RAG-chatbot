@@ -105,23 +105,27 @@ def create_enhanced_context(results, questions: list) -> tuple:
     return context_text, source_info
 
 ENHANCED_PROMPT_TEMPLATE = """
-As a legal expert, provide a comprehensive answer to the question below using the provided context as your primary source.
+You are a legal expert. Answer the question below using ONLY the provided context sources. You MUST cite sources using the exact format [SOURCE X] where X matches the source number from the context.
 
 CONTEXT:
 {context}
 
 QUESTION: {questions}
 
+CRITICAL CITATION RULES:
+- Every factual claim MUST include a source citation like [SOURCE 1] or [SOURCE 2]
+- Use the exact [SOURCE X] format - do not write "RCW 10.01.160" or document names
+- When referencing specific statutes or rules, include the source citation immediately after
+- Example: "According to the statute [SOURCE 1], costs may be imposed..."
+- Example: "The definition of indigent [SOURCE 2] includes compelling circumstances..."
+
 GUIDELINES:
-- Prioritize information from the provided context above all else
-- When referencing information, cite the source using the format [SOURCE X] where X is the source number from the context
-- Only supplement with general legal knowledge if it directly supports or clarifies the context
+- Provide a direct, comprehensive answer based solely on the provided sources
 - Use professional legal terminology and maintain a formal tone
-- Provide detailed explanations with specific references to the context sources
-- If the context is insufficient, explicitly state what additional information would be needed
-- Use bullet points with proper spacing for clarity when listing multiple items
-- Provide a direct, focused answer without unnecessary repetition
-- Always include source citations for specific claims
+- Organize information clearly with bullet points when appropriate
+- If information is insufficient, state what additional sources would be needed
+- Do not reference external cases or general legal knowledge unless specifically mentioned in the sources
+- Keep responses focused and avoid unnecessary repetition
 
 RESPONSE:
 """
@@ -193,7 +197,7 @@ def call_openrouter_api(prompt: str, api_key: str, api_base: str) -> str:
                     {"role": "user", "content": prompt}
                 ],
                 "temperature": 0.2,
-                "max_tokens": 500
+                "max_tokens": 1000  # Increased from 500 to prevent cutoff
             }
             
             print(f"Trying model: {model}")
@@ -338,9 +342,9 @@ def ask_question(query: Query):
         # Format questions for the prompt
         if len(questions) > 1:
             formatted_questions = "\n".join(f"{i+1}. {q}" for i, q in enumerate(questions))
-            # Use multi-question template with source citations
+            # Use multi-question template with stronger source citation requirements
             multi_question_template = """
-As a legal expert, provide comprehensive answers to the questions below using the provided context as your primary source.
+You are a legal expert. Answer the questions below using ONLY the provided context sources. You MUST cite sources using the exact format [SOURCE X] where X matches the source number from the context.
 
 CONTEXT:
 {context}
@@ -348,15 +352,19 @@ CONTEXT:
 QUESTIONS: 
 {questions}
 
+CRITICAL CITATION RULES:
+- Every factual claim MUST include a source citation like [SOURCE 1] or [SOURCE 2]
+- Use the exact [SOURCE X] format - do not write statute names or document names without citations
+- When referencing specific statutes or rules, include the source citation immediately after
+- Example: "According to the statute [SOURCE 1], costs may be imposed..."
+
 GUIDELINES:
 - Answer each question separately and clearly
 - Number your responses to match the question numbers
-- When referencing information, cite the source using the format [SOURCE X] where X is the source number from the context
-- Prioritize information from the provided context above all else
+- Provide comprehensive answers based solely on the provided sources
 - Use professional legal terminology and maintain a formal tone
-- If a question cannot be answered from the context, explicitly state this
-- Use bullet points with proper spacing for clarity when listing multiple items
-- Always include source citations for specific claims
+- If information is insufficient for any question, state what additional sources would be needed
+- Organize information clearly with bullet points when appropriate
 
 RESPONSE:
 """
@@ -397,6 +405,13 @@ RESPONSE:
         # Make the API call using requests
         try:
             response_text = call_openrouter_api(formatted_prompt, api_key, api_base)
+            
+            # Append source information to the response
+            if response_text and source_info:
+                response_text += "\n\n**SOURCES:**\n"
+                for source in source_info:
+                    page_info = f", Page {source['page']}" if source['page'] else ""
+                    response_text += f"[SOURCE {source['id']}] {source['file_name']}{page_info} (Relevance: {source['relevance']:.2f})\n"
             
             print(f"Successfully got response: {response_text[:100]}...")
             
