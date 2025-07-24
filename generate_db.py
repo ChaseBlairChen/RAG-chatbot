@@ -426,8 +426,8 @@ def create_vector_database(chunks: List[Document]):
                 db.add_documents(batch)
         
         if db:
-            print("💾 Persisting database...")
-            db.persist()
+            # Database persists automatically with persist_directory
+            print("💾 Database persisted automatically")
             
             # Test the database
             test_results = db.similarity_search("test", k=3)
