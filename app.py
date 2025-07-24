@@ -7,8 +7,10 @@ import requests
 import re
 from langchain_chroma import Chroma
 from langchain_huggingface import HuggingFaceEmbeddings
-from typing import Optional
+from typing import Optional, List, Dict
 import logging
+import uuid
+from datetime import datetime, timedelta
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
@@ -20,6 +22,79 @@ if os.path.exists(CHROMA_PATH):
     logger.info(f"Database contents: {os.listdir(CHROMA_PATH)}")
 else:
     logger.warning("Database folder not found!")
+
+# In-memory conversation storage (in production, use Redis or a database)
+conversations: Dict[str, Dict] = {}
+
+def cleanup_old_conversations():
+    """Remove conversations older than 24 hours"""
+    cutoff_time = datetime.now() - timedelta(hours=24)
+    expired_sessions = [
+        session_id for session_id, data in conversations.items()
+        if data.get('last_updated', datetime.min) < cutoff_time
+    ]
+    for session_id in expired_sessions:
+        del conversations[session_id]
+    logger.info(f"Cleaned up {len(expired_sessions)} expired conversations")
+
+def get_or_create_session(session_id: Optional[str] = None) -> str:
+    """Get existing session or create new one"""
+    cleanup_old_conversations()
+    
+    if session_id and session_id in conversations:
+        conversations[session_id]['last_updated'] = datetime.now()
+        return session_id
+    
+    # Create new session
+    new_session_id = str(uuid.uuid4())
+    conversations[new_session_id] = {
+        'messages': [],
+        'created_at': datetime.now(),
+        'last_updated': datetime.now()
+    }
+    logger.info(f"Created new conversation session: {new_session_id}")
+    return new_session_id
+
+def add_to_conversation(session_id: str, role: str, content: str, sources: Optional[List] = None):
+    """Add a message to the conversation history"""
+    if session_id not in conversations:
+        conversations[session_id] = {
+            'messages': [],
+            'created_at': datetime.now(),
+            'last_updated': datetime.now()
+        }
+    
+    message = {
+        'role': role,
+        'content': content,
+        'timestamp': datetime.now().isoformat(),
+        'sources': sources or []
+    }
+    
+    conversations[session_id]['messages'].append(message)
+    conversations[session_id]['last_updated'] = datetime.now()
+    
+    # Keep only last 20 messages to prevent memory issues
+    if len(conversations[session_id]['messages']) > 20:
+        conversations[session_id]['messages'] = conversations[session_id]['messages'][-20:]
+
+def get_conversation_context(session_id: str, max_messages: int = 10) -> str:
+    """Get recent conversation history as context"""
+    if session_id not in conversations:
+        return ""
+    
+    messages = conversations[session_id]['messages'][-max_messages:]
+    
+    context_parts = []
+    for msg in messages:
+        role = msg['role'].upper()
+        content = msg['content']
+        # Truncate very long messages
+        if len(content) > 1000:
+            content = content[:1000] + "..."
+        context_parts.append(f"{role}: {content}")
+    
+    return "\n".join(context_parts)
 
 def parse_multiple_questions(query_text: str) -> list:
     """Parse multiple questions from a single input"""
@@ -136,7 +211,8 @@ def create_enhanced_context(results, questions: list) -> tuple:
         if len(content) > 500:
             content = content[:500] + "..."
         
-        context_part = f"[SOURCE {i+1}] {display_source}{page_info} (Relevance: {score:.2f}):\n{content}"
+        # Use document name as the identifier instead of SOURCE X
+        context_part = f"[{display_source}{page_info}] (Relevance: {score:.2f}):\n{content}"
         context_parts.append(context_part)
         
         source_info.append({
@@ -150,27 +226,43 @@ def create_enhanced_context(results, questions: list) -> tuple:
     context_text = "\n\n" + "\n\n".join(context_parts)
     return context_text, source_info
 
-ENHANCED_PROMPT_TEMPLATE = """You are a helpful assistant. Answer the question using the provided context sources. Cite your sources using [SOURCE X] format.
+# Modified prompt template to include conversation history
+ENHANCED_PROMPT_TEMPLATE = """You are a helpful assistant engaged in an ongoing conversation. Answer the current question using the provided context sources and conversation history.
 
-CONTEXT:
+IMPORTANT: When citing information, use the document name format shown in brackets, for example [RCW 10.01.240.pdf] or [RCW 10.01.240.pdf (Page 1)] - do NOT use generic SOURCE numbers.
+
+CONVERSATION HISTORY:
+{conversation_history}
+
+CURRENT CONTEXT:
 {context}
 
-QUESTION: {questions}
+CURRENT QUESTION: {questions}
 
-Please provide a helpful answer based on the context above. If you reference information, include the source citation like [SOURCE 1].
+Please provide a helpful answer based on the context above and the conversation history. When you reference information, cite it using the document name in brackets as shown in the context (e.g., [document_name.pdf] or [document_name.pdf (Page X)]). 
+
+If the user is asking a follow-up question or referring to something mentioned earlier in the conversation, acknowledge that context in your response.
 
 RESPONSE:"""
 
 class Query(BaseModel):
     question: str
+    session_id: Optional[str] = None
 
 class QueryResponse(BaseModel):
     response: Optional[str] = None
     error: Optional[str] = None
     context_found: bool = False
     sources: Optional[list] = None
+    session_id: str
 
-app = FastAPI(title="RAG API", description="Retrieval-Augmented Generation API", version="1.0.0")
+class ConversationHistory(BaseModel):
+    session_id: str
+    messages: List[Dict]
+    created_at: str
+    last_updated: str
+
+app = FastAPI(title="RAG API", description="Retrieval-Augmented Generation API with Conversation Support", version="2.0.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -182,7 +274,7 @@ app.add_middleware(
 
 @app.get("/")
 def read_root():
-    return {"message": "RAG API is running"}
+    return {"message": "RAG API with Conversation Support is running"}
 
 @app.get("/health")
 def health_check():
@@ -202,7 +294,8 @@ def health_check():
         "database_path": CHROMA_PATH,
         "database_contents": db_contents,
         "api_key_configured": bool(os.environ.get("OPENAI_API_KEY")),
-        "api_base_configured": bool(os.environ.get("OPENAI_API_BASE"))
+        "api_base_configured": bool(os.environ.get("OPENAI_API_BASE")),
+        "active_conversations": len(conversations)
     }
 
 def call_openrouter_api(prompt: str, api_key: str, api_base: str) -> str:
@@ -315,8 +408,12 @@ def ask_question(query: Query):
             return QueryResponse(
                 response=None,
                 error="Question cannot be empty",
-                context_found=False
+                context_found=False,
+                session_id=query.session_id or ""
             )
+        
+        # Get or create session
+        session_id = get_or_create_session(query.session_id)
         
         api_key = os.environ.get("OPENAI_API_KEY")
         api_base = os.environ.get("OPENAI_API_BASE", "https://openrouter.ai/api/v1")
@@ -326,7 +423,8 @@ def ask_question(query: Query):
             return QueryResponse(
                 response=None,
                 error="OPENAI_API_KEY environment variable is required. Please set your OpenRouter API key.",
-                context_found=False
+                context_found=False,
+                session_id=session_id
             )
         
         if not os.path.exists(CHROMA_PATH):
@@ -334,8 +432,12 @@ def ask_question(query: Query):
             return QueryResponse(
                 response=None,
                 error="Vector database not found. Please run the document ingestion process first.",
-                context_found=False
+                context_found=False,
+                session_id=session_id
             )
+        
+        # Add user message to conversation history
+        add_to_conversation(session_id, "user", query_text)
         
         questions = parse_multiple_questions(query_text)
         logger.info(f"Parsed {len(questions)} questions: {questions}")
@@ -354,7 +456,8 @@ def ask_question(query: Query):
             return QueryResponse(
                 response=None,
                 error=f"Failed to load vector database: {str(e)}. Make sure you've run the ingestion script first.",
-                context_found=False
+                context_found=False,
+                session_id=session_id
             )
         
         combined_query = " ".join(questions)
@@ -364,14 +467,23 @@ def ask_question(query: Query):
         
         if not results:
             logger.warning("No relevant documents found")
+            response_text = "I couldn't find any relevant information in the documents to answer your question. Please try rephrasing your question or check if the documents contain information about this topic."
+            
+            # Add assistant response to conversation history
+            add_to_conversation(session_id, "assistant", response_text)
+            
             return QueryResponse(
-                response="I couldn't find any relevant information in the documents to answer your question. Please try rephrasing your question or check if the documents contain information about this topic.",
+                response=response_text,
                 error=None,
-                context_found=False
+                context_found=False,
+                session_id=session_id
             )
         
         context_text, source_info = create_enhanced_context(results, questions)
         logger.info(f"Created context with {len(source_info)} sources")
+        
+        # Get conversation history
+        conversation_history = get_conversation_context(session_id, max_messages=8)
         
         if len(questions) > 1:
             formatted_questions = "\n".join(f"{i+1}. {q}" for i, q in enumerate(questions))
@@ -379,6 +491,7 @@ def ask_question(query: Query):
             formatted_questions = questions[0]
         
         formatted_prompt = ENHANCED_PROMPT_TEMPLATE.format(
+            conversation_history=conversation_history if conversation_history else "No previous conversation.",
             context=context_text,
             questions=formatted_questions
         )
@@ -389,18 +502,17 @@ def ask_question(query: Query):
             response_text = call_openrouter_api(formatted_prompt, api_key, api_base)
             
             if not response_text:
-                return QueryResponse(
-                    response="I received an empty response. Please try again.",
-                    error=None,
-                    context_found=True,
-                    sources=source_info
-                )
+                response_text = "I received an empty response. Please try again."
+            else:
+                # Add sources section if there are sources
+                if source_info:
+                    response_text += "\n\n**SOURCES:**\n"
+                    for source in source_info:
+                        page_info = f", Page {source['page']}" if source['page'] else ""
+                        response_text += f"• {source['file_name']}{page_info} (Relevance: {source['relevance']:.2f})\n"
             
-            if source_info:
-                response_text += "\n\n**SOURCES:**\n"
-                for source in source_info:
-                    page_info = f", Page {source['page']}" if source['page'] else ""
-                    response_text += f"[SOURCE {source['id']}] {source['file_name']}{page_info} (Relevance: {source['relevance']:.2f})\n"
+            # Add assistant response to conversation history
+            add_to_conversation(session_id, "assistant", response_text, source_info)
             
             logger.info(f"Successfully generated response of length {len(response_text)}")
             
@@ -408,16 +520,21 @@ def ask_question(query: Query):
                 response=response_text,
                 error=None,
                 context_found=True,
-                sources=source_info
+                sources=source_info,
+                session_id=session_id
             )
             
         except HTTPException as he:
             logger.error(f"API call failed: {he.detail}")
+            error_response = f"API Error: {he.detail}"
+            add_to_conversation(session_id, "assistant", error_response)
+            
             return QueryResponse(
                 response=None,
-                error=f"API Error: {he.detail}",
+                error=error_response,
                 context_found=True,
-                sources=source_info
+                sources=source_info,
+                session_id=session_id
             )
         
     except Exception as e:
@@ -425,8 +542,54 @@ def ask_question(query: Query):
         return QueryResponse(
             response=None,
             error=f"An unexpected error occurred: {str(e)}",
-            context_found=False
+            context_found=False,
+            session_id=query.session_id or ""
         )
+
+@app.get("/conversation/{session_id}", response_model=ConversationHistory)
+def get_conversation_history(session_id: str):
+    """Get conversation history for a session"""
+    if session_id not in conversations:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+    
+    conv_data = conversations[session_id]
+    return ConversationHistory(
+        session_id=session_id,
+        messages=conv_data['messages'],
+        created_at=conv_data['created_at'].isoformat(),
+        last_updated=conv_data['last_updated'].isoformat()
+    )
+
+@app.delete("/conversation/{session_id}")
+def clear_conversation(session_id: str):
+    """Clear conversation history for a session"""
+    if session_id in conversations:
+        del conversations[session_id]
+        return {"message": f"Conversation {session_id} cleared"}
+    else:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+
+@app.get("/conversations")
+def list_conversations():
+    """List all active conversations"""
+    return {
+        "active_conversations": len(conversations),
+        "sessions": [
+            {
+                "session_id": session_id,
+                "message_count": len(data['messages']),
+                "created_at": data['created_at'].isoformat(),
+                "last_updated": data['last_updated'].isoformat()
+            }
+            for session_id, data in conversations.items()
+        ]
+    }
+
+@app.post("/new-conversation")
+def start_new_conversation():
+    """Start a new conversation session"""
+    session_id = get_or_create_session()
+    return {"session_id": session_id, "message": "New conversation started"}
 
 @app.get("/test-api")
 def test_api():
