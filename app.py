@@ -22,21 +22,31 @@ def parse_multiple_questions(query_text: str) -> list:
     """Parse multiple questions from a single input"""
     questions = []
     
-    # First try to split by numbered patterns (1., 2., etc.)
-    numbered_pattern = r'(?:^|\n)\s*\d+[\.\)]\s*(.+?)(?=(?:\n\s*\d+[\.\)])|$)'
-    numbered_matches = re.findall(numbered_pattern, query_text, re.MULTILINE | re.DOTALL)
+    # Count actual question marks to determine if it's truly multiple questions
+    question_marks = query_text.count('?')
     
-    if numbered_matches:
-        questions = [q.strip() for q in numbered_matches if q.strip()]
-    else:
+    # Only try numbered pattern if there are multiple question marks OR clear numbered format
+    if question_marks > 1:
         # Split by question marks and filter
         potential_questions = query_text.split('?')
         for q in potential_questions:
             q = q.strip()
             if q and len(q) > 10:  # Minimum question length
                 questions.append(q + '?')
+    elif re.search(r'(?:^|\n)\s*\d+[\.\)]\s*.+\?\s*(?:\n|$)', query_text, re.MULTILINE):
+        # Only use numbered pattern if questions end with question marks
+        numbered_pattern = r'(?:^|\n)\s*\d+[\.\)]\s*(.+?)(?=(?:\n\s*\d+[\.\)])|$)'
+        numbered_matches = re.findall(numbered_pattern, query_text, re.MULTILINE | re.DOTALL)
+        
+        # Validate that these are actually questions
+        for match in numbered_matches:
+            match = match.strip()
+            if match and ('?' in match or len(match) > 20):  # Either has ? or is substantial
+                if not match.endswith('?') and '?' not in match:
+                    match += '?'
+                questions.append(match)
     
-    # If no clear splits, treat as single question
+    # If no clear multiple questions found, treat as single question
     if not questions:
         questions = [query_text.strip()]
     
@@ -80,22 +90,22 @@ def create_enhanced_context(results, questions: list) -> str:
     return "\n\n" + "="*50 + "\n\n".join(context_parts)
 
 ENHANCED_PROMPT_TEMPLATE = """
-As a legal expert, provide comprehensive answers to the question(s) below using the provided context as your primary source.
+As a legal expert, provide a comprehensive answer to the question below using the provided context as your primary source.
 
 CONTEXT:
 {context}
 
-QUESTION(S): 
-{questions}
+QUESTION: {questions}
 
 GUIDELINES:
-- Answer each question separately and clearly
-- Number your responses if there are multiple questions
 - Prioritize information from the provided context above all else
-- Reference specific documents when citing information
+- Only supplement with general legal knowledge if it directly supports or clarifies the context
+- Clearly distinguish between what's stated in the documents vs. general legal principles
 - Use professional legal terminology and maintain a formal tone
-- If a question cannot be answered from the context, explicitly state this
+- Provide detailed explanations with specific references to the context
+- If the context is insufficient, explicitly state what additional information would be needed
 - Use bullet points with proper spacing for clarity when listing multiple items
+- Provide a direct, focused answer without unnecessary repetition
 
 RESPONSE:
 """
@@ -311,14 +321,38 @@ def ask_question(query: Query):
         # Format questions for the prompt
         if len(questions) > 1:
             formatted_questions = "\n".join(f"{i+1}. {q}" for i, q in enumerate(questions))
+            # Use multi-question template
+            multi_question_template = """
+As a legal expert, provide comprehensive answers to the questions below using the provided context as your primary source.
+
+CONTEXT:
+{context}
+
+QUESTIONS: 
+{questions}
+
+GUIDELINES:
+- Answer each question separately and clearly
+- Number your responses to match the question numbers
+- Prioritize information from the provided context above all else
+- Reference specific documents when citing information
+- Use professional legal terminology and maintain a formal tone
+- If a question cannot be answered from the context, explicitly state this
+- Use bullet points with proper spacing for clarity when listing multiple items
+
+RESPONSE:
+"""
+            formatted_prompt = multi_question_template.format(
+                context=context_text,
+                questions=formatted_questions
+            )
         else:
+            # Single question - use simpler template
             formatted_questions = questions[0]
-        
-        # Use the enhanced prompt template
-        formatted_prompt = ENHANCED_PROMPT_TEMPLATE.format(
-            context=context_text,
-            questions=formatted_questions
-        )
+            formatted_prompt = ENHANCED_PROMPT_TEMPLATE.format(
+                context=context_text,
+                questions=formatted_questions
+            )
         
         # Debug: Print the formatted prompt type and length
         print(f"Formatted prompt type: {type(formatted_prompt)}")
