@@ -1,4 +1,3 @@
-#app.py
 from fastapi import FastAPI, Request, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -342,14 +341,19 @@ def ask_question(query: Query):
         logger.info(f"Parsed {len(questions)} questions: {questions}")
         
         try:
+            # CRITICAL: Use the same embedding model as ingestion script
             embedding_function = HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2")
             db = Chroma(persist_directory=CHROMA_PATH, embedding_function=embedding_function)
-            logger.info("Database loaded successfully")
+            
+            # Test database connectivity
+            test_results = db.similarity_search("test", k=1)
+            logger.info(f"Database loaded successfully with {len(test_results)} test results")
+            
         except Exception as e:
             logger.error(f"Failed to load database: {e}")
             return QueryResponse(
                 response=None,
-                error=f"Failed to load vector database: {str(e)}",
+                error=f"Failed to load vector database: {str(e)}. Make sure you've run the ingestion script first.",
                 context_found=False
             )
         
@@ -451,25 +455,46 @@ def debug_database():
         return {"error": "Database folder does not exist", "path": CHROMA_PATH}
     
     try:
+        # Check database folder contents
+        db_contents = os.listdir(CHROMA_PATH)
+        
+        # Try to load the database
         embedding_function = HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2")
         db = Chroma(persist_directory=CHROMA_PATH, embedding_function=embedding_function)
         
-        test_results = db.similarity_search("test", k=3)
+        # Test different search queries
+        test_queries = ["test", "document", "content", "information"]
+        search_results = {}
+        
+        for query in test_queries:
+            try:
+                results = db.similarity_search(query, k=3)
+                search_results[query] = {
+                    "count": len(results),
+                    "previews": [
+                        {
+                            "content": doc.page_content[:150] + "..." if len(doc.page_content) > 150 else doc.page_content,
+                            "metadata": doc.metadata
+                        } for doc in results[:2]  # Show first 2 results
+                    ]
+                }
+            except Exception as e:
+                search_results[query] = {"error": str(e)}
         
         return {
             "database_exists": True,
             "database_path": CHROMA_PATH,
-            "database_contents": os.listdir(CHROMA_PATH),
-            "test_search_results": len(test_results),
-            "sample_documents": [
-                {
-                    "content_preview": doc.page_content[:100] + "..." if len(doc.page_content) > 100 else doc.page_content,
-                    "metadata": doc.metadata
-                } for doc in test_results
-            ]
+            "database_contents": db_contents,
+            "search_tests": search_results,
+            "status": "Database appears to be working" if any(r.get("count", 0) > 0 for r in search_results.values()) else "Database exists but no search results found"
         }
+        
     except Exception as e:
-        return {"error": f"Database test failed: {str(e)}", "path": CHROMA_PATH}
+        return {
+            "error": f"Database test failed: {str(e)}", 
+            "path": CHROMA_PATH,
+            "suggestion": "Try running the ingestion script to recreate the database"
+        }
 
 @app.get("/sources")
 def get_sources_info():
