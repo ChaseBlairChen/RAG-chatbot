@@ -4,481 +4,385 @@ import glob
 from typing import List
 from langchain_community.document_loaders import TextLoader
 from langchain.text_splitter import RecursiveCharacterTextSplitter
-from langchain_community.vectorstores import Chroma
-from langchain_community.embeddings import HuggingFaceEmbeddings
+from langchain_chroma import Chroma  # Updated import
+from langchain_huggingface import HuggingFaceEmbeddings  # Updated import
 from langchain.schema import Document
-import fitz  # PyMuPDF - better PDF extraction
+import fitz  # PyMuPDF
 import re
 
-# Use home directory to avoid permission issues
+# IMPORTANT: Use the same embedding model as your app.py
 CHROMA_PATH = os.path.join(os.getcwd(), "my_chroma_db")
 DOCUMENTS_FOLDER = "documents"
 
 def main():
+    print("Starting document ingestion process...")
+    
+    # Check if documents folder exists
+    if not os.path.exists(DOCUMENTS_FOLDER):
+        print(f"Creating documents folder: {DOCUMENTS_FOLDER}")
+        os.makedirs(DOCUMENTS_FOLDER)
+        print("Please add your PDF and Markdown files to the 'documents' folder and run this script again.")
+        return
+    
+    # List files in documents folder
+    all_files = []
+    for ext in ['*.pdf', '*.md', '*.txt']:
+        all_files.extend(glob.glob(os.path.join(DOCUMENTS_FOLDER, ext)))
+        all_files.extend(glob.glob(os.path.join(DOCUMENTS_FOLDER, "**", ext), recursive=True))
+    
+    print(f"Found {len(all_files)} files in documents folder:")
+    for file in all_files:
+        print(f"  - {file}")
+    
+    if not all_files:
+        print("No documents found! Please add PDF, Markdown, or text files to the 'documents' folder.")
+        return
+    
     generate_data_store()
 
 def generate_data_store():
     documents = load_documents()
     if not documents:
-        print("No documents found to process.")
+        print("No documents were successfully loaded.")
         return
+    
+    print(f"Loaded {len(documents)} documents")
     
     # Quality check before chunking
     documents = validate_and_clean_documents(documents)
+    if not documents:
+        print("No documents passed validation.")
+        return
+        
     chunks = split_text(documents)
+    if not chunks:
+        print("No chunks were created.")
+        return
+        
     save_to_chroma(chunks)
 
 def load_documents() -> List[Document]:
-    """Load all PDF and Markdown documents with better PDF handling"""
+    """Load all supported document types"""
     if not os.path.exists(DOCUMENTS_FOLDER):
         raise FileNotFoundError(f"Documents folder '{DOCUMENTS_FOLDER}' not found.")
     
     all_documents = []
     
-    # Get all PDF files
+    # Get all supported files
     pdf_files = glob.glob(os.path.join(DOCUMENTS_FOLDER, "*.pdf"))
     pdf_files.extend(glob.glob(os.path.join(DOCUMENTS_FOLDER, "**/*.pdf"), recursive=True))
     
-    # Get all Markdown files
     md_files = glob.glob(os.path.join(DOCUMENTS_FOLDER, "*.md"))
     md_files.extend(glob.glob(os.path.join(DOCUMENTS_FOLDER, "**/*.md"), recursive=True))
     
-    print(f"Found {len(pdf_files)} PDF files and {len(md_files)} Markdown files")
+    txt_files = glob.glob(os.path.join(DOCUMENTS_FOLDER, "*.txt"))
+    txt_files.extend(glob.glob(os.path.join(DOCUMENTS_FOLDER, "**/*.txt"), recursive=True))
     
-    # Load PDF files with enhanced PyMuPDF processing
+    print(f"Found {len(pdf_files)} PDF files, {len(md_files)} Markdown files, {len(txt_files)} text files")
+    
+    # Load PDF files
     for pdf_file in pdf_files:
         try:
             print(f"Loading PDF: {pdf_file}")
-            docs = load_pdf_with_enhanced_extraction(pdf_file)
+            docs = load_pdf_simple(pdf_file)
             all_documents.extend(docs)
-            print(f"Successfully loaded {len(docs)} sections from {pdf_file}")
+            print(f"Successfully loaded {len(docs)} pages from {pdf_file}")
         except Exception as e:
             print(f"Error loading PDF {pdf_file}: {e}")
-            # Fallback to basic extraction
-            try:
-                print(f"Trying basic extraction for {pdf_file}")
-                docs = load_pdf_with_pymupdf_basic(pdf_file)
-                all_documents.extend(docs)
-                print(f"Basic extraction successful: {len(docs)} pages")
-            except Exception as e2:
-                print(f"Both extraction methods failed for {pdf_file}: {e2}")
     
     # Load Markdown files
     for md_file in md_files:
         try:
             print(f"Loading Markdown: {md_file}")
-            loader = TextLoader(md_file, encoding='utf-8')
-            documents = loader.load()
-            
-            for doc in documents:
-                doc.metadata["source"] = md_file
-                doc.metadata["file_type"] = "markdown"
-            
-            all_documents.extend(documents)
+            docs = load_text_file(md_file, "markdown")
+            all_documents.extend(docs)
             print(f"Successfully loaded {md_file}")
         except Exception as e:
             print(f"Error loading Markdown {md_file}: {e}")
     
+    # Load text files
+    for txt_file in txt_files:
+        try:
+            print(f"Loading text file: {txt_file}")
+            docs = load_text_file(txt_file, "text")
+            all_documents.extend(docs)
+            print(f"Successfully loaded {txt_file}")
+        except Exception as e:
+            print(f"Error loading text file {txt_file}: {e}")
+    
     print(f"Total documents loaded: {len(all_documents)}")
     return all_documents
 
-def load_pdf_with_enhanced_extraction(pdf_path: str) -> List[Document]:
-    """Enhanced PDF extraction that creates logical sections"""
+def load_pdf_simple(pdf_path: str) -> List[Document]:
+    """Simple, reliable PDF loading"""
     documents = []
     
     try:
         pdf_document = fitz.open(pdf_path)
         file_name = os.path.basename(pdf_path)
-        total_pages = len(pdf_document)  # Store this before processing
         
-        # Extract text from all pages first
-        all_text = ""
-        page_breaks = []
-        
-        for page_num in range(total_pages):
-            page = pdf_document.load_page(page_num)
-            page_text = page.get_text()
-            
-            if page_text.strip():
-                page_breaks.append(len(all_text))
-                all_text += page_text + "\n\n--- PAGE BREAK ---\n\n"
-        
-        # Close the PDF document after we're done extracting text
-        pdf_document.close()
-        
-        # Clean the text
-        all_text = clean_pdf_text_enhanced(all_text)
-        
-        # Split into logical sections
-        sections = create_logical_sections(all_text, file_name, page_breaks)
-        
-        for section in sections:
-            if len(section['content'].strip()) > 100:  # Only substantial sections
-                doc = Document(
-                    page_content=section['content'],
-                    metadata={
-                        "source": pdf_path,
-                        "file_name": file_name,
-                        "file_type": "pdf",
-                        "section_title": section['title'],
-                        "page_number": section['page'],
-                        "total_pages": total_pages,  # Use the stored value
-                        "extraction_method": "enhanced_pymupdf",
-                        "section_type": section['type']
-                    }
-                )
-                documents.append(doc)
-        
-    except Exception as e:
-        print(f"Enhanced PDF extraction failed for {pdf_path}: {e}")
-        raise e
-    
-    return documents
-
-def load_pdf_with_pymupdf_basic(pdf_path: str) -> List[Document]:
-    """Basic PDF extraction as fallback"""
-    documents = []
-    
-    try:
-        pdf_document = fitz.open(pdf_path)
-        total_pages = len(pdf_document)  # Store this before processing
-        
-        for page_num in range(total_pages):
+        for page_num in range(len(pdf_document)):
             page = pdf_document.load_page(page_num)
             text = page.get_text()
-            text = clean_pdf_text(text)
             
-            if len(text.strip()) > 50:
+            # Clean the text
+            text = clean_text_simple(text)
+            
+            # Only keep pages with substantial content
+            if len(text.strip()) > 100:
                 doc = Document(
                     page_content=text,
                     metadata={
                         "source": pdf_path,
+                        "file_name": file_name,
                         "file_type": "pdf",
                         "page_number": page_num + 1,
-                        "total_pages": total_pages,  # Use the stored value
-                        "extraction_method": "basic_pymupdf",
-                        "file_name": os.path.basename(pdf_path)
+                        "total_pages": len(pdf_document)
                     }
                 )
                 documents.append(doc)
         
-        # Close the PDF document after processing all pages
         pdf_document.close()
         
     except Exception as e:
-        print(f"Basic PDF extraction failed for {pdf_path}: {e}")
+        print(f"Failed to load PDF {pdf_path}: {e}")
         raise e
     
     return documents
 
-def create_logical_sections(text: str, file_name: str, page_breaks: List[int]) -> List[dict]:
-    """Create logical sections from PDF text"""
-    sections = []
-    
-    # Remove page break markers for processing
-    clean_text = text.replace("--- PAGE BREAK ---", "")
-    
-    # Look for section headers (various patterns)
-    header_patterns = [
-        r'^([A-Z][A-Z\s&,.-]{10,}?)(?=\n)',  # ALL CAPS headers
-        r'^((?:[A-Z][a-z]+ )*[A-Z][a-z]+(?:\s+[A-Z][a-z]+)*:?)(?=\n)',  # Title Case headers
-        r'^(\d+\.\s+[A-Z][^.]*?)(?=\n)',  # Numbered sections
-        r'^([A-Z]\.\s+[A-Z][^.]*?)(?=\n)',  # Letter sections (A., B., etc.)
-    ]
-    
-    # Find all potential headers
-    headers_found = []
-    for pattern in header_patterns:
-        matches = re.finditer(pattern, clean_text, re.MULTILINE)
-        for match in matches:
-            headers_found.append({
-                'title': match.group(1).strip(),
-                'start': match.start(),
-                'end': match.end()
-            })
-    
-    # Sort headers by position
-    headers_found.sort(key=lambda x: x['start'])
-    
-    # Create sections
-    if not headers_found:
-        # No clear headers found, split by paragraphs
-        paragraphs = clean_text.split('\n\n')
-        current_section = ""
-        section_count = 1
+def load_text_file(file_path: str, file_type: str) -> List[Document]:
+    """Load text or markdown files"""
+    try:
+        with open(file_path, 'r', encoding='utf-8') as f:
+            content = f.read()
         
-        for para in paragraphs:
-            para = para.strip()
-            if len(para) > 50:
-                if len(current_section) > 800:  # Start new section
-                    sections.append({
-                        'title': f"Section {section_count}",
-                        'content': current_section.strip(),
-                        'type': 'paragraph_group',
-                        'page': estimate_page_number(len(current_section), page_breaks)
-                    })
-                    current_section = para
-                    section_count += 1
-                else:
-                    current_section += "\n\n" + para
+        # Clean the content
+        content = clean_text_simple(content)
         
-        # Add final section
-        if current_section.strip():
-            sections.append({
-                'title': f"Section {section_count}",
-                'content': current_section.strip(),
-                'type': 'paragraph_group',
-                'page': estimate_page_number(len(current_section), page_breaks)
-            })
+        if len(content.strip()) > 50:
+            doc = Document(
+                page_content=content,
+                metadata={
+                    "source": file_path,
+                    "file_name": os.path.basename(file_path),
+                    "file_type": file_type
+                }
+            )
+            return [doc]
+    except Exception as e:
+        print(f"Failed to load {file_path}: {e}")
+        raise e
     
-    else:
-        # Use found headers to create sections
-        for i, header in enumerate(headers_found):
-            section_start = header['start']
-            section_end = headers_found[i + 1]['start'] if i + 1 < len(headers_found) else len(clean_text)
-            
-            section_content = clean_text[section_start:section_end].strip()
-            
-            if len(section_content) > 100:
-                sections.append({
-                    'title': header['title'],
-                    'content': section_content,
-                    'type': 'header_section',
-                    'page': estimate_page_number(section_start, page_breaks)
-                })
-    
-    return sections
+    return []
 
-def estimate_page_number(text_position: int, page_breaks: List[int]) -> int:
-    """Estimate page number based on text position"""
-    if not page_breaks:
-        return 1
-    
-    for i, break_pos in enumerate(page_breaks):
-        if text_position <= break_pos:
-            return i + 1
-    
-    return len(page_breaks)
-
-def clean_pdf_text_enhanced(text: str) -> str:
-    """Enhanced PDF text cleaning for structured documents"""
-    # Remove page break markers temporarily
-    text = text.replace("--- PAGE BREAK ---", "\n\n")
-    
-    # Remove excessive whitespace but preserve structure
-    text = re.sub(r'\n\s*\n\s*\n', '\n\n', text)
-    
-    # Clean up common artifacts
-    lines = text.split('\n')
-    cleaned_lines = []
-    
-    for line in lines:
-        line = line.strip()
-        
-        # Skip obvious page numbers and headers/footers
-        if re.match(r'^Page \d+ of \d+$', line):
-            continue
-        if re.match(r'^Community Services Division$', line) and len(line) < 30:
-            continue
-        if re.match(r'^\d+$', line) and len(line) < 4:
-            continue
-        
-        # Keep bullet points and form elements
-        if line:
-            cleaned_lines.append(line)
-    
-    # Rejoin text
-    text = '\n'.join(cleaned_lines)
-    
-    # Normalize spacing
+def clean_text_simple(text: str) -> str:
+    """Simple but effective text cleaning"""
+    # Remove excessive whitespace
+    text = re.sub(r'\n\s*\n\s*\n+', '\n\n', text)
     text = re.sub(r' +', ' ', text)
     
-    return text.strip()
-
-def clean_pdf_text(text: str) -> str:
-    """Basic PDF text cleaning (fallback)"""
-    # Remove excessive whitespace
-    text = re.sub(r'\n\s*\n\s*\n', '\n\n', text)
-    
-    # Remove standalone page numbers and headers/footers
+    # Remove obvious page artifacts
     lines = text.split('\n')
     cleaned_lines = []
     
     for line in lines:
         line = line.strip()
-        # Skip likely page numbers (single numbers on their own line)
+        
+        # Skip page numbers and short artifacts
         if re.match(r'^\d+$', line) and len(line) < 4:
             continue
-        # Skip very short lines that are likely artifacts (but keep bullet points)
-        if len(line) < 3 and not re.match(r'^[•\-\*]', line):
+        if len(line) < 2:
             continue
+            
         cleaned_lines.append(line)
     
-    # Rejoin and normalize spacing
-    text = '\n'.join(cleaned_lines)
-    text = re.sub(r' +', ' ', text)  # Multiple spaces to single space
-    
-    return text.strip()
+    return '\n'.join(cleaned_lines).strip()
 
 def validate_and_clean_documents(documents: List[Document]) -> List[Document]:
-    """Validate document quality for RAG"""
+    """Basic document validation"""
     clean_documents = []
     
     for doc in documents:
         content = doc.page_content.strip()
         
-        # Skip documents that are too short or likely garbage
-        if len(content) < 50:  # Lowered threshold for structured sections
+        # Skip documents that are too short
+        if len(content) < 50:
             print(f"Skipping short document from {doc.metadata.get('source', 'unknown')}")
             continue
-            
-        # Check for garbled text (too many non-alphanumeric characters)
-        alpha_ratio = sum(c.isalnum() or c.isspace() for c in content) / len(content)
-        if alpha_ratio < 0.6:  # Lowered threshold for forms/structured content
-            print(f"Skipping likely garbled document from {doc.metadata.get('source', 'unknown')}")
-            continue
-            
-        # Add word count metadata for retrieval scoring
-        word_count = len(content.split())
-        doc.metadata["word_count"] = word_count
         
+        # Basic quality check
+        words = content.split()
+        if len(words) < 10:
+            print(f"Skipping document with too few words from {doc.metadata.get('source', 'unknown')}")
+            continue
+        
+        # Add word count
+        doc.metadata["word_count"] = len(words)
         clean_documents.append(doc)
     
-    print(f"Kept {len(clean_documents)} out of {len(documents)} documents after quality check")
+    print(f"Kept {len(clean_documents)} out of {len(documents)} documents after validation")
     return clean_documents
 
 def split_text(documents: List[Document]) -> List[Document]:
-    """Split documents into chunks optimized for RAG with better handling of structured content"""
+    """Split documents into chunks for RAG"""
     text_splitter = RecursiveCharacterTextSplitter(
-        chunk_size=600,  # Smaller chunks for structured content
-        chunk_overlap=50,  # Less overlap to preserve structure
+        chunk_size=800,
+        chunk_overlap=100,
         length_function=len,
         add_start_index=True,
-        # Better separators for forms and structured content
         separators=["\n\n", "\n", ". ", " ", ""]
     )
     
     chunks = text_splitter.split_documents(documents)
     print(f"Split {len(documents)} documents into {len(chunks)} chunks.")
     
-    # Add chunk-specific metadata
+    # Add chunk metadata
     for i, chunk in enumerate(chunks):
         chunk.metadata["chunk_id"] = i
         chunk.metadata["chunk_size"] = len(chunk.page_content)
-        
-        # For structured content, try to identify key information
-        content = chunk.page_content
-        
-        # Check if chunk contains form information
-        if re.search(r'Form\s+I-\d+', content, re.IGNORECASE):
-            form_match = re.search(r'Form\s+(I-\d+[A-Z]*)', content, re.IGNORECASE)
-            if form_match:
-                chunk.metadata["contains_form"] = form_match.group(1)
-        
-        # Check if chunk contains definitions
-        if re.search(r'(is defined as|means|refers to)', content, re.IGNORECASE):
-            chunk.metadata["content_type"] = "definition"
-        
-        # Check if chunk contains procedures
-        if re.search(r'(must|shall|should|may|process|procedure)', content, re.IGNORECASE):
-            chunk.metadata["content_type"] = "procedure"
-        
-        # Extract first meaningful sentence as summary
-        sentences = [s.strip() for s in content.split('.') if len(s.strip()) > 10]
-        if sentences:
-            chunk.metadata["summary"] = sentences[0][:200] + "..."
     
-    # Show sample chunk information
     if chunks:
-        print("\nSample chunk:")
-        print(f"Content preview: {chunks[0].page_content[:200]}...")
+        print(f"\nFirst chunk preview:")
+        print(f"Content: {chunks[0].page_content[:200]}...")
         print(f"Metadata: {chunks[0].metadata}")
     
     return chunks
 
 def save_to_chroma(chunks: List[Document]):
-    """Save document chunks to Chroma vector store with RAG optimizations"""
+    """Save chunks to Chroma database"""
     if os.path.exists(CHROMA_PATH):
-        print(f"Deleting existing {CHROMA_PATH} folder")
+        print(f"Deleting existing database: {CHROMA_PATH}")
         shutil.rmtree(CHROMA_PATH)
     
-    os.makedirs(CHROMA_PATH, exist_ok=True)
+    os.makedirs(os.path.dirname(CHROMA_PATH), exist_ok=True)
     
-    # Use a better embedding model for RAG
-    embedding_function = HuggingFaceEmbeddings(
-        model_name="sentence-transformers/all-mpnet-base-v2",  # Better than MiniLM
-        model_kwargs={'device': 'cpu'},
-        encode_kwargs={'normalize_embeddings': True}  # Better for similarity search
-    )
+    # CRITICAL: Use the same embedding model as app.py
+    embedding_function = HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2")
     
     try:
-        batch_size = 25  # Smaller batches for stability with structured content
-        total_chunks = len(chunks)
+        print(f"Creating Chroma database with {len(chunks)} chunks...")
         
-        print(f"Processing {total_chunks} chunks in batches of {batch_size}")
-        
+        # Process in smaller batches
+        batch_size = 20
         db = None
-        for i in range(0, total_chunks, batch_size):
+        
+        for i in range(0, len(chunks), batch_size):
             batch = chunks[i:i + batch_size]
             batch_num = (i // batch_size) + 1
-            print(f"Processing batch {batch_num}/{(total_chunks + batch_size - 1) // batch_size}")
+            total_batches = (len(chunks) + batch_size - 1) // batch_size
             
-            if db is None:
-                db = Chroma.from_documents(
-                    batch, 
-                    embedding_function, 
-                    persist_directory=CHROMA_PATH
-                )
-            else:
-                db.add_documents(batch)
+            print(f"Processing batch {batch_num}/{total_batches} ({len(batch)} chunks)")
+            
+            try:
+                if db is None:
+                    # Create the database with first batch
+                    db = Chroma.from_documents(
+                        batch, 
+                        embedding_function, 
+                        persist_directory=CHROMA_PATH
+                    )
+                    print(f"Created database with first batch")
+                else:
+                    # Add subsequent batches
+                    db.add_documents(batch)
+                    print(f"Added batch {batch_num}")
+                    
+            except Exception as e:
+                print(f"Error processing batch {batch_num}: {e}")
+                raise e
         
         if db:
+            print("Persisting database...")
             db.persist()
-            print(f"Successfully saved {total_chunks} chunks to {CHROMA_PATH}")
+            print(f"✅ Successfully created database at {CHROMA_PATH}")
             
-            # Enhanced summary for structured RAG
-            pdf_chunks = [c for c in chunks if c.metadata.get("file_type") == "pdf"]
-            md_chunks = [c for c in chunks if c.metadata.get("file_type") == "markdown"]
-            form_chunks = [c for c in chunks if c.metadata.get("contains_form")]
-            procedure_chunks = [c for c in chunks if c.metadata.get("content_type") == "procedure"]
+            # Test the database
+            test_search(db)
             
-            avg_chunk_size = sum(c.metadata.get("chunk_size", 0) for c in chunks) / len(chunks)
+            # Print summary
+            unique_sources = set(chunk.metadata.get('source', 'unknown') for chunk in chunks)
+            pdf_chunks = sum(1 for chunk in chunks if chunk.metadata.get('file_type') == 'pdf')
+            text_chunks = len(chunks) - pdf_chunks
+            avg_chunk_size = sum(len(chunk.page_content) for chunk in chunks) / len(chunks)
             
-            print(f"Enhanced RAG Database Summary:")
-            print(f"- {len(pdf_chunks)} PDF chunks, {len(md_chunks)} Markdown chunks")
-            print(f"- {len(form_chunks)} chunks contain forms")
-            print(f"- {len(procedure_chunks)} chunks contain procedures")
-            print(f"- Average chunk size: {avg_chunk_size:.0f} characters")
-            print(f"- Total unique sources: {len(set(c.metadata.get('source') for c in chunks))}")
-        
+            print(f"\n📊 Database Summary:")
+            print(f"  • Total chunks: {len(chunks)}")
+            print(f"  • PDF chunks: {pdf_chunks}")
+            print(f"  • Text/MD chunks: {text_chunks}")
+            print(f"  • Unique sources: {len(unique_sources)}")
+            print(f"  • Average chunk size: {avg_chunk_size:.0f} characters")
+            print(f"  • Database location: {CHROMA_PATH}")
+            
+        else:
+            raise Exception("Failed to create database")
+            
     except Exception as e:
-        print(f"Error creating Chroma DB: {e}")
+        print(f"❌ Error creating Chroma database: {e}")
+        if os.path.exists(CHROMA_PATH):
+            shutil.rmtree(CHROMA_PATH)
         raise
 
-def verify_installation():
-    """Verify that required packages are installed"""
-    missing_packages = []
+def test_search(db):
+    """Test the database with a simple search"""
+    try:
+        print("\n🔍 Testing database search...")
+        test_results = db.similarity_search("test", k=3)
+        print(f"  • Search returned {len(test_results)} results")
+        
+        if test_results:
+            first_result = test_results[0]
+            print(f"  • First result preview: {first_result.page_content[:100]}...")
+            print(f"  • First result metadata: {first_result.metadata}")
+        
+        return True
+    except Exception as e:
+        print(f"  • Search test failed: {e}")
+        return False
+
+def check_dependencies():
+    """Check if required packages are installed"""
+    missing = []
     
     try:
         import fitz
-        print("✓ PyMuPDF is available")
+        print("✅ PyMuPDF available")
     except ImportError:
-        print("✗ PyMuPDF not found. Install with: pip install PyMuPDF")
-        missing_packages.append("PyMuPDF")
+        print("❌ PyMuPDF missing")
+        missing.append("PyMuPDF")
     
     try:
-        from langchain_community.document_loaders import PyPDFLoader
-        print("✓ LangChain PDF loader is available")
+        from langchain_chroma import Chroma
+        print("✅ langchain_chroma available")
     except ImportError:
-        print("✗ LangChain PDF loader not available")
-        missing_packages.append("langchain_community")
+        print("❌ langchain_chroma missing")
+        missing.append("langchain_chroma")
     
-    return len(missing_packages) == 0
+    try:
+        from langchain_huggingface import HuggingFaceEmbeddings
+        print("✅ langchain_huggingface available")
+    except ImportError:
+        print("❌ langchain_huggingface missing")
+        missing.append("langchain_huggingface")
+    
+    if missing:
+        print(f"\n❌ Missing packages: {', '.join(missing)}")
+        print("Install with: pip install " + " ".join(missing))
+        return False
+    
+    return True
 
 if __name__ == "__main__":
-    if not verify_installation():
-        print("Please install missing dependencies and try again.")
-        print("pip install PyMuPDF langchain_community")
+    print("=== Document Ingestion Script ===\n")
+    
+    if not check_dependencies():
         exit(1)
     
-    main()
+    try:
+        main()
+        print("\n✅ Ingestion completed successfully!")
+        print(f"Your database is ready at: {CHROMA_PATH}")
+        print("You can now start your RAG application.")
+        
+    except Exception as e:
+        print(f"\n❌ Ingestion failed: {e}")
+        exit(1)
