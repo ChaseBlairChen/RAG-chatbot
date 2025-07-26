@@ -18,9 +18,7 @@ from langchain_huggingface import HuggingFaceEmbeddings
 import spacy
 from sentence_transformers import SentenceTransformer
 import numpy as np
-# Import chromadb for the new client
-import chromadb # <-- Added import
-
+from chromadb.config import Settings
 # Set up logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -42,11 +40,15 @@ app.add_middleware(
 )
 # Global variables and configuration
 CHROMA_PATH = "chroma"  # Update this to your actual Chroma database path
-# CHROMA_CLIENT_SETTINGS is removed as it's deprecated
-# CHROMA_CLIENT_SETTINGS = Settings(
-#     chroma_db_impl="duckdb+parquet",
-#     persist_directory=CHROMA_PATH
-# )
+
+# --- FIXED: Updated Chroma Settings to match the working version ---
+CHROMA_CLIENT_SETTINGS = Settings(
+    persist_directory=CHROMA_PATH,
+    anonymized_telemetry=False,
+    allow_reset=True,
+    is_persistent=True
+)
+# --- END OF FIX ---
 
 # In-memory conversation storage
 conversations = {}
@@ -109,11 +111,11 @@ class LegalQuery(BaseModel):
     case_types: Optional[List[str]] = None  # Filter by case types
     time_period: Optional[str] = "all"  # "recent", "historical", "specific_years", "all"
 
-# --- New Pydantic Model for /ask endpoint ---
+# --- NEW: Pydantic Model for /ask endpoint ---
 class AskQuery(BaseModel):
     question: str
     session_id: Optional[str] = None
-# --- End of new model ---
+# --- END OF NEW MODEL ---
 
 class LegalAnalysisResponse(BaseModel):
     response: Optional[str] = None
@@ -1005,7 +1007,7 @@ async def legal_analysis_endpoint(query: LegalQuery):
     )
     return response
 
-# --- New /ask endpoint that delegates to /legal-analysis ---
+# --- NEW /ask endpoint that delegates to /legal-analysis ---
 @app.post("/ask", response_model=LegalAnalysisResponse)
 async def ask_endpoint(query: AskQuery):
     """
@@ -1017,15 +1019,14 @@ async def ask_endpoint(query: AskQuery):
         session_id=query.session_id,
         response_style="balanced",
         analysis_type="comprehensive",
-        jurisdiction="federal",
+        jurisdiction="federal", # Default, user can change if needed via /legal-analysis
         case_types=None,
         time_period="all"
     )
     
     # Reuse the existing legal analysis endpoint logic
-    # We need to await the existing endpoint function
     return await legal_analysis_endpoint(legal_query)
-# --- End of new endpoint ---
+# --- END OF NEW ENDPOINT ---
 
 # [Include all utility functions from previous versions...]
 # Additional utility functions needed
@@ -1039,32 +1040,24 @@ def cleanup_expired_conversations():
     for session_id in expired_sessions:
         del conversations[session_id]
 
-# --- Updated load_database function ---
+# --- FIXED: Updated load_database function to match the working version ---
 def load_database():
-    """Load the Chroma database using the updated API"""
+    """Load the Chroma database"""
     try:
-        # Use the new chromadb.PersistentClient
-        # Make sure CHROMA_PATH is defined earlier in your file (e.g., CHROMA_PATH = "chroma")
-        client = chromadb.PersistentClient(path=CHROMA_PATH)
-        
-        # Initialize the embedding function
         embedding_function = HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2")
-        
-        # Get or create the collection. Make sure the name matches your existing collection.
-        collection_name = "legal_documents" 
-        
-        # Create the LangChain Chroma wrapper using the persistent client
+        # --- FIXED: Updated collection_name to match the working version ---
         db = Chroma(
-            collection_name=collection_name,
+            collection_name="default", # Changed from "legal_documents"
             embedding_function=embedding_function,
-            client=client # Pass the client instead of persist_directory and settings
-            # persist_directory and client_settings are removed
+            persist_directory=CHROMA_PATH,
+            client_settings=CHROMA_CLIENT_SETTINGS # Uses the corrected settings
         )
+        # --- END OF FIX ---
         return db
     except Exception as e:
         logger.error(f"Failed to load database: {e}")
         raise
-# --- End of updated function ---
+# --- END OF FIXED FUNCTION ---
 
 def get_conversation_context(session_id: str, max_messages: int = 10) -> str:
     """Get conversation context for legal consultations"""
