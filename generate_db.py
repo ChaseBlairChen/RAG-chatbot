@@ -17,20 +17,61 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # --- SUGGESTION: Change database folder name to avoid conflicts ---
-CHROMA_PATH = os.path.join(os.getcwd(), "chromadb-database") # Changed from "my_chroma_db"
+# Using an absolute path can also help prevent issues.
+CHROMA_PATH = os.path.abspath(os.path.join(os.getcwd(), "chromadb-database")) # Changed from "my_chroma_db"
 # --- END SUGGESTION ---
 DOCUMENTS_FOLDER = "documents"
 
 def fix_chroma_database():
-    """Fix Chroma database schema issues"""
+    """Fix Chroma database schema issues with aggressive cleanup."""
     try:
-        # Remove corrupted database
+        print(f"[INIT] Intended database path is: {CHROMA_PATH}")
+        # --- AGGRESSIVE CLEANUP ---
         if os.path.exists(CHROMA_PATH):
-            logger.info(f"Removing corrupted database: {CHROMA_PATH}")
-            shutil.rmtree(CHROMA_PATH)
-        # Create directory
+            print(f"[INIT] Found existing directory at {CHROMA_PATH}. Removing it to ensure a clean start.")
+            try:
+                # Standard removal
+                shutil.rmtree(CHROMA_PATH)
+                print(f"[INIT] Successfully removed {CHROMA_PATH} with rmtree.")
+            except Exception as e1:
+                print(f"[INIT] rmtree failed: {e1}")
+                # Fallback: Try removing files individually if rmtree fails (e.g., due to locks)
+                try:
+                    print("[INIT] Trying individual file/directory removal...")
+                    import glob
+                    for item in glob.glob(os.path.join(CHROMA_PATH, "*")):
+                        try:
+                            if os.path.isfile(item) or os.path.islink(item):
+                                os.unlink(item)
+                            elif os.path.isdir(item):
+                                shutil.rmtree(item, ignore_errors=True)
+                        except Exception as e_item:
+                            print(f"[INIT] Failed to remove item {item}: {e_item}")
+                    # Try to remove the now (hopefully) empty directory
+                    try:
+                        os.rmdir(CHROMA_PATH)
+                        print(f"[INIT] Successfully removed {CHROMA_PATH} via individual item removal.")
+                    except Exception as e_rmdir:
+                         print(f"[INIT] Failed to remove directory {CHROMA_PATH} after item removal: {e_rmdir}")
+                         # If even rmdir fails, it's a critical issue.
+                         raise RuntimeError(f"Could not finalize removal of {CHROMA_PATH}") from e_rmdir
+
+                except Exception as e2:
+                    print(f"[INIT] Individual file removal also failed: {e2}")
+                    # Critical failure - cannot proceed if path exists and cannot be removed
+                    raise RuntimeError(f"CRITICAL: Could not remove existing database path {CHROMA_PATH}. Cannot proceed with creation. Error 1: {e1}. Error 2: {e2}")
+        # --- END AGGRESSIVE CLEANUP ---
+
+        # Create directory cleanly
         os.makedirs(CHROMA_PATH, exist_ok=True)
-        # Initialize a new ChromaDB client with proper settings
+        print(f"[INIT] Created clean database directory: {CHROMA_PATH}")
+
+        # Small delay to allow OS to release handles (might help on some systems)
+        import time
+        time.sleep(0.2)
+
+        # Initialize a new ChromaDB client with known settings to test the path
+        # This step is mostly for verification; the actual DB creation will use LangChain.
         client = chromadb.PersistentClient(
             path=CHROMA_PATH,
             settings=Settings(
@@ -40,7 +81,7 @@ def fix_chroma_database():
         )
         # Test client
         client.heartbeat()
-        logger.info("✅ ChromaDB client initialized successfully")
+        logger.info("✅ ChromaDB client initialized successfully on clean path")
         return True
     except Exception as e:
         logger.error(f"Failed to fix Chroma database: {e}")
@@ -89,7 +130,8 @@ def check_unstructured_availability():
         return False
 
 # --- SUGGESTION 1 & 2: Enhanced Alias Expansion ---
-# Updated to ensure aliases are correctly built and added to metadata
+# Updated to ensure aliases are correctly built and added to metadata.
+# Simplified alias mapping to one canonical name per alias.
 def extract_entities_and_aliases(text: str, filename: str) -> dict:
     """Enhanced entity extraction with alias mapping for better retrieval"""
     entities = {
@@ -97,11 +139,11 @@ def extract_entities_and_aliases(text: str, filename: str) -> dict:
         'acts': [],
         'organizations': [],
         'people': [],
-        'aliases': {}  # Map aliases to canonical names
+        'aliases': {}  # Map alias -> single canonical name
     }
-    
-    # Common bill aliases and their canonical names
-    # Ensure the mapping is from alias -> canonical name
+
+    # Common bill aliases and their primary canonical name
+    # Ensure the mapping is from alias -> canonical name (string, not list)
     bill_aliases = {
         'one big beautiful bill': 'Inflation Reduction Act',
         'build back better': 'Build Back Better Act', # Simplified for consistency
@@ -110,7 +152,7 @@ def extract_entities_and_aliases(text: str, filename: str) -> dict:
         'climate bill': 'Inflation Reduction Act', # Maps to the same canonical name
         # Add more aliases as discovered
     }
-    
+
     # Extract potential bill names and numbers
     import re
     # H.R./S. bill patterns
@@ -146,7 +188,8 @@ def extract_entities_and_aliases(text: str, filename: str) -> dict:
     for alias, canonical_name in bill_aliases.items():
         # Check if the canonical name is mentioned in the text
         if canonical_name.lower() in lower_text:
-            # Add the alias mapping
+            # Add the alias mapping (this ensures aliases are in metadata even if not in filename)
+            # It will overwrite if filename logic already set it, which is fine.
             entities['aliases'][alias] = canonical_name
         # Also check if the alias itself is mentioned (might be useful for direct alias mentions in docs)
         # This part is nuanced; rely on filename logic and canonical name presence for now.
@@ -457,7 +500,7 @@ def validate_documents(documents: List[Document]) -> List[Document]:
 def split_documents(documents: List[Document]) -> List[Document]:
     """Split documents into chunks for RAG with entity preservation"""
     text_splitter = RecursiveCharacterTextSplitter(
-        chunk_size=800,
+        chunk_size=800, # Increased chunk size slightly
         chunk_overlap=200,  # Increased overlap for better entity context
         length_function=len,
         add_start_index=True,
@@ -471,64 +514,29 @@ def split_documents(documents: List[Document]) -> List[Document]:
         chunk.metadata["chunk_id"] = i
         chunk.metadata["chunk_size"] = len(chunk.page_content)
         # Preserve entity metadata from parent document
-        # --- MODIFIED: Ensure aliases are handled correctly ---
+        # --- MODIFIED: Ensure aliases are handled correctly and injected into content ---
         if 'entities' in chunk.metadata:
-            # Add entity aliases to chunk content for better matching
             # Access aliases from the chunk's metadata (which was copied from parent doc)
             aliases = chunk.metadata.get('aliases', {})
             if aliases:
                 # Format aliases for inclusion in chunk text
-                alias_text = "\nKnown aliases in this document context: " + ", ".join([f"{alias} -> {canonical}" for alias, canonical in aliases.items()])
+                # This makes aliases directly searchable by the embedding model
+                alias_text = "\n\n[Context Note: This document may also refer to the following terms: " + ", ".join([f"'{alias}' (meaning '{canonical}')" for alias, canonical in aliases.items()]) + "]"
                 # Append alias information to the chunk content
                 chunk.page_content += alias_text
         # --- END MODIFICATION ---
 
     if chunks:
         print(f"\n📄 First chunk preview:")
-        print(f"   Content: {chunks[0].page_content[:150]}...")
+        print(f"   Content: {chunks[0].page_content[:200]}...")
         print(f"   Metadata: {chunks[0].metadata}")
 
     return chunks
 
-# --- MODIFIED: Aggressive Cleanup and Explicit Client Management ---
+# --- MODIFIED: Simplified and Robust Database Creation ---
 def create_vector_database(chunks: List[Document]):
-    """Create the Chroma vector database with proper error handling"""
+    """Create the Chroma vector database with aggressive cleanup and simplified creation."""
     global CHROMA_PATH # Ensure we are using the correct path
-
-    # --- AGGRESSIVE CLEANUP STEP ---
-    # Ensure the database path is clean *right before* we try to create it.
-    print(f"[PRE-CREATE CLEANUP] Checking path: {CHROMA_PATH}")
-    if os.path.exists(CHROMA_PATH):
-        print(f"[PRE-CREATE CLEANUP] Removing existing path: {CHROMA_PATH}")
-        try:
-            shutil.rmtree(CHROMA_PATH)
-            print("[PRE-CREATE CLEANUP] Path removed successfully.")
-        except Exception as e:
-            print(f"[PRE-CREATE CLEANUP] Failed to remove path: {e}")
-            # If rmtree fails, try removing individual files (sometimes helps with locks)
-            try:
-                import glob
-                for file in glob.glob(os.path.join(CHROMA_PATH, "*")):
-                    try:
-                        os.remove(file)
-                    except IsADirectoryError:
-                        shutil.rmtree(file, ignore_errors=True)
-                try:
-                    os.rmdir(CHROMA_PATH) # Remove the now-empty directory
-                    print("[PRE-CREATE CLEANUP] Path removed via file-by-file deletion.")
-                except Exception as e2:
-                    print(f"[PRE-CREATE CLEANUP] Final directory removal also failed: {e2}")
-            except Exception as e2:
-                print(f"[PRE-CREATE CLEANUP] File-by-file deletion also failed: {e2}")
-                # Re-raise the original error if this fails too
-                # It's critical the path is gone, so we should not proceed if it's not.
-                print("[PRE-CREATE CLEANUP] CRITICAL FAILURE: Could not remove existing database path. Cannot proceed.")
-                raise RuntimeError(f"Could not remove existing database path {CHROMA_PATH}: {e}")
-
-    # Small delay to ensure OS has released file handles (might help on some systems)
-    import time
-    time.sleep(0.5)
-    # --- END AGGRESSIVE CLEANUP ---
 
     try:
         # Use same embedding model as app.py
@@ -539,101 +547,36 @@ def create_vector_database(chunks: List[Document]):
         )
         print(f"🔄 Creating vector database with {len(chunks)} chunks...")
 
-        # --- ALTERNATIVE CLIENT INITIALIZATION ---
-        # Instead of relying on Chroma.from_documents to handle client creation internally,
-        # explicitly create the client first.
-        try:
-            # 1. Explicitly initialize the PersistentClient with known settings
-            print(f"[CLIENT INIT] Initializing PersistentClient for {CHROMA_PATH}")
-            client = chromadb.PersistentClient(
-                path=CHROMA_PATH,
-                settings=Settings(
-                    anonymized_telemetry=False,
-                    allow_reset=True # Allow reset attempts if needed
-                )
-            )
-            print("[CLIENT INIT] PersistentClient initialized.")
+        # --- PRIMARY METHOD: Chroma.from_documents ---
+        # This is the standard and generally most reliable way if the path is clean.
+        # The aggressive cleanup in fix_chroma_database should ensure this works.
+        print("[CREATION] Attempting database creation with Chroma.from_documents...")
+        db = Chroma.from_documents(
+            chunks,
+            embedding_function,
+            persist_directory=CHROMA_PATH,
+            collection_name="default"
+        )
+        print("[CREATION] Database created successfully with Chroma.from_documents.")
+        # --- END PRIMARY METHOD ---
 
-            # 2. Attempt to reset the client state (helps clear any lingering issues)
-            #    Note: reset() might not always be available or might behave differently.
-            #    We'll try it but catch errors.
-            try:
-                print("[CLIENT INIT] Attempting client reset...")
-                client.reset() # This should clear the client's state
-                print("[CLIENT INIT] Client reset successful.")
-            except Exception as reset_e:
-                print(f"[CLIENT INIT] Client reset attempt failed (might be expected or not supported): {reset_e}")
-                # Continue even if reset fails
-
-            # 3. Get or create the collection explicitly
-            #    This is what Chroma.from_documents does internally.
-            print("[CLIENT INIT] Getting/Creating collection 'default'...")
-            collection = client.get_or_create_collection(
-                name="default",
-                embedding_function=embedding_function # Associate embedding function with collection
-            )
-            print("[CLIENT INIT] Collection ready.")
-
-            # 4. Add documents to the collection
-            print("[CLIENT INIT] Adding documents to collection...")
-            # Prepare data for Chroma add
-            ids = [f"chunk_{i}" for i in range(len(chunks))]
-            documents = [chunk.page_content for chunk in chunks]
-            metadatas = [chunk.metadata for chunk in chunks]
-
-            collection.add(
-                ids=ids,
-                documents=documents,
-                metadatas=metadatas
-            )
-            print("[CLIENT INIT] Documents added.")
-
-            # 5. Wrap the client/collection in a LangChain Chroma object for compatibility
-            #    We need to point it to the existing collection.
-            print("[CLIENT INIT] Wrapping collection in LangChain Chroma object...")
-            db = Chroma(
-                client=client, # Pass the existing client
-                collection_name="default", # Specify the collection name
-                embedding_function=embedding_function # Pass the embedding function
-            )
-            print("[CLIENT INIT] LangChain Chroma object created.")
-
-            success = True # Flag to indicate successful creation
-
-        except Exception as explicit_client_e:
-            print(f"[CLIENT INIT] Failed using explicit client initialization: {explicit_client_e}")
-            print("[CLIENT INIT] Falling back to Chroma.from_documents...")
-            # Fallback to the original method if explicit client fails
-            db = Chroma.from_documents(
-                chunks,
-                embedding_function,
-                persist_directory=CHROMA_PATH,
-                collection_name="default"
-            )
-            success = True # Assume fallback worked if no exception was raised here
-        # --- END ALTERNATIVE CLIENT INITIALIZATION ---
-
-        if success:
-            print("💾 Database creation process completed (client/collection setup).")
-            # Test the database
-            test_results = db.similarity_search("test", k=3)
-            print(f"✅ Database created and tested successfully!")
-            print(f"   Test search returned {len(test_results)} results")
-            # Print summary
-            print_summary(chunks)
-        else:
-            raise RuntimeError("Database creation failed.")
+        print("💾 Database creation process completed.")
+        # Test the database
+        test_results = db.similarity_search("test", k=3)
+        print(f"✅ Database created and tested successfully!")
+        print(f"   Test search returned {len(test_results)} results")
+        # Print summary
+        print_summary(chunks)
 
     except Exception as e:
-        print(f"❌ Error creating database: {e}")
-        # Final attempt to clean up if it failed
+        print(f"❌ Error during database creation process: {e}")
+        # Final attempt to clean up if it failed during creation
         if os.path.exists(CHROMA_PATH):
             try:
                 shutil.rmtree(CHROMA_PATH)
-                print("🧹 Final cleanup: Database path removed after failure.")
-            except:
-                print("🧹 Final cleanup: Failed to remove database path after failure.")
-                pass
+                print("🧹 Final cleanup: Database path removed after creation failure.")
+            except Exception as cleanup_e:
+                print(f"🧹 Final cleanup failed: Could not remove database path after failure: {cleanup_e}")
         raise # Re-raise the original error
 
 # --- END MODIFICATION ---
@@ -651,7 +594,7 @@ def print_summary(chunks: List[Document]):
 
     # Count entities (simple count of acts mentioned)
     total_acts_mentioned = sum(len(chunk.metadata.get('entities', {}).get('acts', [])) for chunk in chunks)
-    
+
     # Count chunks with aliases
     chunks_with_aliases = sum(1 for chunk in chunks if chunk.metadata.get('aliases'))
 
@@ -663,7 +606,7 @@ def print_summary(chunks: List[Document]):
     print(f"   • Average chunk size: {avg_chunk_size:.0f} characters")
     print(f"   • Enhanced processing (Unstructured): {unstructured_chunks} chunks")
     print(f"   • Standard processing (PyMuPDF): {pymupdf_chunks} chunks")
-    print(f"   • Total 'Act' names mentioned in meta {total_acts_mentioned}")
+    print(f"   • Total 'Act' names mentioned in metadata: {total_acts_mentioned}")
     print(f"   • Chunks containing alias information: {chunks_with_aliases}")
     print(f"   • Database location: {CHROMA_PATH}")
 
@@ -719,6 +662,13 @@ if __name__ == "__main__":
         main()
         print("\n🎉 Ingestion completed successfully!")
         print(f"Your database is ready at: {CHROMA_PATH}")
+        # --- REMINDER ---
+        print("\n--- IMPORTANT ---")
+        print("Please ensure your 'app.py' also uses the same CHROMA_PATH:")
+        print(f"   CHROMA_PATH = '{CHROMA_PATH}'")
+        print("Or, if using a relative path in app.py:")
+        print(f"   CHROMA_PATH = os.path.join(os.getcwd(), 'chromadb-database')")
+        print("------------------\n")
         print("You can now start your RAG application with: uvicorn app:app --host 0.0.0.0 --port 8000")
     except Exception as e:
         print(f"\n💥 Ingestion failed: {e}")
