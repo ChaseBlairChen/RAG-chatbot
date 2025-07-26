@@ -1,4 +1,5 @@
 # --- app.py ---
+# --- app.py ---
 from fastapi import FastAPI, Request, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -12,7 +13,6 @@ from typing import Optional, List, Dict, Tuple
 import logging
 import uuid
 from datetime import datetime, timedelta
-
 # --- AI Agent Imports ---
 from enum import Enum
 from dataclasses import dataclass
@@ -20,7 +20,6 @@ import spacy
 from sentence_transformers import SentenceTransformer
 import numpy as np
 # --- End AI Agent Imports ---
-
 # Set up logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -30,9 +29,19 @@ if os.path.exists(CHROMA_PATH):
     logger.info(f"Database contents: {os.listdir(CHROMA_PATH)}")
 else:
     logger.warning("Database folder not found!")
-
 # In-memory conversation storage (in production, use Redis or a database)
 conversations: Dict[str, Dict] = {}
+
+# --- SUGGESTION 1: Alias Map for Entity Resolution ---
+# Define known aliases or colloquial terms and their formal counterparts
+ENTITY_ALIASES = {
+    "one big beautiful bill": "Inflation Reduction Act",
+    "inflation reduction act": "Inflation Reduction Act", # Ensure consistent casing
+    "ira": "Inflation Reduction Act",
+    "lower energy costs act": "H.R.1 - Lower Energy Costs Act",
+    # Add more aliases as discovered
+}
+# --- END SUGGESTION 1 ---
 
 def cleanup_old_conversations():
     """Remove conversations older than 24 hours"""
@@ -130,6 +139,7 @@ def enhanced_retrieval(db, query_text: str, k: int = 5):
         logger.info(f"Searching for: '{query_text}' with k={k}")
         results = []
         try:
+            # --- SUGGESTION 4: Increase relevance threshold ---
             results = db.similarity_search_with_relevance_scores(query_text, k=k*3)
             logger.info(f"Similarity search returned {len(results)} results")
         except Exception as e:
@@ -162,7 +172,8 @@ def enhanced_retrieval(db, query_text: str, k: int = 5):
             if content_hash in seen_content:
                 continue
             seen_content.add(content_hash)
-            if score >= 0.1:
+            # --- SUGGESTION 4: Increase relevance threshold ---
+            if score >= 0.3: # Increased from 0.1
                 filtered_results.append((doc, score))
                 logger.info(f"Included result with score {score:.3f}: {content_preview[:50]}...")
         if not filtered_results and results:
@@ -203,17 +214,30 @@ def create_enhanced_context(results, questions: list) -> tuple:
     context_text = "\n" + "\n".join(context_parts)
     return context_text, source_info
 
-# Modified prompt template to include conversation history
+# --- SUGGESTION 3 & 4: Enhanced Prompt Template ---
+# Modified prompt template to include conversation history and instructions for clarification and relevance filtering
 ENHANCED_PROMPT_TEMPLATE = """You are a helpful assistant engaged in an ongoing conversation. Answer the current question using the provided context sources and conversation history.
-IMPORTANT: When citing information, use the document name format shown in brackets, for example [RCW 10.01.240.pdf] or [RCW 10.01.240.pdf (Page 1)] - do NOT use generic SOURCE numbers.
+
+IMPORTANT INSTRUCTIONS FOR RESPONSE:
+1.  **Answer Strictly from Context:** Base your answer primarily and strictly on the provided CURRENT CONTEXT and CONVERSATION HISTORY. If the context contains no information related to the query, explicitly state that.
+2.  **Clarification Dialogue:** If the question is ambiguous or refers to a term that could have multiple meanings (e.g., 'the bill'), and the context contains information about multiple potential referents, ask a clarifying question to the user before providing a specific answer. For example:
+    User: "What does the bill say about tax credits?"
+    Assistant: "Could you please specify which bill you are referring to? Are you asking about the Inflation Reduction Act, the Infrastructure Investment and Jobs Act, or another specific bill?"
+3.  **Citation Format:** When citing information, use the document name format shown in brackets, for example [RCW 10.01.240.pdf] or [RCW 10.01.240.pdf (Page 1)] - do NOT use generic SOURCE numbers.
+
 CONVERSATION HISTORY:
 {conversation_history}
+
 CURRENT CONTEXT:
 {context}
+
 CURRENT QUESTION: {questions}
+
 Please provide a helpful answer based on the context above and the conversation history. When you reference information, cite it using the document name in brackets as shown in the context (e.g., [document_name.pdf] or [document_name.pdf (Page X)]).
 If the user is asking a follow-up question or referring to something mentioned earlier in the conversation, acknowledge that context in your response.
+
 RESPONSE:"""
+# --- END SUGGESTION 3 & 4 ---
 
 class Query(BaseModel):
     question: str
@@ -234,7 +258,6 @@ class ConversationHistory(BaseModel):
 
 # --- INTEGRATE AI AGENT CODE HERE ---
 # Enhanced AI Agent for Better Question Understanding and Search
-
 class QueryType(Enum):
     FACTUAL = "factual"
     PROCEDURAL = "procedural"
@@ -308,26 +331,37 @@ class EnhancedQuestionAnalyzer:
 
     def analyze_question(self, query: str, conversation_history: List[Dict] = None) -> QuestionAnalysis:
         """Comprehensive question analysis for better retrieval"""
-        # Basic preprocessing
-        query_lower = query.lower().strip()
+        # --- SUGGESTION 1: Apply Alias Expansion ---
+        # Expand known aliases before any processing
+        expanded_query = query
+        for alias, formal_name in ENTITY_ALIASES.items():
+            # Use case-insensitive replacement
+            expanded_query = re.sub(re.escape(alias), formal_name, expanded_query, flags=re.IGNORECASE)
+        logger.debug(f"Original query: '{query}' -> Expanded query: '{expanded_query}'")
+        # --- END SUGGESTION 1 ---
+
+        # Basic preprocessing (on the expanded query)
+        query_lower = expanded_query.lower().strip()
+
         # Determine query type
         query_type = self._classify_query_type(query_lower)
         # Determine intent
         intent = self._determine_intent(query_lower, conversation_history)
         # Extract entities and keywords
-        entities = self._extract_entities(query)
+        entities = self._extract_entities(expanded_query) # Use expanded query for entity extraction
         keywords = self._extract_keywords(query_lower)
         # Generate reformulated queries
-        reformulated = self._generate_reformulations(query, query_type, entities, keywords)
+        reformulated = self._generate_reformulations(expanded_query, query_type, entities, keywords) # Use expanded query
         # Determine context requirements
         context_reqs = self._analyze_context_requirements(query_lower, intent, conversation_history)
         # Calculate confidence score
-        confidence = self._calculate_confidence(query, entities, keywords)
+        confidence = self._calculate_confidence(expanded_query, entities, keywords) # Use expanded query
         # Determine search strategy
         strategy = self._determine_search_strategy(query_type, intent, entities)
+
         logger.debug(f"AI Analysis - Query: '{query}', Type: {query_type.value}, Intent: {intent.value}, Entities: {entities}")
         return QuestionAnalysis(
-            original_query=query,
+            original_query=query, # Return the original user query
             query_type=query_type,
             intent=intent,
             key_entities=entities,
@@ -644,13 +678,14 @@ def create_ai_enhanced_context(results, analysis: QuestionAnalysis, questions: l
         })
     context_text = "\n" + "\n".join(context_parts)
     return context_text, source_info
-# --- END AI AGENT INTEGRATION ---
 
+# --- END AI AGENT INTEGRATION ---
 # --- INITIALIZE THE AI AGENT ---
 ai_analyzer = EnhancedQuestionAnalyzer()
 # --- END INITIALIZATION ---
 
 app = FastAPI(title="RAG API", description="Retrieval-Augmented Generation API with Conversation Support", version="2.1.0")
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -783,12 +818,10 @@ def ask_question(query: Query):
                 context_found=False,
                 session_id=query.session_id or ""
             )
-
         # Get or create session
         session_id = get_or_create_session(query.session_id)
         api_key = os.environ.get("OPENAI_API_KEY")
         api_base = os.environ.get("OPENAI_API_BASE", "https://openrouter.ai/api/v1")
-
         if not api_key:
             logger.error("OPENAI_API_KEY not found")
             return QueryResponse(
@@ -797,7 +830,6 @@ def ask_question(query: Query):
                 context_found=False,
                 session_id=session_id
             )
-
         if not os.path.exists(CHROMA_PATH):
             logger.error("Database not found")
             return QueryResponse(
@@ -806,40 +838,36 @@ def ask_question(query: Query):
                 context_found=False,
                 session_id=session_id
             )
-
         # Add user message to conversation history
         add_to_conversation(session_id, "user", query_text)
         questions = parse_multiple_questions(query_text)
         logger.info(f"Parsed {len(questions)} questions: {questions}")
-
         # Get conversation history for AI analysis
         conversation_history_list = conversations.get(session_id, {}).get('messages', [])
-
         try:
             # CRITICAL: Use the same embedding model as ingestion script
-            embedding_function = HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2")
+            embedding_function = HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2") # Ensure this matches ingestion
             db = Chroma(persist_directory=CHROMA_PATH, embedding_function=embedding_function)
             # Test database connectivity
             test_results = db.similarity_search("test", k=1)
             logger.info(f"Database loaded successfully with {len(test_results)} test results")
         except Exception as e:
             logger.error(f"Failed to load database: {e}")
+            # --- SUGGESTION 1: More specific error message ---
             return QueryResponse(
                 response=None,
-                error=f"Failed to load vector database: {str(e)}. Make sure you've run the ingestion script first.",
+                error=f"Failed to load vector database: {str(e)}. This might be due to a schema mismatch. Try deleting the 'my_chroma_db' folder and re-running the ingestion script.",
                 context_found=False,
                 session_id=session_id
             )
+            # --- END SUGGESTION 1 ---
 
         combined_query = " ".join(questions)
-
         # --- MODIFIED: Use AI Agent for Analysis and Retrieval ---
         # Perform enhanced retrieval using the AI agent
         results, analysis = enhanced_retrieval_with_ai_agent(db, combined_query, conversation_history_list, k=5)
         # --- END MODIFICATION ---
-
         logger.info(f"Retrieved {len(results)} results")
-
         if not results:
             logger.warning("No relevant documents found")
             response_text = "I couldn't find any relevant information in the documents to answer your question. Please try rephrasing your question or check if the documents contain information about this topic."
@@ -851,29 +879,24 @@ def ask_question(query: Query):
                 context_found=False,
                 session_id=session_id
             )
-
         # --- MODIFIED: Use AI Enhanced Context Creation ---
         # Create context using the AI analysis
         context_text, source_info = create_ai_enhanced_context(results, analysis, questions)
         # --- END MODIFICATION ---
         logger.info(f"Created context with {len(source_info)} sources")
-
         # Get conversation history (already retrieved above)
         # conversation_history_list = conversations.get(session_id, {}).get('messages', []) # Already have this
         conversation_history_context = get_conversation_context(session_id, max_messages=8)
-
         if len(questions) > 1:
             formatted_questions = "\n".join(f"{i+1}. {q}" for i, q in enumerate(questions))
         else:
             formatted_questions = questions[0]
-
         formatted_prompt = ENHANCED_PROMPT_TEMPLATE.format(
             conversation_history=conversation_history_context if conversation_history_context else "No previous conversation.",
             context=context_text,
             questions=formatted_questions
         )
         logger.info(f"Prompt length: {len(formatted_prompt)} characters")
-
         try:
             response_text = call_openrouter_api(formatted_prompt, api_key, api_base)
             if not response_text:
@@ -886,12 +909,11 @@ def ask_question(query: Query):
                 relevant_source_info = [source for source in source_info if source['relevance'] >= MIN_RELEVANCE_SCORE_FOR_SOURCE_DISPLAY]
                 # Add sources section only if there are relevant sources
                 if relevant_source_info:
-                    response_text += "\n**SOURCES:**\n"
+                    response_text += "\n\n**SOURCES:**\n"
                     for source in relevant_source_info: # Use the filtered list
                         page_info = f", Page {source['page']}" if source['page'] else ""
-                        response_text += f"• {source['file_name']}{page_info} (Relevance: {source['relevance']:.2f})\n"
+                        response_text += f"- {source['file_name']}{page_info} (Relevance: {source['relevance']:.2f})\n"
                 # --- MODIFIED SECTION END ---
-
             # Add assistant response to conversation history
             # Pass the potentially filtered source_info or the original if you want full history
             # Using relevant_source_info for history might be cleaner if you only want to track used sources,
@@ -899,7 +921,6 @@ def ask_question(query: Query):
             # Let's use source_info for history for now to keep the history consistent with what was retrieved.
             add_to_conversation(session_id, "assistant", response_text, source_info)
             logger.info(f"Successfully generated response of length {len(response_text)}")
-
             # Return the filtered sources in the API response as well
             return QueryResponse(
                 response=response_text,
@@ -999,7 +1020,7 @@ def debug_database():
         # Check database folder contents
         db_contents = os.listdir(CHROMA_PATH)
         # Try to load the database
-        embedding_function = HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2")
+        embedding_function = HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2") # Ensure this matches ingestion
         db = Chroma(persist_directory=CHROMA_PATH, embedding_function=embedding_function)
         # Test different search queries
         test_queries = ["test", "document", "content", "information"]
@@ -1038,7 +1059,7 @@ def get_sources_info():
     if not os.path.exists(CHROMA_PATH):
         return {"error": "Database not found", "path": CHROMA_PATH}
     try:
-        embedding_function = HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2")
+        embedding_function = HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2") # Ensure this matches ingestion
         db = Chroma(persist_directory=CHROMA_PATH, embedding_function=embedding_function)
         sample_docs = db.similarity_search("document content", k=50)
         sources = {}
@@ -1075,15 +1096,12 @@ def analyze_single_question(query: Query):
         query_text = query.question.strip() if query.question else ""
         if not query_text:
             return {"error": "Question cannot be empty"}
-
         # Get conversation history if session provided
         conversation_history_list = []
         if query.session_id and query.session_id in conversations:
             conversation_history_list = conversations[query.session_id]['messages']
-
         # Analyze the question using the global ai_analyzer
         analysis = ai_analyzer.analyze_question(query_text, conversation_history_list)
-
         # Return the analysis results in a structured format
         return {
             "original_query": analysis.original_query,
@@ -1170,7 +1188,7 @@ def chrome_extension_endpoint(request: dict):
         search_results = []
         if os.path.exists(CHROMA_PATH):
             try:
-                embedding_function = HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2")
+                embedding_function = HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2") # Ensure this matches ingestion
                 db = Chroma(persist_directory=CHROMA_PATH, embedding_function=embedding_function)
                 results, _ = enhanced_retrieval_with_ai_agent(
                     db, enhanced_query, conversation_history, k=3
@@ -1313,6 +1331,7 @@ def get_search_suggestions(query: str, session_id: Optional[str] = None):
     except Exception as e:
         logger.error(f"Search suggestions failed: {e}")
         return {"error": str(e)}
+
 # --- End Additional Endpoints ---
 
 if __name__ == "__main__":
@@ -1320,5 +1339,4 @@ if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8000))
     logger.info(f"Starting server on port {port}")
     uvicorn.run(app, host="0.0.0.0", port=port)
-
 # --- End of app.py ---
