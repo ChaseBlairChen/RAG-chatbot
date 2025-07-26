@@ -12,6 +12,9 @@ import sqlite3
 import chromadb
 from chromadb.config import Settings
 
+
+db_path = "/home/ubuntu/RAG-chatbot/my_chroma_db"
+print(f"DB path exists before ingestion? {os.path.exists(db_path)}")
 # Set up logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
