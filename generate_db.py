@@ -513,11 +513,11 @@ def validate_documents(documents: List[Document]) -> List[Document]:
 def split_documents(documents: List[Document]) -> List[Document]:
     """Split documents into chunks for RAG with entity preservation"""
     text_splitter = RecursiveCharacterTextSplitter(
-        chunk_size=400,     # Smaller chunks for more precise retrieval
-        chunk_overlap=100,  # Proportional overlap for context preservation
+        chunk_size=200,     # Very small chunks for precise legal document retrieval
+        chunk_overlap=50,   # Smaller overlap but still maintains context
         length_function=len,
         add_start_index=True,
-        separators=["\n\n", "\n", ". ", " ", ""]
+        separators=["\n\n", "\n", ". ", "; ", ", ", " ", ""]  # Added legal-specific separators
     )
     chunks = text_splitter.split_documents(documents)
     print(f"✂️  Split into {len(chunks)} chunks")
