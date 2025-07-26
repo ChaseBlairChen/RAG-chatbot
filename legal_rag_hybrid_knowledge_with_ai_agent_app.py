@@ -18,10 +18,13 @@ from langchain_huggingface import HuggingFaceEmbeddings
 import spacy
 from sentence_transformers import SentenceTransformer
 import numpy as np
-from chromadb.config import Settings
+# Import chromadb for the new client
+import chromadb # <-- Added import
+
 # Set up logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
 # Add this section after your imports (around line 30-35):
 # Create FastAPI app instance
 app = FastAPI(
@@ -39,12 +42,15 @@ app.add_middleware(
 )
 # Global variables and configuration
 CHROMA_PATH = "chroma"  # Update this to your actual Chroma database path
-CHROMA_CLIENT_SETTINGS = Settings(
-    chroma_db_impl="duckdb+parquet",
-    persist_directory=CHROMA_PATH
-)
+# CHROMA_CLIENT_SETTINGS is removed as it's deprecated
+# CHROMA_CLIENT_SETTINGS = Settings(
+#     chroma_db_impl="duckdb+parquet",
+#     persist_directory=CHROMA_PATH
+# )
+
 # In-memory conversation storage
 conversations = {}
+
 # --- Case Law Analysis Data Models ---
 class CaseType(Enum):
     CRIMINAL = "criminal"
@@ -57,6 +63,7 @@ class CaseType(Enum):
     PROPERTY = "property"
     CONTRACT = "contract"
     TORT = "tort"
+
 class JurisdictionLevel(Enum):
     SUPREME_COURT = "supreme_court"
     APPELLATE = "appellate"
@@ -65,6 +72,7 @@ class JurisdictionLevel(Enum):
     STATE_APPELLATE = "state_appellate"
     STATE_TRIAL = "state_trial"
     ADMINISTRATIVE = "administrative"
+
 @dataclass
 class CaseCitation:
     case_name: str
@@ -74,6 +82,7 @@ class CaseCitation:
     jurisdiction_level: JurisdictionLevel
     case_type: CaseType
     relevance_score: float = 0.0
+
 @dataclass
 class LegalPrinciple:
     principle: str
@@ -81,6 +90,7 @@ class LegalPrinciple:
     jurisdiction: str
     confidence: float
     legal_area: str
+
 @dataclass
 class PrecedentAnalysis:
     binding_precedents: List[CaseCitation]
@@ -88,6 +98,7 @@ class PrecedentAnalysis:
     conflicting_precedents: List[CaseCitation]
     trend_analysis: str
     jurisdiction_hierarchy: Dict[str, List[CaseCitation]]
+
 # --- Enhanced Pydantic Models ---
 class LegalQuery(BaseModel):
     question: str
@@ -97,6 +108,13 @@ class LegalQuery(BaseModel):
     jurisdiction: Optional[str] = "federal"  # "federal", "state", "specific_state"
     case_types: Optional[List[str]] = None  # Filter by case types
     time_period: Optional[str] = "all"  # "recent", "historical", "specific_years", "all"
+
+# --- New Pydantic Model for /ask endpoint ---
+class AskQuery(BaseModel):
+    question: str
+    session_id: Optional[str] = None
+# --- End of new model ---
+
 class LegalAnalysisResponse(BaseModel):
     response: Optional[str] = None
     error: Optional[str] = None
@@ -112,12 +130,14 @@ class LegalAnalysisResponse(BaseModel):
     jurisdiction_analysis: Optional[Dict] = None
     case_law_trends: Optional[str] = None
     recommended_cases: Optional[List[Dict]] = None
+
 # --- Case Law Analysis Engine ---
 class CaseLawAnalyzer:
     def __init__(self):
         self.case_patterns = self._compile_case_patterns()
         self.citation_patterns = self._compile_citation_patterns()
         self.legal_concepts = self._load_legal_concepts()
+
     def _compile_case_patterns(self) -> Dict[str, re.Pattern]:
         """Compile regex patterns for case identification"""
         return {
@@ -128,6 +148,7 @@ class CaseLawAnalyzer:
             'legal_holding': re.compile(r'(held|holding|ruled|decided|found|concluded)\s+that', re.IGNORECASE),
             'legal_reasoning': re.compile(r'(because|since|therefore|thus|consequently|as a result)', re.IGNORECASE)
         }
+
     def _compile_citation_patterns(self) -> Dict[str, re.Pattern]:
         """Compile patterns for legal citation formats"""
         return {
@@ -138,6 +159,7 @@ class CaseLawAnalyzer:
             'westlaw': re.compile(r'(\d{4})\s+WL\s+(\d+)'),
             'lexis': re.compile(r'(\d{4})\s+[A-Z]+\s+LEXIS\s+(\d+)')
         }
+
     def _load_legal_concepts(self) -> Dict[str, List[str]]:
         """Load legal concepts and their related terms"""
         return {
@@ -162,6 +184,7 @@ class CaseLawAnalyzer:
                 'intentional torts', 'defamation', 'privacy', 'product liability'
             ]
         }
+
     def extract_case_citations(self, text: str) -> List[CaseCitation]:
         """Extract and parse case citations from text"""
         citations = []
@@ -193,6 +216,7 @@ class CaseLawAnalyzer:
                 relevance_score=0.8  # Will be updated based on context
             ))
         return citations
+
     def _determine_case_type(self, text: str, case_name: str) -> CaseType:
         """Determine case type based on context and content"""
         text_lower = text.lower()
@@ -210,6 +234,7 @@ class CaseLawAnalyzer:
         if any(indicator in text_lower for indicator in civil_indicators):
             return CaseType.CIVIL
         return CaseType.CIVIL  # Default
+
     def analyze_precedents(self, cases: List[CaseCitation], query_context: str) -> PrecedentAnalysis:
         """Analyze precedential value of cases"""
         binding_precedents = []
@@ -245,6 +270,7 @@ class CaseLawAnalyzer:
             trend_analysis=trend_analysis,
             jurisdiction_hierarchy=jurisdiction_hierarchy
         )
+
     def _analyze_case_trends(self, cases: List[CaseCitation]) -> str:
         """Analyze trends in case law over time"""
         if not cases:
@@ -264,6 +290,7 @@ class CaseLawAnalyzer:
         else:
             trend_analysis += "Consistent judicial attention across time periods."
         return trend_analysis
+
     def extract_legal_principles(self, text: str, cases: List[CaseCitation]) -> List[LegalPrinciple]:
         """Extract legal principles from text and associated cases"""
         principles = []
@@ -288,6 +315,7 @@ class CaseLawAnalyzer:
                 legal_area=legal_area
             ))
         return principles
+
     def _categorize_legal_area(self, text: str) -> str:
         """Categorize text into legal area based on keywords"""
         text_lower = text.lower()
@@ -295,6 +323,7 @@ class CaseLawAnalyzer:
             if any(keyword in text_lower for keyword in keywords):
                 return area.replace('_', ' ').title()
         return "General Law"
+
 # --- Enhanced Retrieval with Case Law Focus ---
 def legal_enhanced_retrieval(db, query_text: str, conversation_history_context: str, 
                            analysis_type: str = "comprehensive", jurisdiction: str = "federal",
@@ -344,6 +373,7 @@ def legal_enhanced_retrieval(db, query_text: str, conversation_history_context: 
     except Exception as e:
         logger.error(f"[LEGAL_RETRIEVAL] Search failed: {e}")
         return [], {"error": str(e)}
+
 def expand_legal_query_advanced(query: str, analysis_type: str, case_types: List[str] = None) -> str:
     """Advanced legal query expansion"""
     # Base legal expansions
@@ -387,6 +417,7 @@ def expand_legal_query_advanced(query: str, analysis_type: str, case_types: List
     if expanded_terms:
         return f"{query} {' '.join(set(expanded_terms))}"
     return query
+
 def generate_case_law_queries(query: str) -> List[str]:
     """Generate case law specific queries"""
     case_queries = []
@@ -399,6 +430,7 @@ def generate_case_law_queries(query: str) -> List[str]:
     for jurisdiction in jurisdictions:
         case_queries.append(f"{query} {jurisdiction}")
     return case_queries[:5]  # Limit to avoid too many queries
+
 def extract_legal_principle_queries(query: str) -> List[str]:
     """Extract queries focused on legal principles"""
     principle_queries = []
@@ -411,6 +443,7 @@ def extract_legal_principle_queries(query: str) -> List[str]:
     principle_queries.append(f"legal doctrine {query}")
     principle_queries.append(f"legal standard {query}")
     return principle_queries
+
 def prioritize_case_law_documents(results_with_scores: List[Tuple]) -> List[Tuple]:
     """Prioritize documents that appear to contain case law"""
     case_law_indicators = [
@@ -430,6 +463,7 @@ def prioritize_case_law_documents(results_with_scores: List[Tuple]) -> List[Tupl
             regular_results.append((doc, score))
     # Combine prioritized first, then regular
     return prioritized_results + regular_results
+
 # --- Enhanced Legal Prompt Templates ---
 def get_legal_analysis_prompt_template(analysis_type: str) -> str:
     """Get specialized prompt template for legal analysis"""
@@ -519,6 +553,7 @@ RESPONSE FORMAT:
 6. **Supporting Citations**: [document_name.pdf] for all sources
 Provide comprehensive analysis while staying strictly within the provided context.
 RESPONSE:"""
+
 # --- Enhanced Legal Processing Function ---
 def process_legal_query_enhanced(question: str, session_id: str, response_style: str = "balanced",
                                analysis_type: str = "comprehensive", jurisdiction: str = "federal",
@@ -685,6 +720,7 @@ def process_legal_query_enhanced(question: str, session_id: str, response_style:
             confidence_score=0.0,
             expand_available=False
         )
+
 def create_enhanced_legal_context(results: List, search_result: Dict, questions: List[str]) -> Tuple[str, List[Dict]]:
     """Create enhanced legal context with case law prioritization"""
     if not results:
@@ -722,6 +758,7 @@ def create_enhanced_legal_context(results: List, search_result: Dict, questions:
         })
     context_text = "\n---LEGAL DOCUMENT SEPARATOR---\n".join(context_parts)
     return context_text, source_info
+
 def enhance_legal_content(content: str) -> str:
     """Enhance legal content by highlighting key legal elements"""
     # Highlight case names
@@ -734,6 +771,7 @@ def enhance_legal_content(content: str) -> str:
     content = re.sub(r'(\d+)\s+([A-Z][a-zA-Z\.]*)\s+(\d+)\s*\((\d{4})\)', 
                     r'**CITATION:** \1 \2 \3 (\4)', content)
     return content
+
 def identify_legal_document_type(content: str) -> str:
     """Identify the type of legal document based on content"""
     content_lower = content.lower()
@@ -747,6 +785,7 @@ def identify_legal_document_type(content: str) -> str:
         return "constitutional"
     else:
         return "general_legal"
+
 def create_legal_analysis_context(context_text: str, case_citations: List[CaseCitation], 
                                 legal_principles: List[LegalPrinciple], 
                                 precedent_analysis: PrecedentAnalysis) -> str:
@@ -771,6 +810,7 @@ def create_legal_analysis_context(context_text: str, case_citations: List[CaseCi
             enhanced_context += f"- {precedent.case_name} ({precedent.court})\n"
         enhanced_context += "\n"
     return enhanced_context
+
 def calculate_legal_confidence_score(results: List, search_result: Dict, response_length: int,
                                    case_citations: List[CaseCitation], 
                                    legal_principles: List[LegalPrinciple]) -> float:
@@ -801,6 +841,7 @@ def calculate_legal_confidence_score(results: List, search_result: Dict, respons
         diversity_factor * 0.15
     )
     return min(1.0, max(0.0, confidence))
+
 def format_legal_response(content: str, sources: List[Dict], style: str, 
                          case_citations: List[CaseCitation], 
                          legal_principles: List[LegalPrinciple]) -> Tuple[str, bool]:
@@ -817,6 +858,7 @@ def format_legal_response(content: str, sources: List[Dict], style: str,
         # Provide structured legal response
         balanced_response = create_balanced_legal_response(content, case_citations, legal_principles)
         return balanced_response, True
+
 def create_concise_legal_response(content: str, case_citations: List[CaseCitation], 
                                 legal_principles: List[LegalPrinciple]) -> str:
     """Create concise legal response highlighting key elements"""
@@ -828,6 +870,7 @@ def create_concise_legal_response(content: str, case_citations: List[CaseCitatio
 💡 *Need comprehensive analysis? Ask for detailed legal research.*
 🔍 *Want specific precedent analysis? Request precedent breakdown.*"""
     return concise
+
 def create_balanced_legal_response(content: str, case_citations: List[CaseCitation], 
                                  legal_principles: List[LegalPrinciple]) -> str:
     """Create balanced legal response with clear structure"""
@@ -841,6 +884,7 @@ def create_balanced_legal_response(content: str, case_citations: List[CaseCitati
     else:
         balanced = content
     return balanced
+
 def create_detailed_legal_response(content: str, case_citations: List[CaseCitation], 
                                  legal_principles: List[LegalPrinciple]) -> str:
     """Return comprehensive legal analysis"""
@@ -850,6 +894,7 @@ def create_detailed_legal_response(content: str, case_citations: List[CaseCitati
 - Legal Principles Identified: {len(legal_principles)}
 - Precedential Authority Assessed: {len([c for c in case_citations if c.jurisdiction_level in [JurisdictionLevel.SUPREME_COURT, JurisdictionLevel.APPELLATE]])} binding sources"""
     return detailed
+
 def extract_key_legal_points(content: str) -> List[str]:
     """Extract key legal points from content"""
     sentences = content.split('.')
@@ -861,6 +906,7 @@ def extract_key_legal_points(content: str) -> List[str]:
             if len(clean_sentence) > 20 and len(clean_sentence) < 200:
                 key_points.append(clean_sentence)
     return key_points[:10]  # Limit to top 10
+
 def generate_recommended_cases(case_citations: List[CaseCitation], 
                              legal_principles: List[LegalPrinciple], 
                              query: str) -> List[Dict]:
@@ -892,6 +938,7 @@ def generate_recommended_cases(case_citations: List[CaseCitation],
                 "reason": "Analyze doctrinal evolution over time"
             })
     return recommended
+
 def analyze_jurisdiction_distribution(case_citations: List[CaseCitation]) -> Dict[str, int]:
     """Analyze distribution of cases across jurisdictions"""
     distribution = {}
@@ -899,6 +946,7 @@ def analyze_jurisdiction_distribution(case_citations: List[CaseCitation]) -> Dic
         level = case.jurisdiction_level.value
         distribution[level] = distribution.get(level, 0) + 1
     return distribution
+
 def calculate_binding_authority_strength(precedent_analysis: PrecedentAnalysis) -> float:
     """Calculate the strength of binding authority"""
     if not precedent_analysis.binding_precedents:
@@ -917,6 +965,7 @@ def calculate_binding_authority_strength(precedent_analysis: PrecedentAnalysis) 
     )
     supreme_court_bonus = min(0.3, supreme_court_cases * 0.1)
     return min(1.0, binding_ratio + supreme_court_bonus)
+
 # --- Updated API Endpoint ---
 @app.post("/legal-analysis", response_model=LegalAnalysisResponse)
 async def legal_analysis_endpoint(query: LegalQuery):
@@ -957,10 +1006,6 @@ async def legal_analysis_endpoint(query: LegalQuery):
     return response
 
 # --- New /ask endpoint that delegates to /legal-analysis ---
-class AskQuery(BaseModel):
-    question: str
-    session_id: Optional[str] = None
-
 @app.post("/ask", response_model=LegalAnalysisResponse)
 async def ask_endpoint(query: AskQuery):
     """
@@ -978,7 +1023,9 @@ async def ask_endpoint(query: AskQuery):
     )
     
     # Reuse the existing legal analysis endpoint logic
+    # We need to await the existing endpoint function
     return await legal_analysis_endpoint(legal_query)
+# --- End of new endpoint ---
 
 # [Include all utility functions from previous versions...]
 # Additional utility functions needed
@@ -991,20 +1038,34 @@ def cleanup_expired_conversations():
     ]
     for session_id in expired_sessions:
         del conversations[session_id]
+
+# --- Updated load_database function ---
 def load_database():
-    """Load the Chroma database"""
+    """Load the Chroma database using the updated API"""
     try:
+        # Use the new chromadb.PersistentClient
+        # Make sure CHROMA_PATH is defined earlier in your file (e.g., CHROMA_PATH = "chroma")
+        client = chromadb.PersistentClient(path=CHROMA_PATH)
+        
+        # Initialize the embedding function
         embedding_function = HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2")
+        
+        # Get or create the collection. Make sure the name matches your existing collection.
+        collection_name = "legal_documents" 
+        
+        # Create the LangChain Chroma wrapper using the persistent client
         db = Chroma(
-            collection_name="legal_documents",
+            collection_name=collection_name,
             embedding_function=embedding_function,
-            persist_directory=CHROMA_PATH,
-            client_settings=CHROMA_CLIENT_SETTINGS
+            client=client # Pass the client instead of persist_directory and settings
+            # persist_directory and client_settings are removed
         )
         return db
     except Exception as e:
         logger.error(f"Failed to load database: {e}")
         raise
+# --- End of updated function ---
+
 def get_conversation_context(session_id: str, max_messages: int = 10) -> str:
     """Get conversation context for legal consultations"""
     if session_id not in conversations:
@@ -1016,6 +1077,7 @@ def get_conversation_context(session_id: str, max_messages: int = 10) -> str:
         content = msg['content'][:600] + "..." if len(msg['content']) > 600 else msg['content']
         context_parts.append(f"{role}: {content}")
     return "\n".join(context_parts) if context_parts else ""
+
 def add_to_conversation(session_id: str, role: str, content: str, sources: Optional[List] = None):
     """Add message to legal consultation history"""
     if session_id not in conversations:
@@ -1034,6 +1096,7 @@ def add_to_conversation(session_id: str, role: str, content: str, sources: Optio
     conversations[session_id]['last_accessed'] = datetime.utcnow()
     if len(conversations[session_id]['messages']) > 50:  # Keep more history for legal consultations
         conversations[session_id]['messages'] = conversations[session_id]['messages'][-50:]
+
 def parse_multiple_questions(query_text: str) -> List[str]:
     """Parse multiple legal questions from input"""
     questions = []
@@ -1050,6 +1113,7 @@ def parse_multiple_questions(query_text: str) -> List[str]:
             final_question += '?'
         questions = [final_question]
     return questions
+
 def remove_duplicate_documents(results_with_scores: List[Tuple]) -> List[Tuple]:
     """Remove duplicate documents based on content similarity"""
     if not results_with_scores:
@@ -1062,6 +1126,7 @@ def remove_duplicate_documents(results_with_scores: List[Tuple]) -> List[Tuple]:
             seen_content.add(content_hash)
             unique_results.append((doc, score))
     return sorted(unique_results, key=lambda x: x[1], reverse=True)
+
 def call_openrouter_api(prompt: str, api_key: str, api_base: str = "https://openrouter.ai/api/v1") -> str:
     """Call OpenRouter API with legal analysis optimizations"""
     headers = {
@@ -1098,6 +1163,7 @@ def call_openrouter_api(prompt: str, api_key: str, api_base: str = "https://open
             logger.error(f"Error with model {model}: {e}")
             continue
     return "I apologize, but I'm experiencing technical difficulties with the legal analysis system. Please try again."
+
 # Additional endpoints for legal-specific functionality
 @app.get("/legal-health")
 def legal_health_check():
@@ -1116,6 +1182,7 @@ def legal_health_check():
         "supported_jurisdictions": ["federal", "state", "specific_state"],
         "active_legal_consultations": len(conversations)
     }
+
 @app.get("/case-citations/{session_id}")
 def get_case_citations(session_id: str):
     """Get extracted case citations from a legal consultation"""
@@ -1123,6 +1190,7 @@ def get_case_citations(session_id: str):
         raise HTTPException(status_code=404, detail="Legal consultation not found")
     # This would be enhanced to return actual extracted citations
     return {"message": "Case citation extraction endpoint - implementation depends on stored analysis results"}
+
 if __name__ == "__main__":
     import uvicorn
     port = int(os.environ.get("PORT", 8000))
