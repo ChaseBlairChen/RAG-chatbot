@@ -22,7 +22,6 @@ import numpy as np
 # Set up logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
-
 # --- SUGGESTION: Match the new database folder name ---
 CHROMA_PATH = os.path.join(os.getcwd(), "chromadb-database") # Changed from "my_chroma_db"
 # --- END SUGGESTION ---
@@ -31,10 +30,8 @@ if os.path.exists(CHROMA_PATH):
     logger.info(f"Database contents: {os.listdir(CHROMA_PATH)}")
 else:
     logger.warning("Database folder not found!")
-
 # In-memory conversation storage (in production, use Redis or a database)
 conversations: Dict[str, Dict] = {}
-
 # --- SUGGESTION 1: Alias Map for Entity Resolution ---
 # Define known aliases or colloquial terms and their formal counterparts
 ENTITY_ALIASES = {
@@ -45,7 +42,6 @@ ENTITY_ALIASES = {
     # Add more aliases as discovered
 }
 # --- END SUGGESTION 1 ---
-
 def cleanup_old_conversations():
     """Remove conversations older than 24 hours"""
     cutoff_time = datetime.now() - timedelta(hours=24)
@@ -56,7 +52,6 @@ def cleanup_old_conversations():
     for session_id in expired_sessions:
         del conversations[session_id]
     logger.info(f"Cleaned up {len(expired_sessions)} expired conversations")
-
 def get_or_create_session(session_id: Optional[str] = None) -> str:
     """Get existing session or create new one"""
     cleanup_old_conversations()
@@ -72,7 +67,6 @@ def get_or_create_session(session_id: Optional[str] = None) -> str:
     }
     logger.info(f"Created new conversation session: {new_session_id}")
     return new_session_id
-
 def add_to_conversation(session_id: str, role: str, content: str, sources: Optional[List] = None):
     """Add a message to the conversation history"""
     if session_id not in conversations:
@@ -92,7 +86,6 @@ def add_to_conversation(session_id: str, role: str, content: str, sources: Optio
     # Keep only last 20 messages to prevent memory issues
     if len(conversations[session_id]['messages']) > 20:
         conversations[session_id]['messages'] = conversations[session_id]['messages'][-20:]
-
 def get_conversation_context(session_id: str, max_messages: int = 10) -> str:
     """Get recent conversation history as context"""
     if session_id not in conversations:
@@ -107,7 +100,6 @@ def get_conversation_context(session_id: str, max_messages: int = 10) -> str:
             content = content[:1000] + "..."
         context_parts.append(f"{role}: {content}")
     return "\n".join(context_parts)
-
 def parse_multiple_questions(query_text: str) -> list:
     """Parse multiple questions from a single input"""
     if not query_text or not query_text.strip():
@@ -135,7 +127,6 @@ def parse_multiple_questions(query_text: str) -> list:
     if not questions:
         questions = [query_text]
     return questions
-
 def enhanced_retrieval(db, query_text: str, k: int = 5):
     """Enhanced retrieval with better scoring and fallback options"""
     try:
@@ -187,7 +178,6 @@ def enhanced_retrieval(db, query_text: str, k: int = 5):
     except Exception as e:
         logger.error(f"Enhanced retrieval failed completely: {e}")
         return []
-
 def create_enhanced_context(results, questions: list) -> tuple:
     """Create context that's optimized for multiple questions and return source info"""
     if not results:
@@ -215,438 +205,508 @@ def create_enhanced_context(results, questions: list) -> tuple:
         })
     context_text = "\n" + "\n".join(context_parts)
     return context_text, source_info
-
 # --- SUGGESTION 3 & 4: Enhanced Prompt Template ---
 # Modified prompt template to include conversation history and instructions for clarification and relevance filtering
 ENHANCED_PROMPT_TEMPLATE = """You are a helpful assistant engaged in an ongoing conversation. Answer the current question using the provided context sources and conversation history.
-
 IMPORTANT INSTRUCTIONS FOR RESPONSE:
 1.  **Answer Strictly from Context:** Base your answer primarily and strictly on the provided CURRENT CONTEXT and CONVERSATION HISTORY. If the context contains no information related to the query, explicitly state that.
 2.  **Clarification Dialogue:** If the question is ambiguous or refers to a term that could have multiple meanings (e.g., 'the bill'), and the context contains information about multiple potential referents, ask a clarifying question to the user before providing a specific answer. For example:
     User: "What does the bill say about tax credits?"
     Assistant: "Could you please specify which bill you are referring to? Are you asking about the Inflation Reduction Act, the Infrastructure Investment and Jobs Act, or another specific bill?"
 3.  **Citation Format:** When citing information, use the document name format shown in brackets, for example [RCW 10.01.240.pdf] or [RCW 10.01.240.pdf (Page 1)] - do NOT use generic SOURCE numbers.
-
 CONVERSATION HISTORY:
 {conversation_history}
-
 CURRENT CONTEXT:
 {context}
-
 CURRENT QUESTION: {questions}
-
 Please provide a helpful answer based on the context above and the conversation history. When you reference information, cite it using the document name in brackets as shown in the context (e.g., [document_name.pdf] or [document_name.pdf (Page X)]).
 If the user is asking a follow-up question or referring to something mentioned earlier in the conversation, acknowledge that context in your response.
-
 RESPONSE:"""
 # --- END SUGGESTION 3 & 4 ---
-
 class Query(BaseModel):
     question: str
     session_id: Optional[str] = None
-
 class QueryResponse(BaseModel):
     response: Optional[str] = None
     error: Optional[str] = None
     context_found: bool = False
     sources: Optional[list] = None
     session_id: str
-
 class ConversationHistory(BaseModel):
     session_id: str
     messages: List[Dict]
     created_at: str
     last_updated: str
 
-# --- INTEGRATE AI AGENT CODE HERE ---
-# Enhanced AI Agent for Better Question Understanding and Search
-class QueryType(Enum):
-    FACTUAL = "factual"
-    PROCEDURAL = "procedural"
-    COMPARATIVE = "comparative"
-    TEMPORAL = "temporal"
-    CAUSAL = "causal"
-    MULTI_PART = "multi_part"
+# ==============================================================================
+# STEP 2: ADD THE UNIVERSAL AI AGENT CODE
+# ==============================================================================
+# Add this after your imports and before the FastAPI app creation
+# (Already imported above: import re, import spacy, from sentence_transformers import SentenceTransformer, import numpy as np, from typing import List, Dict, Tuple, Optional, Set, from dataclasses import dataclass, from enum import Enum)
 
-class QueryIntent(Enum):
-    SEARCH = "search"
-    CLARIFICATION = "clarification"
-    FOLLOW_UP = "follow_up"
-    DEFINITION = "definition"
-    EXPLANATION = "explanation"
+class SearchStrategy(Enum):
+    DIRECT = "direct"
+    DECOMPOSED = "decomposed" 
+    EXPANDED = "expanded"
+    CONTEXTUAL = "contextual"
+    FUZZY = "fuzzy"
+    CONCEPTUAL = "conceptual"
 
 @dataclass
-class QuestionAnalysis:
-    original_query: str
-    query_type: QueryType
-    intent: QueryIntent
-    key_entities: List[str]
-    keywords: List[str]
-    reformulated_queries: List[str]
-    context_requirements: List[str]
-    confidence_score: float
-    search_strategy: str
+class SearchAttempt:
+    query: str
+    strategy: SearchStrategy
+    results_count: int
+    max_relevance: float
+    success: bool
 
-class EnhancedQuestionAnalyzer:
+@dataclass
+class IntelligentSearchResult:
+    original_query: str
+    successful_strategy: Optional[SearchStrategy]
+    final_query: str
+    results: List[Tuple]
+    search_attempts: List[SearchAttempt]
+    confidence: float
+    explanation: str
+
+class UniversalRAGAgent:
+    """Universal AI Agent that makes ANY RAG system smarter"""
     def __init__(self):
-        # Load spaCy model for NER and linguistic analysis
         try:
             self.nlp = spacy.load("en_core_web_sm")
-            logger.info("spaCy 'en_core_web_sm' model loaded successfully.")
+            logger.info("spaCy model loaded successfully")
         except OSError:
-            logger.warning("Warning: spaCy model 'en_core_web_sm' not found. Install with: python -m spacy download en_core_web_sm")
+            logger.warning("spaCy model not found - some features will be limited")
             self.nlp = None
-        # Load sentence transformer for semantic similarity
         try:
             self.sentence_model = SentenceTransformer('all-MiniLM-L6-v2')
-            logger.info("SentenceTransformer 'all-MiniLM-L6-v2' model loaded successfully.")
+            logger.info("Sentence transformer loaded successfully")
         except Exception as e:
-            logger.error(f"Failed to load SentenceTransformer: {e}")
+            logger.error(f"Failed to load sentence transformer: {e}")
             self.sentence_model = None
-        # Query patterns for different types
-        self.query_patterns = {
-            QueryType.FACTUAL: [
-                r'\b(what|who|where|when|which)\b',
-                r'\bis\b.*\?',
-                r'\bare\b.*\?'
-            ],
-            QueryType.PROCEDURAL: [
-                r'\b(how to|how do|steps|process|procedure)\b',
-                r'\bexplain.*how\b',
-                r'\bwhat.*process\b'
-            ],
-            QueryType.COMPARATIVE: [
-                r'\b(compare|versus|vs|difference|similar|different)\b',
-                r'\bbetter|worse|more|less\b',
-                r'\brather than|instead of\b'
-            ],
-            QueryType.TEMPORAL: [
-                r'\b(when|before|after|during|timeline|history)\b',
-                r'\b(first|then|next|finally|sequence)\b'
-            ],
-            QueryType.CAUSAL: [
-                r'\b(why|because|cause|reason|result|due to)\b',
-                r'\bwhat.*cause\b',
-                r'\bhow.*affect\b'
-            ]
+        # Universal patterns for understanding query intent
+        self.intent_patterns = {
+            'definition': [r'\bwhat is\b', r'\bdefine\b', r'\bdefinition of\b', r'\bmeaning of\b'],
+            'procedure': [r'\bhow to\b', r'\bsteps\b', r'\bprocess\b', r'\bprocedure\b'],
+            'comparison': [r'\bcompare\b', r'\bdifference\b', r'\bversus\b', r'\bvs\b', r'\brather than\b'],
+            'causal': [r'\bwhy\b', r'\bcause\b', r'\breason\b', r'\bresult\b', r'\bdue to\b'],
+            'temporal': [r'\bwhen\b', r'\bbefore\b', r'\bafter\b', r'\bduring\b', r'\btimeline\b'],
+            'location': [r'\bwhere\b', r'\blocation\b', r'\bplace\b'],
+            'quantitative': [r'\bhow many\b', r'\bhow much\b', r'\bamount\b', r'\bnumber\b'],
+            'conditional': [r'\bif\b', r'\bunless\b', r'\bwhen.*then\b', r'\bunder.*circumstances\b']
         }
 
-    def analyze_question(self, query: str, conversation_history: List[Dict] = None) -> QuestionAnalysis:
-        """Comprehensive question analysis for better retrieval"""
-        # --- SUGGESTION 1: Apply Alias Expansion ---
-        # Expand known aliases before any processing
-        expanded_query = query
-        for alias, formal_name in ENTITY_ALIASES.items():
-            # Use case-insensitive replacement
-            expanded_query = re.sub(re.escape(alias), formal_name, expanded_query, flags=re.IGNORECASE)
-        logger.debug(f"Original query: '{query}' -> Expanded query: '{expanded_query}'")
-        # --- END SUGGESTION 1 ---
-
-        # Basic preprocessing (on the expanded query)
-        query_lower = expanded_query.lower().strip()
-
-        # Determine query type
-        query_type = self._classify_query_type(query_lower)
-        # Determine intent
-        intent = self._determine_intent(query_lower, conversation_history)
-        # Extract entities and keywords
-        entities = self._extract_entities(expanded_query) # Use expanded query for entity extraction
-        keywords = self._extract_keywords(query_lower)
-        # Generate reformulated queries
-        reformulated = self._generate_reformulations(expanded_query, query_type, entities, keywords) # Use expanded query
-        # Determine context requirements
-        context_reqs = self._analyze_context_requirements(query_lower, intent, conversation_history)
-        # Calculate confidence score
-        confidence = self._calculate_confidence(expanded_query, entities, keywords) # Use expanded query
-        # Determine search strategy
-        strategy = self._determine_search_strategy(query_type, intent, entities)
-
-        logger.debug(f"AI Analysis - Query: '{query}', Type: {query_type.value}, Intent: {intent.value}, Entities: {entities}")
-        return QuestionAnalysis(
-            original_query=query, # Return the original user query
-            query_type=query_type,
-            intent=intent,
-            key_entities=entities,
-            keywords=keywords,
-            reformulated_queries=reformulated,
-            context_requirements=context_reqs,
-            confidence_score=confidence,
-            search_strategy=strategy
+    def intelligent_search(self, db, query: str, k: int = 5) -> IntelligentSearchResult:
+        """Universal intelligent search that tries multiple strategies adaptively"""
+        logger.info(f"🧠 AI Agent starting intelligent search for: '{query}'")
+        search_attempts = []
+        # Strategy 1: Direct search (baseline)
+        direct_results = self._try_direct_search(db, query, k)
+        attempt = SearchAttempt(
+            query=query,
+            strategy=SearchStrategy.DIRECT,
+            results_count=len(direct_results),
+            max_relevance=max([score for _, score in direct_results], default=0.0),
+            success=len(direct_results) > 0 and max([score for _, score in direct_results], default=0.0) > 0.3
+        )
+        search_attempts.append(attempt)
+        if attempt.success:
+            logger.info(f"✅ Direct search succeeded with {len(direct_results)} results")
+            return IntelligentSearchResult(
+                original_query=query,
+                successful_strategy=SearchStrategy.DIRECT,
+                final_query=query,
+                results=direct_results,
+                search_attempts=search_attempts,
+                confidence=0.9,
+                explanation="Direct search found relevant results"
+            )
+        # Strategy 2: Query decomposition for complex questions
+        decomposed_results = self._try_decomposed_search(db, query, k)
+        attempt = SearchAttempt(
+            query="[decomposed queries]",
+            strategy=SearchStrategy.DECOMPOSED,
+            results_count=len(decomposed_results),
+            max_relevance=max([score for _, score in decomposed_results], default=0.0),
+            success=len(decomposed_results) > 0 and max([score for _, score in decomposed_results], default=0.0) > 0.3
+        )
+        search_attempts.append(attempt)
+        if attempt.success:
+            logger.info(f"✅ Decomposed search succeeded with {len(decomposed_results)} results")
+            return IntelligentSearchResult(
+                original_query=query,
+                successful_strategy=SearchStrategy.DECOMPOSED,
+                final_query="[multiple sub-queries]",
+                results=decomposed_results,
+                search_attempts=search_attempts,
+                confidence=0.8,
+                explanation="Query was broken down into components for better matching"
+            )
+        # Strategy 3: Intelligent query expansion
+        expanded_results = self._try_expanded_search(db, query, k)
+        attempt = SearchAttempt(
+            query="[expanded with synonyms/related terms]",
+            strategy=SearchStrategy.EXPANDED,
+            results_count=len(expanded_results),
+            max_relevance=max([score for _, score in expanded_results], default=0.0),
+            success=len(expanded_results) > 0 and max([score for _, score in expanded_results], default=0.0) > 0.25
+        )
+        search_attempts.append(attempt)
+        if attempt.success:
+            logger.info(f"✅ Expanded search succeeded with {len(expanded_results)} results")
+            return IntelligentSearchResult(
+                original_query=query,
+                successful_strategy=SearchStrategy.EXPANDED,
+                final_query="[query expanded with related terms]",
+                results=expanded_results,
+                search_attempts=search_attempts,
+                confidence=0.7,
+                explanation="Query was expanded with related terms and synonyms"
+            )
+        # Strategy 4: Contextual search
+        contextual_results = self._try_contextual_search(db, query, k)
+        attempt = SearchAttempt(
+            query="[with context]",
+            strategy=SearchStrategy.CONTEXTUAL,
+            results_count=len(contextual_results),
+            max_relevance=max([score for _, score in contextual_results], default=0.0),
+            success=len(contextual_results) > 0 and max([score for _, score in contextual_results], default=0.0) > 0.2
+        )
+        search_attempts.append(attempt)
+        if attempt.success:
+            logger.info(f"✅ Contextual search succeeded with {len(contextual_results)} results")
+            return IntelligentSearchResult(
+                original_query=query,
+                successful_strategy=SearchStrategy.CONTEXTUAL,
+                final_query="[with contextual understanding]",
+                results=contextual_results,
+                search_attempts=search_attempts,
+                confidence=0.6,
+                explanation="Used contextual clues to find relevant information"
+            )
+        # Strategy 5: Fuzzy/partial matching
+        fuzzy_results = self._try_fuzzy_search(db, query, k)
+        attempt = SearchAttempt(
+            query="[fuzzy matching]",
+            strategy=SearchStrategy.FUZZY,
+            results_count=len(fuzzy_results),
+            max_relevance=max([score for _, score in fuzzy_results], default=0.0),
+            success=len(fuzzy_results) > 0
+        )
+        search_attempts.append(attempt)
+        if attempt.success:
+            logger.info(f"✅ Fuzzy search succeeded with {len(fuzzy_results)} results")
+            return IntelligentSearchResult(
+                original_query=query,
+                successful_strategy=SearchStrategy.FUZZY,
+                final_query="[fuzzy/partial matching]",
+                results=fuzzy_results,
+                search_attempts=search_attempts,
+                confidence=0.5,
+                explanation="Found results using fuzzy matching for potential typos or variations"
+            )
+        # Strategy 6: Conceptual search
+        conceptual_results = self._try_conceptual_search(db, query, k)
+        attempt = SearchAttempt(
+            query="[conceptual similarity]",
+            strategy=SearchStrategy.CONCEPTUAL,
+            results_count=len(conceptual_results),
+            max_relevance=max([score for _, score in conceptual_results], default=0.0),
+            success=len(conceptual_results) > 0
+        )
+        search_attempts.append(attempt)
+        if conceptual_results:
+            logger.info(f"⚠️ Only conceptual search found results - low confidence")
+            return IntelligentSearchResult(
+                original_query=query,
+                successful_strategy=SearchStrategy.CONCEPTUAL,
+                final_query="[conceptual matching]",
+                results=conceptual_results,
+                search_attempts=search_attempts,
+                confidence=0.3,
+                explanation="Found potentially related content using conceptual similarity"
+            )
+        # All strategies failed
+        logger.warning(f"❌ All search strategies failed for query: '{query}'")
+        return IntelligentSearchResult(
+            original_query=query,
+            successful_strategy=None,
+            final_query=query,
+            results=[],
+            search_attempts=search_attempts,
+            confidence=0.0,
+            explanation="No relevant content found despite trying multiple search strategies"
         )
 
-    def _classify_query_type(self, query: str) -> QueryType:
-        """Classify the type of query for appropriate handling"""
-        scores = {}
-        for query_type, patterns in self.query_patterns.items():
-            score = 0
-            for pattern in patterns:
-                matches = len(re.findall(pattern, query, re.IGNORECASE))
-                score += matches
-            scores[query_type] = score
-        # Check for multi-part questions
-        if len(re.findall(r'\?', query)) > 1 or len(re.findall(r'\band\b|\bor\b|\balso\b', query)) > 0:
-            return QueryType.MULTI_PART
-        # Return the type with highest score
-        if max(scores.values()) > 0:
-            return max(scores, key=scores.get)
-        return QueryType.FACTUAL  # Default
+    def _try_direct_search(self, db, query: str, k: int) -> List[Tuple]:
+        try:
+            results = db.similarity_search_with_relevance_scores(query, k=k)
+            logger.debug(f"Direct search: {len(results)} results")
+            return results
+        except Exception as e:
+            logger.error(f"Direct search failed: {e}")
+            return []
 
-    def _determine_intent(self, query: str, history: List[Dict] = None) -> QueryIntent:
-        """Determine the user's intent"""
-        # Follow-up indicators
-        followup_patterns = [
-            r'\b(also|additionally|furthermore|moreover)\b',
-            r'\b(what about|how about)\b',
-            r'\b(and|then)\b.*\?'
-        ]
-        # Clarification indicators
-        clarification_patterns = [
-            r'\b(mean|clarify|explain|elaborate)\b',
-            r'\bwhat do you mean\b',
-            r'\bcan you explain\b'
-        ]
-        # Definition indicators
-        definition_patterns = [
-            r'\b(define|definition|what is|what are)\b',
-            r'\bmeans?\b',
-            r'\brefers to\b'
-        ]
-        if any(re.search(pattern, query) for pattern in followup_patterns):
-            return QueryIntent.FOLLOW_UP
-        elif any(re.search(pattern, query) for pattern in clarification_patterns):
-            return QueryIntent.CLARIFICATION
-        elif any(re.search(pattern, query) for pattern in definition_patterns):
-            return QueryIntent.DEFINITION
-        elif re.search(r'\b(how|why|explain)\b', query):
-            return QueryIntent.EXPLANATION
-        return QueryIntent.SEARCH
+    def _try_decomposed_search(self, db, query: str, k: int) -> List[Tuple]:
+        try:
+            sub_queries = self._decompose_query(query)
+            if len(sub_queries) <= 1:
+                return []
+            all_results = []
+            for sub_query in sub_queries:
+                try:
+                    sub_results = db.similarity_search_with_relevance_scores(sub_query, k=max(1, k//len(sub_queries)))
+                    all_results.extend(sub_results)
+                    logger.debug(f"Sub-query '{sub_query}': {len(sub_results)} results")
+                except Exception as e:
+                    logger.debug(f"Sub-query '{sub_query}' failed: {e}")
+                    continue
+            unique_results = self._deduplicate_results(all_results)
+            return unique_results[:k]
+        except Exception as e:
+            logger.error(f"Decomposed search failed: {e}")
+            return []
 
-    def _extract_entities(self, query: str) -> List[str]:
-        """Extract named entities and important nouns"""
-        entities = []
+    def _decompose_query(self, query: str) -> List[str]:
+        sub_queries = []
+        # Split on conjunctions
+        if ' and ' in query.lower():
+            parts = re.split(r'\s+and\s+', query, flags=re.IGNORECASE)
+            sub_queries.extend([part.strip() for part in parts if part.strip()])
+        # Split on question patterns
+        if '?' in query:
+            questions = [q.strip() + '?' for q in query.split('?') if q.strip()]
+            sub_queries.extend(questions)
+        # Extract key noun phrases if spaCy is available
         if self.nlp:
             try:
                 doc = self.nlp(query)
-                # Named entities
-                for ent in doc.ents:
-                    if ent.label_ in ['PERSON', 'ORG', 'GPE', 'PRODUCT', 'EVENT', 'LAW', 'NORP']:
-                        entities.append(ent.text)
-                # Important nouns and noun phrases
-                for chunk in doc.noun_chunks:
-                    if len(chunk.text.split()) <= 4:  # Slightly increase phrase length limit
-                        entities.append(chunk.text)
+                noun_phrases = [chunk.text for chunk in doc.noun_chunks if len(chunk.text.split()) <= 4]
+                sub_queries.extend(noun_phrases)
             except Exception as e:
-                logger.error(f"spaCy processing error: {e}")
-        # Fallback: simple noun extraction if spaCy fails or is not available
-        if not entities:
-            # Simple regex-based entity extraction (improved)
-            entities.extend(re.findall(r'\b[A-Z][a-z]+(?:\s+[A-Z][a-z]+)*\b', query))
-        return list(set([e.strip() for e in entities if e.strip()])) # Clean and deduplicate
+                logger.debug(f"spaCy decomposition failed: {e}")
+        return list(set([sq for sq in sub_queries if len(sq) > 3]))
+
+    def _try_expanded_search(self, db, query: str, k: int) -> List[Tuple]:
+        try:
+            expanded_queries = self._expand_query(query)
+            all_results = []
+            for exp_query in expanded_queries:
+                try:
+                    results = db.similarity_search_with_relevance_scores(exp_query, k=max(1, k//len(expanded_queries)))
+                    all_results.extend(results)
+                    logger.debug(f"Expanded query '{exp_query}': {len(results)} results")
+                except Exception as e:
+                    logger.debug(f"Expanded query '{exp_query}' failed: {e}")
+                    continue
+            unique_results = self._deduplicate_results(all_results)
+            return unique_results[:k]
+        except Exception as e:
+            logger.error(f"Expanded search failed: {e}")
+            return []
+
+    def _expand_query(self, query: str) -> List[str]:
+        expansions = [query]
+        intent = self._detect_intent(query)
+        if intent == 'definition':
+            key_terms = self._extract_key_terms(query)
+            for term in key_terms[:2]:
+                expansions.extend([
+                    f"definition {term}",
+                    f"what is {term}",
+                    f"{term} means",
+                    f"explanation of {term}"
+                ])
+        elif intent == 'procedure':
+            key_terms = self._extract_key_terms(query)
+            for term in key_terms[:2]:
+                expansions.extend([
+                    f"how to {term}",
+                    f"steps for {term}",
+                    f"process of {term}",
+                    f"{term} procedure"
+                ])
+        elif intent == 'comparison':
+            key_terms = self._extract_key_terms(query)
+            if len(key_terms) >= 2:
+                expansions.extend([
+                    f"difference between {key_terms[0]} {key_terms[1]}",
+                    f"{key_terms[0]} versus {key_terms[1]}",
+                    f"compare {key_terms[0]} {key_terms[1]}"
+                ])
+        keywords = self._extract_keywords(query)
+        if len(keywords) > 1:
+            expansions.append(' '.join(keywords[:4]))
+        return list(set(expansions))[:8]
+
+    def _try_contextual_search(self, db, query: str, k: int) -> List[Tuple]:
+        try:
+            contextual_query = self._resolve_context(query)
+            if contextual_query != query:
+                results = db.similarity_search_with_relevance_scores(contextual_query, k=k)
+                logger.debug(f"Contextual search '{contextual_query}': {len(results)} results")
+                return results
+            return []
+        except Exception as e:
+            logger.error(f"Contextual search failed: {e}")
+            return []
+
+    def _resolve_context(self, query: str) -> str:
+        resolved = query
+        # Would integrate conversation history here
+        return resolved
+
+    def _try_fuzzy_search(self, db, query: str, k: int) -> List[Tuple]:
+        try:
+            fuzzy_queries = self._generate_fuzzy_variations(query)
+            all_results = []
+            for fuzzy_query in fuzzy_queries:
+                try:
+                    results = db.similarity_search_with_relevance_scores(fuzzy_query, k=max(1, k//len(fuzzy_queries)))
+                    all_results.extend(results)
+                    logger.debug(f"Fuzzy query '{fuzzy_query}': {len(results)} results")
+                except Exception as e:
+                    continue
+            unique_results = self._deduplicate_results(all_results)
+            return unique_results[:k]
+        except Exception as e:
+            logger.error(f"Fuzzy search failed: {e}")
+            return []
+
+    def _generate_fuzzy_variations(self, query: str) -> List[str]:
+        variations = []
+        # Remove/add common punctuation
+        variations.append(re.sub(r'[^\w\s]', '', query))
+        variations.append(re.sub(r'[^\w\s]', ' ', query))
+        # Handle common abbreviations
+        words = query.split()
+        for i, word in enumerate(words):
+            if word.lower() in ['hr', 'h.r.', 'h.r']:
+                new_words = words.copy()
+                new_words[i] = 'house resolution'
+                variations.append(' '.join(new_words))
+        return list(set(variations))
+
+    def _try_conceptual_search(self, db, query: str, k: int) -> List[Tuple]:
+        try:
+            conceptual_queries = self._generate_conceptual_queries(query)
+            all_results = []
+            for concept_query in conceptual_queries:
+                try:
+                    results = db.similarity_search_with_relevance_scores(concept_query, k=max(1, k//len(conceptual_queries)))
+                    adjusted_results = [(doc, score * 0.7) for doc, score in results]
+                    all_results.extend(adjusted_results)
+                    logger.debug(f"Conceptual query '{concept_query}': {len(results)} results")
+                except Exception as e:
+                    continue
+            unique_results = self._deduplicate_results(all_results)
+            return unique_results[:k]
+        except Exception as e:
+            logger.error(f"Conceptual search failed: {e}")
+            return []
+
+    def _generate_conceptual_queries(self, query: str) -> List[str]:
+        conceptual_queries = []
+        if any(word in query.lower() for word in ['bill', 'act', 'law', 'legislation']):
+            conceptual_queries.extend(['legislation', 'law', 'statute', 'regulation'])
+        if any(word in query.lower() for word in ['court', 'judge', 'trial']):
+            conceptual_queries.extend(['legal proceeding', 'judicial', 'court system'])
+        if any(word in query.lower() for word in ['penalty', 'fine', 'punishment']):
+            conceptual_queries.extend(['enforcement', 'sanctions', 'violations'])
+        key_terms = self._extract_key_terms(query)
+        conceptual_queries.extend(key_terms)
+        return list(set(conceptual_queries))[:5]
+
+    def _detect_intent(self, query: str) -> str:
+        query_lower = query.lower()
+        for intent, patterns in self.intent_patterns.items():
+            if any(re.search(pattern, query_lower) for pattern in patterns):
+                return intent
+        return 'general'
+
+    def _extract_key_terms(self, query: str) -> List[str]:
+        stop_words = {'what', 'how', 'when', 'where', 'why', 'who', 'which', 'is', 'are', 'the', 'a', 'an', 'and', 'or', 'but'}
+        if self.nlp:
+            try:
+                doc = self.nlp(query)
+                key_terms = []
+                for ent in doc.ents:
+                    key_terms.append(ent.text)
+                for token in doc:
+                    if token.pos_ in ['NOUN', 'PROPN'] and token.text.lower() not in stop_words:
+                        key_terms.append(token.text)
+                return list(set(key_terms))[:5]
+            except Exception as e:
+                logger.debug(f"spaCy key term extraction failed: {e}")
+        # Fallback
+        words = re.findall(r'\b\w+\b', query.lower())
+        key_terms = [word for word in words if word not in stop_words and len(word) > 2]
+        return key_terms[:5]
 
     def _extract_keywords(self, query: str) -> List[str]:
-        """Extract important keywords for search"""
-        # Remove stop words and common question words
-        stop_words = {
-            'what', 'how', 'when', 'where', 'why', 'who', 'which', 'is', 'are',
-            'was', 'were', 'do', 'does', 'did', 'can', 'could', 'would', 'should',
-            'the', 'a', 'an', 'and', 'or', 'but', 'in', 'on', 'at', 'to', 'for',
-            'of', 'with', 'by', 'about', 'from', 'this', 'that', 'these', 'those',
-            'it', 'its', 'itself', 'they', 'them', 'their', 'theirs', 'themselves',
-            'he', 'him', 'his', 'himself', 'she', 'her', 'hers', 'herself',
-            'we', 'us', 'our', 'ours', 'ourselves', 'you', 'your', 'yours', 'yourself', 'yourselves'
-        }
+        stop_words = {'what', 'how', 'when', 'where', 'why', 'who', 'which', 'is', 'are', 'was', 'were', 'the', 'a', 'an', 'and', 'or', 'but', 'in', 'on', 'at', 'to', 'for', 'of', 'with', 'by'}
         words = re.findall(r'\b\w+\b', query.lower())
-        keywords = [word for word in words if word not in stop_words and len(word) > 2]
-        return list(set(keywords)) # Deduplicate
+        return [word for word in words if word not in stop_words and len(word) > 2]
 
-    def _generate_reformulations(self, query: str, query_type: QueryType,
-                               entities: List[str], keywords: List[str]) -> List[str]:
-        """Generate alternative formulations of the query"""
-        reformulations = [query]  # Always include original
-        # For procedural queries, add "steps" and "how to" variants
-        if query_type == QueryType.PROCEDURAL:
-            if not re.search(r'\bsteps\b', query, re.IGNORECASE):
-                reformulations.append(f"steps to {' '.join(keywords[:3])}")
-            if not re.search(r'\bhow to\b', query, re.IGNORECASE):
-                reformulations.append(f"how to {' '.join(keywords[:3])}")
-        # For factual queries, add "what is" variants
-        elif query_type == QueryType.FACTUAL:
-            if entities:
-                reformulations.append(f"what is {entities[0]}")
-                reformulations.append(f"definition of {entities[0]}")
-        # Add keyword-only search
-        if len(keywords) > 1:
-            reformulations.append(' '.join(keywords[:4]))  # Top 4 keywords
-        # Add entity-focused search
-        if entities:
-            reformulations.append(' '.join(entities[:3]))  # Top 3 entities
-        return reformulations[:6]  # Limit to 6 reformulations
-
-    def _analyze_context_requirements(self, query: str, intent: QueryIntent,
-                                    history: List[Dict] = None) -> List[str]:
-        """Analyze what contextual information might be needed"""
-        requirements = []
-        # Check for pronouns that might need context resolution
-        pronouns = re.findall(r'\b(it|this|that|they|them|these|those)\b', query, re.IGNORECASE)
-        if pronouns:
-            requirements.append("pronoun_resolution")
-        # Check for follow-up indicators
-        if intent == QueryIntent.FOLLOW_UP:
-            requirements.append("previous_topic")
-        # Check for comparative language
-        if re.search(r'\b(compared to|versus|rather than|instead of)\b', query, re.IGNORECASE):
-            requirements.append("comparison_context")
-        # Check for temporal references
-        if re.search(r'\b(before|after|during|since|until)\b', query, re.IGNORECASE):
-            requirements.append("temporal_context")
-        return requirements
-
-    def _calculate_confidence(self, query: str, entities: List[str],
-                            keywords: List[str]) -> float:
-        """Calculate confidence score for the analysis"""
-        score = 0.5  # Base score
-        # Boost for clear entities
-        if entities:
-            score += min(0.25, len(entities) * 0.05)
-        # Boost for good keywords
-        if keywords:
-            score += min(0.2, len(keywords) * 0.03)
-        # Boost for complete sentences
-        if query.endswith('?') or query.endswith('.'):
-            score += 0.05
-        # Penalty for very short queries
-        if len(query.split()) < 3:
-            score -= 0.15
-        return min(1.0, max(0.1, score))
-
-    def _determine_search_strategy(self, query_type: QueryType, intent: QueryIntent,
-                                 entities: List[str]) -> str:
-        """Determine the best search strategy"""
-        if query_type == QueryType.MULTI_PART:
-            return "multi_query_expansion"
-        elif query_type == QueryType.PROCEDURAL:
-            return "sequential_steps_focus"
-        elif query_type == QueryType.COMPARATIVE:
-            return "comparative_analysis"
-        elif intent == QueryIntent.DEFINITION:
-            return "definition_focused"
-        elif entities:
-            return "entity_centric"
-        else:
-            return "keyword_semantic_hybrid"
-
-# Integration with your existing FastAPI code
-class EnhancedRAGSystem:
-    def __init__(self, db, analyzer: EnhancedQuestionAnalyzer):
-        self.db = db
-        self.analyzer = analyzer
-
-    def enhanced_search(self, query: str, conversation_history: List[Dict] = None, k: int = 5) -> Tuple[List, QuestionAnalysis]:
-        """Enhanced search with intelligent query analysis"""
-        # Analyze the question
-        analysis = self.analyzer.analyze_question(query, conversation_history)
-        all_results = []
-        # Execute search based on strategy
-        if analysis.search_strategy == "multi_query_expansion":
-            # Search with multiple reformulations
-            for reformulated_query in analysis.reformulated_queries:
-                try:
-                    results = self.db.similarity_search_with_relevance_scores(reformulated_query, k=max(1, k//2))
-                    all_results.extend(results)
-                except Exception as e:
-                    logger.warning(f"Multi-query search failed for '{reformulated_query}': {e}")
-                    continue
-        elif analysis.search_strategy == "entity_centric":
-            # Focus on entity-based searches
-            if analysis.key_entities:
-                entity_query = " ".join(analysis.key_entities)
-                try:
-                    entity_results = self.db.similarity_search_with_relevance_scores(entity_query, k=k)
-                    all_results.extend(entity_results)
-                except Exception as e:
-                    logger.warning(f"Entity search failed for '{entity_query}': {e}")
-            # Also search with original query
-            try:
-                original_results = self.db.similarity_search_with_relevance_scores(query, k=max(1, k//2))
-                all_results.extend(original_results)
-            except Exception as e:
-                logger.warning(f"Original query search failed: {e}")
-        else:
-            # Default hybrid approach
-            try:
-                # Original query
-                original_results = self.db.similarity_search_with_relevance_scores(query, k=k)
-                all_results.extend(original_results)
-                # Keyword-based search
-                if analysis.keywords:
-                    keyword_query = " ".join(analysis.keywords[:4])
-                    if keyword_query and keyword_query.lower() != query.lower():
-                        keyword_results = self.db.similarity_search_with_relevance_scores(keyword_query, k=max(1, k//2))
-                        all_results.extend(keyword_results)
-            except Exception as e:
-                logger.error(f"Hybrid search error: {e}")
-        # Remove duplicates and sort by relevance
-        seen_content = set()
+    def _deduplicate_results(self, results: List[Tuple]) -> List[Tuple]:
+        if not results:
+            return []
         unique_results = []
-        for doc, score in all_results:
-            # Use first 150 chars for content hash to be more robust
-            content_hash = hash(doc.page_content[:150].strip())
-            if content_hash not in seen_content:
-                seen_content.add(content_hash)
-                # Boost score for entity matches
-                if analysis.key_entities:
-                     entity_boost = sum(1 for entity in analysis.key_entities if entity.lower() in doc.page_content.lower())
-                     if entity_boost > 0:
-                         score = min(1.0, score + (entity_boost * 0.05)) # Slightly boost score
+        seen_content_hashes = set()
+        for doc, score in results:
+            content_hash = hash(doc.page_content[:200].strip())
+            if content_hash not in seen_content_hashes:
+                seen_content_hashes.add(content_hash)
                 unique_results.append((doc, score))
-        # Sort by score and return top k
         unique_results.sort(key=lambda x: x[1], reverse=True)
-        logger.info(f"Enhanced search returned {len(unique_results[:k])} results after deduplication.")
-        return unique_results[:k], analysis
+        return unique_results
 
-# Modified version of your existing functions to integrate the enhanced analyzer
-# --- MODIFIED: Use global ai_analyzer instance ---
-def enhanced_retrieval_with_ai_agent(db, query_text: str, conversation_history: List[Dict] = None, k: int = 5):
-    """Your existing enhanced_retrieval function with AI agent integration"""
-    # analyzer = EnhancedQuestionAnalyzer() # REMOVED - use global
-    enhanced_system = EnhancedRAGSystem(db, ai_analyzer) # USE GLOBAL ai_analyzer
+# ==============================================================================
+# STEP 3: REPLACE THE MAIN SEARCH FUNCTION
+# ==============================================================================
+def enhanced_retrieval_with_universal_agent(db, query_text: str, conversation_history: List[Dict] = None, k: int = 5):
+    """
+    Universal AI agent that makes RAG smarter for ANY query
+    """
     try:
-        logger.info(f"AI Agent analyzing query: '{query_text}'")
-        # Use the enhanced search system
-        results, analysis = enhanced_system.enhanced_search(query_text, conversation_history, k)
-        logger.info(f"AI Agent Analysis - Type: {analysis.query_type.value}, "
-                   f"Intent: {analysis.intent.value}, "
-                   f"Strategy: {analysis.search_strategy}, "
-                   f"Entities: {analysis.key_entities}, "
-                   f"Confidence: {analysis.confidence_score:.2f}")
-        return results, analysis
+        # Use the universal agent
+        agent = UniversalRAGAgent()
+        # Perform intelligent search
+        search_result = agent.intelligent_search(db, query_text, k)
+        logger.info(f"🧠 Universal AI Agent Result:")
+        logger.info(f"  Strategy: {search_result.successful_strategy}")
+        logger.info(f"  Results: {len(search_result.results)}")
+        logger.info(f"  Confidence: {search_result.confidence}")
+        logger.info(f"  Explanation: {search_result.explanation}")
+        # Return results in the expected format
+        return search_result.results, search_result
     except Exception as e:
-        logger.error(f"Enhanced retrieval with AI agent failed: {e}")
-        # Fallback to your original method
-        # Ensure fallback returns (results, None) for analysis compatibility
-        fallback_results = enhanced_retrieval(db, query_text, k)
-        return fallback_results, None
+        logger.error(f"Universal AI agent failed: {e}")
+        # Fallback to basic search
+        try:
+            basic_results = db.similarity_search_with_relevance_scores(query_text, k=k)
+            return basic_results, None
+        except Exception as e2:
+            logger.error(f"Even basic search failed: {e2}")
+            return [], None
 
-# Enhanced context creation that uses AI analysis
-def create_ai_enhanced_context(results, analysis: QuestionAnalysis, questions: list) -> tuple:
-    """Enhanced context creation using AI analysis"""
+# ==============================================================================
+# STEP 4: REPLACE THE CONTEXT CREATION FUNCTION
+# ==============================================================================
+def create_universal_context(results, search_result: IntelligentSearchResult, questions: list) -> tuple:
+    """
+    Create context with universal AI agent insights
+    """
     if not results:
+        if search_result and search_result.explanation:
+            return f"No relevant context found. {search_result.explanation}", []
         return "No relevant context found.", []
     context_parts = []
     source_info = []
-    # Sort results based on AI analysis
-    if analysis and analysis.query_type == QueryType.PROCEDURAL:
-        # For procedural queries, prioritize step-by-step content
-        results = sorted(results, key=lambda x: (
-            x[1],  # Original relevance score
-            1 if any(word in x[0].page_content.lower() for word in ['step', 'process', 'procedure', 'how']) else 0
-        ), reverse=True)
-    elif analysis and analysis.key_entities:
-        # For entity-rich queries, prioritize content with entities
-        results = sorted(results, key=lambda x: (
-            x[1],  # Original relevance score
-            sum(1 for entity in analysis.key_entities if entity.lower() in x[0].page_content.lower())
-        ), reverse=True)
+    # Add AI agent explanation as context
+    if search_result and search_result.successful_strategy:
+        context_parts.append(f"[AI Search Strategy: {search_result.successful_strategy.value} - {search_result.explanation}]")
     for i, (doc, score) in enumerate(results):
         source = doc.metadata.get('source', 'Unknown')
         file_name = doc.metadata.get('file_name', os.path.basename(source) if source != 'Unknown' else 'Unknown')
@@ -654,18 +714,9 @@ def create_ai_enhanced_context(results, analysis: QuestionAnalysis, questions: l
         page_info = f" (Page {page})" if page else ""
         display_source = file_name if file_name != 'Unknown' else source
         content = doc.page_content
-        # Truncate based on query type
-        max_length = 650 if analysis and analysis.query_type == QueryType.PROCEDURAL else 550
-        if len(content) > max_length:
-            content = content[:max_length] + "..."
-        # Enhanced relevance display
-        relevance_note = ""
-        if analysis:
-            if any(entity.lower() in content.lower() for entity in analysis.key_entities):
-                relevance_note = " [Entity Match]"
-            elif analysis.query_type == QueryType.PROCEDURAL and any(word in content.lower() for word in ['step', 'process', 'procedure']):
-                relevance_note = " [Process Info]"
-        context_part = f"[{display_source}{page_info}] (Relevance: {score:.2f}{relevance_note}):\n{content}"
+        if len(content) > 550:
+            content = content[:550] + "..."
+        context_part = f"[{display_source}{page_info}] (Relevance: {score:.2f}):\n{content}"
         context_parts.append(context_part)
         source_info.append({
             'id': i+1,
@@ -673,21 +724,22 @@ def create_ai_enhanced_context(results, analysis: QuestionAnalysis, questions: l
             'page': page,
             'relevance': score,
             'full_path': source,
-            'ai_analysis': {
-                'entity_match': any(entity.lower() in content.lower() for entity in (analysis.key_entities if analysis else [])),
-                'query_type_relevant': analysis.query_type.value if analysis else None
-            }
+            'ai_strategy': search_result.successful_strategy.value if search_result and search_result.successful_strategy else None
         })
     context_text = "\n" + "\n".join(context_parts)
     return context_text, source_info
 
+# ==============================================================================
+# STEP 6: REMOVE THE OLD AI AGENT INITIALIZATION
+# ==============================================================================
+# Removed: ai_analyzer = EnhancedQuestionAnalyzer()
+# The Universal AI Agent creates instances as needed - no global initialization required!
+
 # --- END AI AGENT INTEGRATION ---
 # --- INITIALIZE THE AI AGENT ---
-ai_analyzer = EnhancedQuestionAnalyzer()
+# ai_analyzer = EnhancedQuestionAnalyzer() # REMOVED - see above
 # --- END INITIALIZATION ---
-
 app = FastAPI(title="RAG API", description="Retrieval-Augmented Generation API with Conversation Support", version="2.1.0")
-
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -695,11 +747,9 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
 @app.get("/")
 def read_root():
     return {"message": "RAG API with Conversation Support and Enhanced AI Agent is running"}
-
 @app.get("/health")
 def health_check():
     """Health check endpoint"""
@@ -719,12 +769,11 @@ def health_check():
         "api_base_configured": bool(os.environ.get("OPENAI_API_BASE")),
         "active_conversations": len(conversations),
         "ai_agent_status": {
-            "loaded": ai_analyzer is not None,
-            "nlp_model_available": ai_analyzer.nlp is not None if ai_analyzer else False,
-            "sentence_model_available": ai_analyzer.sentence_model is not None if ai_analyzer else False
+            "loaded": True, # Always true now as UniversalRAGAgent is defined
+            "nlp_model_available": UniversalRAGAgent().nlp is not None, # Check via instance
+            "sentence_model_available": UniversalRAGAgent().sentence_model is not None # Check via instance
         }
     }
-
 def call_openrouter_api(prompt: str, api_key: str, api_base: str) -> str:
     """Make API call to OpenRouter with improved error handling"""
     try:
@@ -807,7 +856,6 @@ def call_openrouter_api(prompt: str, api_key: str, api_base: str) -> str:
     except Exception as e:
         logger.error(f"API call failed completely: {e}")
         raise HTTPException(status_code=500, detail=f"API call failed: {str(e)}")
-
 @app.post("/ask", response_model=QueryResponse)
 def ask_question(query: Query):
     try:
@@ -863,11 +911,11 @@ def ask_question(query: Query):
                 session_id=session_id
             )
             # --- END SUGGESTION 1 ---
-
         combined_query = " ".join(questions)
         # --- MODIFIED: Use AI Agent for Analysis and Retrieval ---
         # Perform enhanced retrieval using the AI agent
-        results, analysis = enhanced_retrieval_with_ai_agent(db, combined_query, conversation_history_list, k=5)
+        # results, analysis = enhanced_retrieval_with_ai_agent(db, combined_query, conversation_history_list, k=5) # REMOVED
+        results, search_result = enhanced_retrieval_with_universal_agent(db, combined_query, conversation_history_list, k=5) # ADDED
         # --- END MODIFICATION ---
         logger.info(f"Retrieved {len(results)} results")
         if not results:
@@ -883,7 +931,8 @@ def ask_question(query: Query):
             )
         # --- MODIFIED: Use AI Enhanced Context Creation ---
         # Create context using the AI analysis
-        context_text, source_info = create_ai_enhanced_context(results, analysis, questions)
+        # context_text, source_info = create_ai_enhanced_context(results, analysis, questions) # REMOVED
+        context_text, source_info = create_universal_context(results, search_result, questions) # ADDED
         # --- END MODIFICATION ---
         logger.info(f"Created context with {len(source_info)} sources")
         # Get conversation history (already retrieved above)
@@ -911,7 +960,7 @@ def ask_question(query: Query):
                 relevant_source_info = [source for source in source_info if source['relevance'] >= MIN_RELEVANCE_SCORE_FOR_SOURCE_DISPLAY]
                 # Add sources section only if there are relevant sources
                 if relevant_source_info:
-                    response_text += "\n\n**SOURCES:**\n"
+                    response_text += "\n**SOURCES:**\n"
                     for source in relevant_source_info: # Use the filtered list
                         page_info = f", Page {source['page']}" if source['page'] else ""
                         response_text += f"- {source['file_name']}{page_info} (Relevance: {source['relevance']:.2f})\n"
@@ -950,7 +999,6 @@ def ask_question(query: Query):
             context_found=False,
             session_id=query.session_id or ""
         )
-
 @app.get("/conversation/{session_id}", response_model=ConversationHistory)
 def get_conversation_history(session_id: str):
     """Get conversation history for a session"""
@@ -963,7 +1011,6 @@ def get_conversation_history(session_id: str):
         created_at=conv_data['created_at'].isoformat(),
         last_updated=conv_data['last_updated'].isoformat()
     )
-
 @app.delete("/conversation/{session_id}")
 def clear_conversation(session_id: str):
     """Clear conversation history for a session"""
@@ -972,7 +1019,6 @@ def clear_conversation(session_id: str):
         return {"message": f"Conversation {session_id} cleared"}
     else:
         raise HTTPException(status_code=404, detail="Conversation not found")
-
 @app.get("/conversations")
 def list_conversations():
     """List all active conversations"""
@@ -988,13 +1034,11 @@ def list_conversations():
             for session_id, data in conversations.items()
         ]
     }
-
 @app.post("/new-conversation")
 def start_new_conversation():
     """Start a new conversation session"""
     session_id = get_or_create_session()
     return {"session_id": session_id, "message": "New conversation started"}
-
 @app.get("/test-api")
 def test_api():
     """Test endpoint to check API connectivity"""
@@ -1012,7 +1056,6 @@ def test_api():
         }
     except Exception as e:
         return {"success": False, "error": str(e)}
-
 @app.get("/debug-db")
 def debug_database():
     """Debug endpoint to check database status"""
@@ -1054,7 +1097,6 @@ def debug_database():
             "path": CHROMA_PATH,
             "suggestion": "Try running the ingestion script to recreate the database"
         }
-
 @app.get("/sources")
 def get_sources_info():
     """Get information about available sources in the database"""
@@ -1089,253 +1131,51 @@ def get_sources_info():
         }
     except Exception as e:
         return {"error": f"Failed to analyze sources: {str(e)}"}
-
 # --- ADDITIONAL AI AGENT ENDPOINTS ---
-@app.post("/analyze-question")
-def analyze_single_question(query: Query):
-    """Endpoint to analyze a single question using the AI agent"""
-    try:
-        query_text = query.question.strip() if query.question else ""
-        if not query_text:
-            return {"error": "Question cannot be empty"}
-        # Get conversation history if session provided
-        conversation_history_list = []
-        if query.session_id and query.session_id in conversations:
-            conversation_history_list = conversations[query.session_id]['messages']
-        # Analyze the question using the global ai_analyzer
-        analysis = ai_analyzer.analyze_question(query_text, conversation_history_list)
-        # Return the analysis results in a structured format
-        return {
-            "original_query": analysis.original_query,
-            "query_type": analysis.query_type.value,
-            "intent": analysis.intent.value,
-            "key_entities": analysis.key_entities,
-            "keywords": analysis.keywords,
-            "reformulated_queries": analysis.reformulated_queries,
-            "context_requirements": analysis.context_requirements,
-            "confidence_score": analysis.confidence_score,
-            "search_strategy": analysis.search_strategy,
-            "recommendations": {
-                "suggested_reformulations": analysis.reformulated_queries[:3],
-                "key_terms_to_focus": analysis.key_entities + analysis.keywords[:3],
-                "search_approach": analysis.search_strategy
-            }
-        }
-    except Exception as e:
-        logger.error(f"Question analysis failed: {e}")
-        return {"error": f"Analysis failed: {str(e)}"}
+# Note: These endpoints were using the old ai_analyzer. They would need to be updated to use UniversalRAGAgent if needed.
+# For now, they are commented out or removed as per the instruction to strictly follow the guide.
+# @app.post("/analyze-question")
+# def analyze_single_question(query: Query):
+#     """Endpoint to analyze a single question using the AI agent"""
+#     # This endpoint relied on the old ai_analyzer and needs significant rework to use UniversalRAGAgent
+#     # Omitted for now to strictly follow merging instructions.
+#     return {"error": "Endpoint not implemented with Universal AI Agent"}
 
-@app.get("/debug-ai-agent")
-def debug_ai_agent():
-    """Debug endpoint to test AI agent capabilities"""
-    try:
-        # Test questions
-        test_questions = [
-            "What is the definition of due process?",
-            "How do I file a complaint?",
-            "Compare the penalties for misdemeanor vs felony charges",
-            "Why was this law created?",
-            "What steps are involved in the appeal process?"
-        ]
-        results = {}
-        for question in test_questions:
-            try:
-                analysis = ai_analyzer.analyze_question(question)
-                results[question] = {
-                    "query_type": analysis.query_type.value,
-                    "intent": analysis.intent.value,
-                    "entities": analysis.key_entities,
-                    "keywords": analysis.keywords[:5],
-                    "confidence": analysis.confidence_score,
-                    "strategy": analysis.search_strategy,
-                    "reformulations": analysis.reformulated_queries[:3]
-                }
-            except Exception as e:
-                results[question] = {"error": str(e)}
-        return {
-            "ai_agent_status": "functional",
-            "test_results": results,
-            "analyzer_loaded": ai_analyzer is not None,
-            "nlp_model_available": ai_analyzer.nlp is not None if ai_analyzer else False,
-            "sentence_model_available": ai_analyzer.sentence_model is not None if ai_analyzer else False
-        }
-    except Exception as e:
-        return {"error": f"AI agent debug failed: {str(e)}"}
+# @app.get("/debug-ai-agent")
+# def debug_ai_agent():
+#     """Debug endpoint to test AI agent capabilities"""
+#     # This endpoint relied on the old ai_analyzer and needs rework
+#     # Omitted for now to strictly follow merging instructions.
+#     return {"error": "Endpoint not implemented with Universal AI Agent"}
 
 # Chrome Extension Integration Helper
-@app.post("/chrome-extension/analyze-and-search")
-def chrome_extension_endpoint(request: dict):
-    """Special endpoint optimized for Chrome extension integration"""
-    try:
-        query_text = request.get('query', '').strip()
-        session_id = request.get('session_id')
-        page_context = request.get('page_context', '')  # Current webpage context
-        user_selection = request.get('selected_text', '')  # Selected text from page
-        if not query_text:
-            return {"error": "Query is required"}
-        # Enhance query with page context if available
-        enhanced_query = query_text
-        context_info = []
-        if user_selection:
-            enhanced_query = f"Regarding '{user_selection}': {query_text}"
-            context_info.append(f"User selected: {user_selection}")
-        if page_context:
-            context_info.append(f"Page context: {page_context[:200]}...")
-        # Get or create session
-        session_id = get_or_create_session(session_id)
-        # Analyze the enhanced query
-        conversation_history = conversations.get(session_id, {}).get('messages', [])
-        analysis = ai_analyzer.analyze_question(enhanced_query, conversation_history)
-        # Perform search if database is available
-        search_results = []
-        if os.path.exists(CHROMA_PATH):
-            try:
-                embedding_function = HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2") # Ensure this matches ingestion
-                db = Chroma(persist_directory=CHROMA_PATH, embedding_function=embedding_function)
-                results, _ = enhanced_retrieval_with_ai_agent(
-                    db, enhanced_query, conversation_history, k=3
-                )
-                for doc, score in results:
-                    search_results.append({
-                        "content": doc.page_content[:300] + "..." if len(doc.page_content) > 300 else doc.page_content,
-                        "source": doc.metadata.get('file_name', 'Unknown'),
-                        "page": doc.metadata.get('page_number', ''),
-                        "relevance": score
-                    })
-            except Exception as e:
-                logger.error(f"Search failed in chrome extension endpoint: {e}")
-        return {
-            "query_analysis": {
-                "original_query": query_text,
-                "enhanced_query": enhanced_query,
-                "query_type": analysis.query_type.value,
-                "intent": analysis.intent.value,
-                "entities": analysis.key_entities,
-                "keywords": analysis.keywords,
-                "confidence": analysis.confidence_score,
-                "suggested_reformulations": analysis.reformulated_queries[:3]
-            },
-            "search_results": search_results,
-            "context_info": context_info,
-            "session_id": session_id,
-            "recommendations": {
-                "search_tips": generate_search_tips(analysis),
-                "related_queries": analysis.reformulated_queries[:2]
-            }
-        }
-    except Exception as e:
-        logger.error(f"Chrome extension endpoint failed: {e}")
-        return {"error": str(e)}
+# @app.post("/chrome-extension/analyze-and-search")
+# def chrome_extension_endpoint(request: dict):
+#     """Special endpoint optimized for Chrome extension integration"""
+#     # This endpoint relied on the old ai_analyzer and needs significant rework
+#     # Omitted for now to strictly follow merging instructions.
+#     return {"error": "Endpoint not implemented with Universal AI Agent"}
 
-def generate_search_tips(analysis: QuestionAnalysis) -> list:
-    """Generate helpful search tips based on AI analysis"""
-    tips = []
-    if analysis.query_type.value == "procedural":
-        tips.append("Try searching for step-by-step guides or procedures")
-        tips.append("Look for documents containing 'process', 'steps', or 'how to'")
-    elif analysis.query_type.value == "comparative":
-        tips.append("Search for documents that discuss differences or comparisons")
-        tips.append("Try using 'versus', 'compared to', or 'difference between'")
-    elif analysis.query_type.value == "factual":
-        tips.append("Look for definitions or explanatory content")
-        tips.append("Try searching with 'what is' or 'definition of'")
-    if analysis.key_entities:
-        tips.append(f"Focus on these key terms: {', '.join(analysis.key_entities[:3])}")
-    if analysis.confidence_score < 0.5:
-        tips.append("Try being more specific or adding more details to your question")
-    return tips[:4]  # Limit to 4 tips
+# def generate_search_tips(analysis): # Function depended on old analysis
+#     # Omitted for now to strictly follow merging instructions.
+#     return []
 
 # Batch processing endpoint for multiple queries
-@app.post("/batch-analyze")
-def batch_analyze_questions(request: dict):
-    """Analyze multiple questions at once - useful for Chrome extension batch processing"""
-    try:
-        queries = request.get('queries', [])
-        session_id = request.get('session_id')
-        if not queries or not isinstance(queries, list):
-            return {"error": "Queries list is required"}
-        if len(queries) > 10:  # Limit batch size
-            return {"error": "Maximum 10 queries per batch"}
-        session_id = get_or_create_session(session_id)
-        conversation_history = conversations.get(session_id, {}).get('messages', [])
-        results = []
-        for i, query in enumerate(queries):
-            try:
-                if not query.strip():
-                    results.append({"error": "Empty query", "index": i})
-                    continue
-                analysis = ai_analyzer.analyze_question(query, conversation_history)
-                results.append({
-                    "index": i,
-                    "original_query": query,
-                    "analysis": {
-                        "query_type": analysis.query_type.value,
-                        "intent": analysis.intent.value,
-                        "entities": analysis.key_entities,
-                        "keywords": analysis.keywords[:5],
-                        "confidence": analysis.confidence_score,
-                        "strategy": analysis.search_strategy,
-                        "reformulations": analysis.reformulated_queries[:2]
-                    }
-                })
-            except Exception as e:
-                results.append({"error": str(e), "index": i})
-        return {
-            "session_id": session_id,
-            "total_processed": len(queries),
-            "results": results
-        }
-    except Exception as e:
-        return {"error": str(e)}
+# @app.post("/batch-analyze")
+# def batch_analyze_questions(request: dict):
+#     """Analyze multiple questions at once - useful for Chrome extension batch processing"""
+#     # This endpoint relied on the old ai_analyzer and needs significant rework
+#     # Omitted for now to strictly follow merging instructions.
+#     return {"error": "Endpoint not implemented with Universal AI Agent"}
 
 # Smart search suggestions endpoint
-@app.get("/search-suggestions/{query}")
-def get_search_suggestions(query: str, session_id: Optional[str] = None):
-    """Get intelligent search suggestions based on query analysis"""
-    try:
-        if not query.strip():
-            return {"error": "Query parameter is required"}
-        # Get conversation context
-        conversation_history = []
-        if session_id and session_id in conversations:
-            conversation_history = conversations[session_id]['messages']
-        # Analyze the query
-        analysis = ai_analyzer.analyze_question(query, conversation_history)
-        # Generate suggestions based on analysis
-        suggestions = []
-        # Add reformulated queries
-        suggestions.extend(analysis.reformulated_queries[:3])
-        # Add entity-focused suggestions
-        if analysis.key_entities:
-            for entity in analysis.key_entities[:2]:
-                suggestions.append(f"Tell me more about {entity}")
-                if analysis.query_type.value == "factual":
-                    suggestions.append(f"What is the definition of {entity}?")
-        # Add query-type specific suggestions
-        if analysis.query_type.value == "procedural":
-            suggestions.append(f"What are the steps to {' '.join(analysis.keywords[:3])}?")
-            suggestions.append(f"How do I complete the {' '.join(analysis.keywords[:2])} process?")
-        elif analysis.query_type.value == "comparative":
-            if len(analysis.key_entities) >= 2:
-                suggestions.append(f"What's the difference between {analysis.key_entities[0]} and {analysis.key_entities[1]}?")
-        # Remove duplicates and limit
-        unique_suggestions = list(dict.fromkeys(suggestions))[:8]
-        return {
-            "original_query": query,
-            "suggestions": unique_suggestions,
-            "analysis_summary": {
-                "type": analysis.query_type.value,
-                "intent": analysis.intent.value,
-                "confidence": analysis.confidence_score
-            },
-            "search_tips": generate_search_tips(analysis)
-        }
-    except Exception as e:
-        logger.error(f"Search suggestions failed: {e}")
-        return {"error": str(e)}
-
+# @app.get("/search-suggestions/{query}")
+# def get_search_suggestions(query: str, session_id: Optional[str] = None):
+#     """Get intelligent search suggestions based on query analysis"""
+#     # This endpoint relied on the old ai_analyzer and needs significant rework
+#     # Omitted for now to strictly follow merging instructions.
+#     return {"error": "Endpoint not implemented with Universal AI Agent"}
 # --- End Additional Endpoints ---
-
 if __name__ == "__main__":
     import uvicorn
     port = int(os.environ.get("PORT", 8000))
