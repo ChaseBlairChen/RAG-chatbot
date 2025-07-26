@@ -293,10 +293,10 @@ Please provide a helpful answer based on the context above and the conversation 
 RESPONSE:"""
 # --- End Prompt Template ---
 
-def call_openrouter_api(prompt: str, api_key: str, api_base: str = "deepseek/deepseek-r1-0528:free") -> str:
+def call_openrouter_api(prompt: str, api_key: str, api_base: str = "https://openrouter.ai/api/v1") -> str:
     """
     Call the OpenRouter API (or compatible service) with the given prompt.
-    Includes fallback logic for models.
+    Includes fallback logic for models and better error handling.
     """
     headers = {
         "Authorization": f"Bearer {api_key}",
@@ -307,6 +307,7 @@ def call_openrouter_api(prompt: str, api_key: str, api_base: str = "deepseek/dee
     
     # List of models to try in order
     models_to_try = [
+        "deepseek/deepseek-r1:free",
         "microsoft/phi-3-mini-128k-instruct:free",
         "meta-llama/llama-3.2-3b-instruct:free",
         "google/gemma-2-9b-it:free",
@@ -327,33 +328,92 @@ def call_openrouter_api(prompt: str, api_key: str, api_base: str = "deepseek/dee
                 "top_p": 0.9
             }
             logger.info(f"Attempting model {i+1}/{len(models_to_try)}: {model}")
+            
             response = requests.post(
                 f"{api_base}/chat/completions",
                 headers=headers,
                 json=payload,
-                timeout=60 # Add a reasonable timeout
+                timeout=60
             )
-            response.raise_for_status()
-            result = response.json()
-            response_text = result['choices'][0]['message']['content']
-            logger.info(f"Success with model {model}! Response length: {len(response_text)}")
-            return response_text.strip()
-        except requests.exceptions.RequestException as e:
-            logger.error(f"Request error for model {model}: {e}")
-            last_exception = e
-            if i == len(models_to_try) - 1: # If it's the last model, stop trying
-                 break
-            continue # Try the next model
+            
+            # Log response details for debugging
+            logger.info(f"Response status: {response.status_code}")
+            logger.info(f"Response headers: {dict(response.headers)}")
+            
+            # Check if response is empty
+            if not response.content:
+                logger.error(f"Empty response from {model}")
+                last_exception = Exception("Empty response from API")
+                continue
+                
+            # Log raw response content for debugging
+            response_text = response.content.decode('utf-8')
+            logger.info(f"Raw response content (first 200 chars): {response_text[:200]}")
+            
+            # Check HTTP status
+            if response.status_code != 200:
+                logger.error(f"HTTP {response.status_code} error from {model}: {response_text}")
+                last_exception = requests.exceptions.HTTPError(f"HTTP {response.status_code}: {response_text}")
+                continue
+            
+            # Try to parse JSON
+            try:
+                result = response.json()
+            except json.JSONDecodeError as json_err:
+                logger.error(f"JSON decode error from {model}: {json_err}")
+                logger.error(f"Response content: {response_text}")
+                last_exception = json_err
+                continue
+            
+            # Check if response has expected structure
+            if 'choices' not in result or not result['choices']:
+                logger.error(f"Invalid response structure from {model}: {result}")
+                last_exception = Exception(f"Invalid response structure: {result}")
+                continue
+                
+            if 'message' not in result['choices'][0] or 'content' not in result['choices'][0]['message']:
+                logger.error(f"Missing message content from {model}: {result}")
+                last_exception = Exception(f"Missing message content: {result}")
+                continue
+            
+            response_content = result['choices'][0]['message']['content']
+            if not response_content or not response_content.strip():
+                logger.error(f"Empty content from {model}")
+                last_exception = Exception("Empty content in response")
+                continue
+                
+            logger.info(f"Success with model {model}! Response length: {len(response_content)}")
+            return response_content.strip()
+            
+        except requests.exceptions.Timeout:
+            logger.error(f"Timeout error for model {model}")
+            last_exception = Exception("Request timeout")
+            continue
+        except requests.exceptions.ConnectionError as conn_err:
+            logger.error(f"Connection error for model {model}: {conn_err}")
+            last_exception = conn_err
+            continue
+        except requests.exceptions.RequestException as req_err:
+            logger.error(f"Request error for model {model}: {req_err}")
+            last_exception = req_err
+            continue
         except Exception as e:
             logger.error(f"Unexpected error for model {model}: {e}")
             last_exception = e
-            if i == len(models_to_try) - 1: # If it's the last model, stop trying
-                 break
-            continue # Try the next model
+            continue
 
     # If all models failed
-    logger.error(f"All models failed. Last error: {last_exception}")
-    raise HTTPException(status_code=500, detail=f"API request failed after trying all models: {str(last_exception)}")
+    error_msg = f"All models failed. Last error: {str(last_exception)}"
+    logger.error(error_msg)
+    
+    # Return a fallback response instead of raising an exception
+    fallback_response = (
+        "I apologize, but I'm currently experiencing technical difficulties with the AI service. "
+        "This could be due to API limitations, network issues, or temporary service unavailability. "
+        "Please try again in a few moments, or contact support if the issue persists."
+    )
+    
+    return fallback_response
 
 # --- End AI Agent and Retrieval Logic ---
 
@@ -422,7 +482,16 @@ def process_query(question: str, session_id: str) -> QueryResponse:
         api_base = os.environ.get("OPENAI_API_BASE", "https://openrouter.ai/api/v1")
         
         if not api_key:
-            raise HTTPException(status_code=500, detail="OPENAI_API_KEY environment variable not set.")
+            error_msg = "OPENAI_API_KEY environment variable not set."
+            logger.error(error_msg)
+            add_to_conversation(session_id, "assistant", f"Configuration Error: {error_msg}")
+            return QueryResponse(
+                response=None,
+                error=f"Configuration Error: {error_msg}",
+                context_found=True,
+                sources=source_info,
+                session_id=session_id
+            )
 
         response_text = call_openrouter_api(formatted_prompt, api_key, api_base)
         if not response_text:
@@ -456,22 +525,10 @@ def process_query(question: str, session_id: str) -> QueryResponse:
             session_id=session_id
         )
 
-    except HTTPException as he:
-        logger.error(f"API call failed: {he.detail}")
-        error_response = f"API Error: {he.detail}"
-        add_to_conversation(session_id, "assistant", error_response)
-        return QueryResponse(
-            response=None,
-            error=error_response,
-            context_found=False, # Assume no context found if API fails
-            sources=[],
-            session_id=session_id
-        )
     except Exception as e:
         logger.error(f"Failed to load database or process query: {e}", exc_info=True)
-        error_msg = f"Failed to process your request. Please try again later."
-        # Optionally add error to conversation history
-        # add_to_conversation(session_id, "assistant", error_msg)
+        error_msg = f"Failed to process your request: {str(e)}"
+        add_to_conversation(session_id, "assistant", error_msg)
         return QueryResponse(
             response=None,
             error=error_msg,
