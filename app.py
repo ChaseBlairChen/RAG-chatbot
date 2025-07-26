@@ -53,7 +53,7 @@ except Exception as e:
     logger.error(f"Failed to load Sentence Transformer model: {e}")
     sentence_model = None
 
-app = FastAPI(title="Improved Legal Assistant API", version="3.1.0")
+app = FastAPI(title="Enhanced Legal Assistant API", version="3.1.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -75,14 +75,20 @@ class QueryResponse(BaseModel):
     context_found: bool = False
     sources: Optional[list] = None
     session_id: str
-    confidence_score: float = 0.0  # NEW: Confidence in response accuracy
-    expand_available: bool = False  # NEW: Whether user can request more details
+    confidence_score: float = 0.0
+    expand_available: bool = False
 
 class ConversationHistory(BaseModel):
     session_id: str
     messages: List[Dict]
     created_at: str
     last_updated: str
+
+class DocumentTopics(BaseModel):
+    total_documents: int
+    sample_topics: List[str]
+    document_types: Dict[str, int]
+    coverage_areas: List[str]
 
 # --- IMPROVEMENT 1: Enhanced Retrieval System with Balanced Context Enforcement ---
 def enhanced_retrieval_v3(db, query_text: str, conversation_history_context: str, k: int = 12) -> Tuple[List, Any, bool]:
@@ -151,7 +157,10 @@ def expand_legal_query(query: str) -> str:
         "rights": "rights protections constitutional fundamental",
         "deferred prosecution": "deferred prosecution diversion program",
         "costs": "costs fees expenses reimbursement",
-        "indigent": "indigent poverty hardship financial"
+        "indigent": "indigent poverty hardship financial",
+        "firearm": "firearm gun weapon possession",
+        "domestic violence": "domestic violence protection order restraining",
+        "custody": "custody parenting plan child support"
     }
     
     expanded_terms = []
@@ -229,6 +238,10 @@ def contains_unsupported_claims(response: str, context: str) -> bool:
         " v. " in response and " v. " not in context,
         # Specific legal procedures not mentioned in context
         "pursuant to" in response and "pursuant to" not in context,
+        # Specific constitutional amendments not in context
+        "Amendment" in response and "Amendment" not in context,
+        # Federal regulations not in context
+        "Federal Register" in response and "Federal Register" not in context
     ]
     
     return any(hallucination_indicators)
@@ -254,7 +267,6 @@ def format_response_by_style(content: str, sources: List[Dict], style: str = "ba
 
 def create_concise_response(content: str, sources: List[Dict]) -> str:
     """Create a concise, bullet-point response"""
-    # This is a simplified version - in practice, you'd use NLP to extract key points
     lines = content.split('\n')
     key_points = []
     
@@ -271,7 +283,6 @@ def create_concise_response(content: str, sources: List[Dict]) -> str:
 
 def create_balanced_response(content: str, sources: List[Dict]) -> str:
     """Create a balanced response with clear sections"""
-    # Structure the response with clear sections
     if len(content) > 800:
         preview = content[:600] + "..."
         balanced = f"""{preview}
@@ -379,15 +390,30 @@ def process_query_with_strict_context(question: str, session_id: str, response_s
         # STRICT: If no relevant context found, return clear message
         if not has_relevant_context or not results:
             logger.warning("No sufficiently relevant documents found - refusing to generate response")
-            no_info_response = f"""I apologize, but I cannot find any relevant information in the available legal documents to answer your question about: "{question}"
+            
+            # Get available topics for helpful guidance
+            available_topics = get_database_topics()
+            
+            no_info_response = f"""**No Relevant Information Found**
 
-The documents in my database do not appear to contain information about this specific legal topic. To get accurate information about this topic, you may need to:
+I apologize, but I cannot find any relevant information in the available legal documents to answer your question about: "{question}"
 
-1. **Consult with a qualified attorney**
-2. **Check the relevant state/federal statutes directly**
-3. **Add documents covering this topic to the database**
+**Why this happened:**
+- The documents in my database do not contain information about this specific legal topic
+- Your question may require information from sources not included in the current database
+- The relevance threshold (0.4) was not met by any available documents
 
-**Available Document Topics**: Based on the documents I have access to, I can help with questions about legal costs, deferred prosecution, court procedures, and other topics covered in the ingested documents.
+**What you can do:**
+1. **Try rephrasing your question** with different keywords
+2. **Consult with a qualified attorney** for authoritative legal advice
+3. **Check relevant statutes directly** (state/federal)
+4. **Ask about topics I do have information on** (see below)
+
+**Available Document Topics:**
+{', '.join(available_topics['coverage_areas'][:10])}
+
+**Document Types in Database:**
+{', '.join([f"{k}: {v}" for k, v in available_topics['document_types'].items()])}
 
 *If you believe this topic should be covered by the available documents, try rephrasing your question with different keywords.*"""
             
@@ -545,6 +571,64 @@ def create_enhanced_context(results: List, search_result: Dict, questions: List[
     context_text = "\n\n---\n\n".join(context_parts)
     return context_text, source_info
 
+def get_database_topics() -> Dict:
+    """Get information about what topics are covered in the database"""
+    try:
+        db = load_database()
+        
+        # Sample a variety of documents to understand coverage
+        sample_results = db.similarity_search("law legal document", k=50)
+        
+        document_types = {}
+        sample_topics = []
+        coverage_areas = set()
+        
+        for doc in sample_results:
+            # Extract file type
+            source = doc.metadata.get('source', '')
+            if source:
+                ext = os.path.splitext(source)[1].lower()
+                document_types[ext] = document_types.get(ext, 0) + 1
+            
+            # Extract topics from content
+            content = doc.page_content.lower()
+            
+            # Common legal topic keywords
+            legal_topics = [
+                "criminal law", "civil law", "family law", "immigration", "asylum",
+                "contract", "tort", "property", "constitutional", "administrative",
+                "evidence", "procedure", "appeal", "court", "judge", "jury",
+                "sentence", "fine", "damages", "liability", "negligence",
+                "deferred prosecution", "costs", "indigent", "firearm", "domestic violence",
+                "custody", "child support", "divorce", "probate", "estate"
+            ]
+            
+            for topic in legal_topics:
+                if topic in content:
+                    coverage_areas.add(topic.title())
+            
+            # Sample content for topics
+            if len(sample_topics) < 10:
+                preview = doc.page_content[:100].strip()
+                if preview and preview not in sample_topics:
+                    sample_topics.append(preview)
+        
+        return {
+            "total_documents": len(sample_results),
+            "sample_topics": sample_topics,
+            "document_types": document_types,
+            "coverage_areas": sorted(list(coverage_areas))
+        }
+        
+    except Exception as e:
+        logger.error(f"Failed to get database topics: {e}")
+        return {
+            "total_documents": 0,
+            "sample_topics": [],
+            "document_types": {},
+            "coverage_areas": ["Unable to determine coverage areas"]
+        }
+
 # --- Utility Functions ---
 def cleanup_expired_conversations():
     """Remove conversations older than 1 hour"""
@@ -689,9 +773,51 @@ def call_openrouter_api(prompt: str, api_key: str, api_base: str = "https://open
     return "I apologize, but I'm experiencing technical difficulties with the AI service. Please try again in a few moments."
 
 # --- Updated API Endpoint ---
+@app.post("/ask", response_model=QueryResponse)
+async def ask_question_improved(query: Query):
+    """
+    Improved question endpoint with enhanced accuracy and user experience
+    """
+    cleanup_expired_conversations()
+    
+    # Session management
+    session_id = query.session_id or str(uuid.uuid4())
+    if session_id not in conversations:
+        conversations[session_id] = {
+            "messages": [],
+            "created_at": datetime.utcnow(),
+            "last_accessed": datetime.utcnow()
+        }
+    else:
+        conversations[session_id]["last_accessed"] = datetime.utcnow()
+    
+    # Validate input
+    user_question = query.question.strip()
+    if not user_question:
+        return QueryResponse(
+            response=None,
+            error="Question cannot be empty.",
+            context_found=False,
+            sources=[],
+            session_id=session_id,
+            confidence_score=0.0,
+            expand_available=False
+        )
+    
+    # Process with improvements
+    response = process_query_with_strict_context(user_question, session_id, query.response_style)
+    return response
+
+# --- NEW ENDPOINTS ---
+@app.get("/document-topics", response_model=DocumentTopics)
+def get_document_topics():
+    """Get information about what topics are covered in the database"""
+    topics_info = get_database_topics()
+    return DocumentTopics(**topics_info)
+
 @app.get("/debug-db")
-def debug_database():
-    """Debug endpoint to check database status"""
+def debug_database_enhanced():
+    """Enhanced debug endpoint with relevance score testing"""
     if not os.path.exists(CHROMA_PATH):
         return {"error": "Database folder does not exist", "path": CHROMA_PATH}
     
@@ -702,45 +828,148 @@ def debug_database():
         # Load database using the centralized function
         db = load_database()
         
-        # Perform test searches
-        test_queries = ["test", "document", "content", "information", "RCW", "costs", "prosecution"]
+        # Enhanced test searches with relevance scores
+        test_queries = [
+            "deferred prosecution costs",
+            "firearm rights restoration",
+            "RCW statute law",
+            "court costs indigent",
+            "criminal procedure"
+        ]
+        
         search_results = {}
+        relevance_analysis = {}
+        
         for query in test_queries:
             try:
-                results = db.similarity_search_with_relevance_scores(query, k=3)
-                previews = []
+                # Get results with relevance scores
+                results_with_scores = db.similarity_search_with_relevance_scores(query, k=5)
+                
+                results_info = []
                 scores = []
-                for doc, score in results:
-                    previews.append(doc.page_content[:100] + "...")
+                for doc, score in results_with_scores:
                     scores.append(score)
+                    results_info.append({
+                        "content_preview": doc.page_content[:150] + "...",
+                        "relevance_score": score,
+                        "source": os.path.basename(doc.metadata.get('source', 'Unknown')),
+                        "meets_threshold": score > 0.4
+                    })
+                
                 search_results[query] = {
-                    "count": len(results),
-                    "previews": previews,
-                    "scores": scores
+                    "count": len(results_with_scores),
+                    "results": results_info
                 }
+                
+                # Analyze score distribution
+                if scores:
+                    relevance_analysis[query] = {
+                        "avg_score": np.mean(scores),
+                        "max_score": max(scores),
+                        "min_score": min(scores),
+                        "above_threshold_count": sum(1 for s in scores if s > 0.4),
+                        "threshold_pass_rate": sum(1 for s in scores if s > 0.4) / len(scores)
+                    }
+                
             except Exception as e:
                 search_results[query] = {"error": str(e)}
+                relevance_analysis[query] = {"error": str(e)}
         
-        status = "Database appears to be working" if any(r.get("count", 0) > 0 for r in search_results.values()) else "Database exists but no search results found"
+        # Overall database health
+        total_results = sum(r.get("count", 0) for r in search_results.values() if "count" in r)
+        avg_threshold_pass = np.mean([a.get("threshold_pass_rate", 0) for a in relevance_analysis.values() if "threshold_pass_rate" in a])
+        
+        status = "Database healthy" if total_results > 10 and avg_threshold_pass > 0.2 else "Database may have issues"
         
         return {
             "database_exists": True,
             "database_path": CHROMA_PATH,
             "database_contents": db_contents,
             "search_tests": search_results,
-            "status": status,
-            "threshold_info": {
-                "current_threshold": 0.4,
-                "note": "Documents with relevance scores above 0.4 will be used for responses"
-            }
+            "relevance_analysis": relevance_analysis,
+            "overall_health": {
+                "status": status,
+                "total_test_results": total_results,
+                "avg_threshold_pass_rate": avg_threshold_pass,
+                "threshold_used": 0.4
+            },
+            "recommendations": [
+                "Test with your specific RCW question to verify functionality",
+                "Monitor logs for hallucination detection triggers",
+                "Use /document-topics endpoint to understand coverage"
+            ]
         }
+        
     except Exception as e:
-        logger.error(f"Database debug failed: {e}", exc_info=True)
+        logger.error(f"Enhanced database debug failed: {e}", exc_info=True)
         return {
             "error": f"Database test failed: {str(e)}",
             "path": CHROMA_PATH,
             "suggestion": "Try running the ingestion script to recreate the database"
         }
+
+@app.get("/health")
+def health_check():
+    """Comprehensive health check endpoint"""
+    api_key = os.environ.get("OPENAI_API_KEY")
+    api_base = os.environ.get("OPENAI_API_BASE")
+    
+    db_exists = os.path.exists(CHROMA_PATH)
+    db_contents = []
+    if db_exists:
+        try:
+            db_contents = os.listdir(CHROMA_PATH)
+        except Exception as e:
+            db_contents = [f"Error reading directory: {e}"]
+    
+    # Test database connectivity with relevance scoring
+    db_health = "unknown"
+    if db_exists:
+        try:
+            db = load_database()
+            test_results = db.similarity_search_with_relevance_scores("test query", k=3)
+            if test_results and any(score > 0.1 for _, score in test_results):
+                db_health = "healthy"
+            else:
+                db_health = "no_content"
+        except Exception as e:
+            db_health = f"error: {str(e)}"
+            
+    return {
+        "status": "healthy" if db_exists and bool(api_key) and db_health == "healthy" else "unhealthy",
+        "version": "3.1.0",
+        "improvements": [
+            "balanced_context_enforcement",
+            "enhanced_retrieval_v3", 
+            "confidence_scoring",
+            "response_styles",
+            "hallucination_detection",
+            "document_topics_endpoint"
+        ],
+        "database": {
+            "exists": db_exists,
+            "path": CHROMA_PATH,
+            "contents": db_contents,
+            "health": db_health,
+            "relevance_threshold": 0.4
+        },
+        "api_configuration": {
+            "key_configured": bool(api_key),
+            "base_configured": bool(api_base),
+            "base_url": api_base or "https://openrouter.ai/api/v1"
+        },
+        "runtime_status": {
+            "active_conversations": len(conversations),
+            "nlp_model_available": nlp is not None,
+            "sentence_model_available": sentence_model is not None
+        },
+        "features": {
+            "balanced_threshold": "0.4 (allows good matches like 0.54 RCW example)",
+            "strict_context_enforcement": "No fallback results, clear 'no information' messages",
+            "response_validation": "Checks for hallucination patterns",
+            "enhanced_legal_expansions": "Includes deferred prosecution, costs, indigent terms"
+        }
+    }
 
 @app.get("/conversation/{session_id}", response_model=ConversationHistory)
 def get_conversation_history(session_id: str):
@@ -781,173 +1010,69 @@ def list_conversations():
         ]
     }
 
-@app.get("/document-topics")
-def get_document_topics():
-    """
-    Endpoint to help users understand what topics are covered in the database
-    This helps prevent questions about topics not in the documents
-    """
-    try:
-        db = load_database()
-        
-        # Sample some documents to identify common topics
-        sample_results = db.similarity_search("law legal statute RCW court prosecution", k=10)
-        
-        topics_found = set()
-        keywords_found = set()
-        
-        for doc in sample_results:
-            content = doc.page_content.lower()
-            source = doc.metadata.get('source', '').lower()
-            
-            # Extract common legal topics
-            if 'rcw' in content or 'rcw' in source:
-                topics_found.add("Washington State Revised Code (RCW)")
-            if 'prosecution' in content:
-                topics_found.add("Criminal Prosecution Procedures")
-            if 'deferred' in content:
-                topics_found.add("Deferred Prosecution Programs")
-            if 'cost' in content or 'fee' in content:
-                topics_found.add("Court Costs and Fees")
-            if 'indigent' in content or 'hardship' in content:
-                topics_found.add("Indigency and Financial Hardship")
-            if 'mental health' in content:
-                topics_found.add("Mental Health Treatment")
-            if 'restitution' in content:
-                topics_found.add("Restitution and Community Service")
-            
-            # Extract keywords for search suggestions
-            import re
-            legal_terms = re.findall(r'\b(?:rcw|prosecution|court|costs|indigent|restitution|deferred|mental|health|treatment|conviction|sentence|fine|fee)\b', content)
-            keywords_found.update(legal_terms)
-        
-        return {
-            "document_count": len(sample_results),
-            "topics_covered": sorted(list(topics_found)),
-            "common_keywords": sorted(list(keywords_found)),
-            "search_suggestions": [
-                "What are the costs associated with deferred prosecution?",
-                "How are court costs determined for indigent defendants?",
-                "What is RCW 10.01.160 about?",
-                "When can mental health treatment costs be imposed?",
-                "How does community restitution work?"
-            ],
-            "note": "This is a sample of topics based on document analysis. The actual coverage may be broader."
-        }
-        
-    except Exception as e:
-        logger.error(f"Failed to analyze document topics: {e}")
-        return {
-            "error": "Could not analyze document topics",
-            "general_guidance": [
-                "The system works best with specific legal questions",
-                "Try using exact statute numbers (e.g., RCW 10.01.160)",
-                "Ask about specific legal procedures or definitions",
-                "Reference specific terms from legal documents"
-            ]
-        }
-
 @app.get("/")
 def read_root():
     """Root endpoint with API information"""
     return {
-        "message": "Legal Assistant API is running",
+        "message": "Enhanced Legal Assistant API is running",
         "version": "3.1.0",
         "features": [
-            "Strict context enforcement to prevent hallucination",
-            "Balanced relevance thresholds (0.4+)",
-            "Multiple response styles (concise, balanced, detailed)",
-            "Conversation history support",
-            "Confidence scoring",
-            "Response validation"
+            "Balanced relevance threshold (0.4)",
+            "Strict context enforcement",
+            "Response validation",
+            "Enhanced legal query expansion",
+            "Document topics discovery",
+            "Conversation management"
         ],
         "endpoints": {
-            "/ask": "POST - Ask a legal question",
-            "/health": "GET - System health check",
-            "/debug-db": "GET - Database diagnostic information",
-            "/document-topics": "GET - What topics are covered in the database",
-            "/conversations": "GET - List active conversations",
-            "/conversation/{session_id}": "GET - Get specific conversation history"
-        },
-        "usage_tips": [
-            "Be specific in your questions",
-            "Reference statute numbers when known",
-            "Use legal terminology from your documents",
-            "Try the /document-topics endpoint to see what's covered"
-        ]
+            "ask": "POST /ask - Ask legal questions",
+            "document_topics": "GET /document-topics - See available topics",
+            "debug_db": "GET /debug-db - Database diagnostics",
+            "health": "GET /health - System health check",
+            "conversations": "GET /conversations - List active sessions"
+        }
     }
+
+# --- Testing and Validation ---
+@app.get("/test-relevance/{query}")
+def test_query_relevance(query: str, k: int = 5):
+    """Test endpoint to check relevance scores for a specific query"""
+    try:
+        db = load_database()
+        results_with_scores = db.similarity_search_with_relevance_scores(query, k=k)
+        
+        test_results = []
+        for doc, score in results_with_scores:
+            test_results.append({
+                "content_preview": doc.page_content[:200] + "...",
+                "relevance_score": score,
+                "meets_threshold": score > 0.4,
+                "source": os.path.basename(doc.metadata.get('source', 'Unknown')),
+                "page": doc.metadata.get('page')
+            })
+        
+        analysis = {
+            "query": query,
+            "total_results": len(results_with_scores),
+            "above_threshold": sum(1 for _, score in results_with_scores if score > 0.4),
+            "threshold_used": 0.4,
+            "would_generate_response": any(score > 0.4 for _, score in results_with_scores),
+            "results": test_results
+        }
+        
+        return analysis
+        
+    except Exception as e:
+        return {"error": str(e), "query": query}
 
 if __name__ == "__main__":
     import uvicorn
     port = int(os.environ.get("PORT", 8000))
-    logger.info(f"Starting Legal Assistant API server on port {port}")
-    logger.info(f"Database path: {CHROMA_PATH}")
-    logger.info("Enhanced features: Strict context enforcement, balanced thresholds, response validation")
-    uvicorn.run(app, host="0.0.0.0", port=port).post("/ask", response_model=QueryResponse)
-async def ask_question_improved(query: Query):
-    """
-    Improved question endpoint with enhanced accuracy and user experience
-    """
-    cleanup_expired_conversations()
-    
-    # Session management
-    session_id = query.session_id or str(uuid.uuid4())
-    if session_id not in conversations:
-        conversations[session_id] = {
-            "messages": [],
-            "created_at": datetime.utcnow(),
-            "last_accessed": datetime.utcnow()
-        }
-    else:
-        conversations[session_id]["last_accessed"] = datetime.utcnow()
-    
-    # Validate input
-    user_question = query.question.strip()
-    if not user_question:
-        return QueryResponse(
-            response=None,
-            error="Question cannot be empty.",
-            context_found=False,
-            sources=[],
-            session_id=session_id,
-            confidence_score=0.0,
-            expand_available=False
-        )
-    
-    # Process with improvements
-    response = process_query_with_strict_context(user_question, session_id, query.response_style)
-    return response
-
-# --- Additional API Endpoints ---
-@app.get("/health")
-def health_check():
-    """Comprehensive health check endpoint"""
-    api_key = os.environ.get("OPENAI_API_KEY")
-    api_base = os.environ.get("OPENAI_API_BASE")
-    
-    db_exists = os.path.exists(CHROMA_PATH)
-    db_contents = []
-    if db_exists:
-        try:
-            db_contents = os.listdir(CHROMA_PATH)
-        except Exception as e:
-            db_contents = [f"Error reading directory: {e}"]
-            
-    return {
-        "status": "healthy" if db_exists and bool(api_key) else "unhealthy",
-        "version": "3.1.0",
-        "improvements": ["balanced_context_enforcement", "enhanced_retrieval", "confidence_scoring", "response_styles"],
-        "database_exists": db_exists,
-        "database_path": CHROMA_PATH,
-        "database_contents": db_contents,
-        "api_key_configured": bool(api_key),
-        "api_base_configured": bool(api_base),
-        "active_conversations": len(conversations),
-        "ai_agent_status": {
-            "loaded": True,
-            "nlp_model_available": nlp is not None,
-            "sentence_model_available": sentence_model is not None
-        }
-    }
-
-@app
+    logger.info(f"Starting Enhanced Legal Assistant API v3.1.0 on port {port}")
+    logger.info("Key improvements:")
+    logger.info("- Balanced relevance threshold (0.4) allows good matches while filtering noise")
+    logger.info("- Strict context enforcement prevents hallucination")
+    logger.info("- Enhanced legal query expansion for better retrieval")
+    logger.info("- Response validation with hallucination detection")
+    logger.info("- New /document-topics endpoint for coverage discovery")
+    uvicorn.run(app, host="0.0.0.0", port=port)
