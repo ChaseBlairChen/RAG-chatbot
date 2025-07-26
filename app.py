@@ -1,4 +1,4 @@
-# - Improved app.py with Enhanced Accuracy & User Experience -
+# - Enhanced app.py with Restored Analytical Depth & Improved Retrieval -
 # Standard library imports
 from fastapi import FastAPI, Request, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -53,7 +53,7 @@ except Exception as e:
     logger.error(f"Failed to load Sentence Transformer model: {e}")
     sentence_model = None
 
-app = FastAPI(title="Enhanced Legal Assistant API", version="3.1.0")
+app = FastAPI(title="Enhanced Legal Assistant API with Analytical Depth", version="3.2.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -67,7 +67,7 @@ app.add_middleware(
 class Query(BaseModel):
     question: str
     session_id: Optional[str] = None
-    response_style: Optional[str] = "balanced"  # "concise", "balanced", "detailed"
+    response_style: Optional[str] = "analytical"  # "concise", "balanced", "analytical", "detailed"
 
 class QueryResponse(BaseModel):
     response: Optional[str] = None
@@ -246,9 +246,9 @@ def contains_unsupported_claims(response: str, context: str) -> bool:
     
     return any(hallucination_indicators)
 
-# --- IMPROVEMENT 2: Response Style Management ---
-def format_response_by_style(content: str, sources: List[Dict], style: str = "balanced") -> Tuple[str, bool]:
-    """Format response based on user's preferred style"""
+# --- IMPROVEMENT 2: Enhanced Response Style Management with Analytical Focus ---
+def format_response_by_style(content: str, sources: List[Dict], style: str = "analytical") -> Tuple[str, bool]:
+    """Format response based on user's preferred style with enhanced analytical option"""
     
     if style == "concise":
         # Extract key points and create concise response
@@ -260,10 +260,49 @@ def format_response_by_style(content: str, sources: List[Dict], style: str = "ba
         detailed_response = create_detailed_response(content, sources)
         return detailed_response, False  # No expansion needed
     
+    elif style == "analytical":
+        # NEW: Create comprehensive analytical response
+        analytical_response = create_analytical_response(content, sources)
+        return analytical_response, True  # Expansion available
+    
     else:  # balanced
         # Provide balanced response with clear structure
         balanced_response = create_balanced_response(content, sources)
         return balanced_response, True  # Expansion available
+
+def create_analytical_response(content: str, sources: List[Dict]) -> str:
+    """Create a comprehensive analytical response that maintains the depth from the second example"""
+    # If content is already comprehensive, return it with analytical framing
+    if len(content) > 1500:  # Already detailed
+        analytical = f"""## Comprehensive Legal Analysis
+
+{content}
+
+---
+
+📋 **Analysis Summary**: This response provides detailed examination of the legal issues based on available statutory and case law materials.
+
+🔍 **Need clarification on specific points?** Ask about any particular aspect of this analysis.
+📖 **Want to explore related issues?** I can analyze connected legal questions using the same document base."""
+    else:
+        # Enhance shorter content with analytical structure
+        analytical = f"""## Legal Analysis
+
+{content}
+
+---
+
+📋 **Further Analysis Available**: I can provide deeper examination of specific aspects mentioned above.
+
+🔍 **Questions for deeper analysis:**
+- Specific statutory interpretations
+- Case law applications  
+- Procedural requirements
+- Constitutional considerations
+
+Ask about any of these areas for more detailed analysis."""
+    
+    return analytical
 
 def create_concise_response(content: str, sources: List[Dict]) -> str:
     """Create a concise, bullet-point response"""
@@ -334,44 +373,79 @@ def calculate_confidence_score(results: List, search_result: Dict, response_leng
     
     return min(1.0, max(0.0, confidence))
 
-# --- IMPROVEMENT 4: Strict Context Enforcement Prompt Template ---
-STRICT_CONTEXT_PROMPT_TEMPLATE = """You are a legal research assistant. You MUST follow these rules STRICTLY:
+# --- IMPROVEMENT 4: RESTORED Comprehensive Analytical Prompt Template ---
+ANALYTICAL_LEGAL_PROMPT_TEMPLATE = """You are a legal research assistant providing comprehensive, detailed analysis of legal documents and policies. Your role is to analyze legal documents thoroughly and provide informative, well-structured responses that demonstrate deep understanding of legal principles.
 
-**CRITICAL CONSTRAINTS:**
-1. **ONLY use information explicitly found in the provided legal documents below**
-2. **If the provided context does not contain sufficient information to answer the question, you MUST say so explicitly**
-3. **DO NOT use any legal knowledge from your training data**
-4. **DO NOT cite statutes, cases, or regulations not mentioned in the context**
-5. **DO NOT provide general legal advice or knowledge not found in the documents**
+**CRITICAL GUIDELINES:**
+1. **Base responses STRICTLY on the provided legal documents below**
+2. **Provide comprehensive, detailed analysis - not brief summaries**
+3. **Use clear structure with headings, subheadings, and logical organization**
+4. **Address ALL aspects of complex legal questions systematically**
+5. **Include relevant statutory citations, procedural requirements, and implications**
+6. **If context is insufficient, state this explicitly but provide what analysis is possible**
 
-**RESPONSE REQUIREMENTS:**
-- If context is insufficient: "Based on the available documents, I do not have enough information to answer this question about [topic]. The documents provided do not contain information about [specific topic]."
-- For partial information: "Based on the available documents, I can only provide limited information about [topic]..."
-- Always cite specific document names: [document_name.pdf]
-- Structure response clearly but keep it strictly based on provided context
+**RESPONSE STYLE**: {response_style}
+- Concise: Key points only with option to expand
+- Balanced: Structured overview with main elements
+- Analytical: Comprehensive legal analysis with detailed examination
+- Detailed: Full exhaustive analysis of all available information
 
-**RESPONSE STYLE:** {response_style}
-- Concise: Provide key points only
-- Balanced: Structured overview with main points
-- Detailed: Comprehensive analysis
-
-CONVERSATION HISTORY:
+**CONVERSATIONAL CONTEXT:**
 {conversation_history}
 
-LEGAL DOCUMENT CONTEXT (THIS IS YOUR ONLY SOURCE OF INFORMATION):
+**LEGAL DOCUMENT SOURCES (YOUR ONLY INFORMATION SOURCE):**
 {context}
 
-USER QUESTION:
+**LEGAL QUESTION(S) FOR ANALYSIS:**
 {questions}
 
-Remember: If the context above does not contain information to answer the question, you must explicitly state this limitation. Do not supplement with external legal knowledge.
+**INSTRUCTIONS FOR COMPREHENSIVE ANALYSIS:**
 
-RESPONSE:"""
+For Analytical/Detailed responses, structure your analysis as follows:
 
-# --- Updated Main Processing Function ---
-def process_query_with_strict_context(question: str, session_id: str, response_style: str = "balanced") -> QueryResponse:
+1. **Legal Framework & Statutory Foundation**
+   - Identify relevant statutes, regulations, and legal standards
+   - Explain the statutory structure and key provisions
+   - Note any definitional requirements or threshold criteria
+
+2. **Issue-by-Issue Analysis**
+   - Address each legal question systematically
+   - Apply law to the specific facts/circumstances
+   - Discuss statutory interpretation principles where relevant
+   - Consider procedural requirements and deadlines
+
+3. **Case Application & Precedent** (if available in documents)
+   - Reference relevant case law from the provided materials
+   - Explain how precedent applies to the current situation
+   - Note any distinguishing factors or limitations
+
+4. **Constitutional & Due Process Considerations** (where applicable)
+   - Address any constitutional issues raised
+   - Discuss due process requirements
+   - Consider equal protection or other fundamental rights implications
+
+5. **Practical Applications & Procedural Requirements**
+   - Explain how the law operates in practice
+   - Detail any required procedures, forms, or deadlines
+   - Note enforcement mechanisms or appeal processes
+
+6. **Conclusions & Recommendations**
+   - Synthesize the analysis into clear conclusions
+   - Address any ambiguities or areas of uncertainty
+   - Provide practical guidance based on the legal framework
+
+**IMPORTANT**: 
+- Always cite specific document names: [document_name.pdf] or [document_name.pdf, Page X]
+- If multiple documents address the same issue, synthesize the information
+- Maintain awareness of our ongoing conversation and reference previous discussions when relevant
+- If documents lack sufficient detail for complete analysis, acknowledge this limitation while providing available information
+
+**YOUR COMPREHENSIVE LEGAL ANALYSIS:**"""
+
+# --- Updated Main Processing Function with Restored Analytical Depth ---
+def process_query_with_analytical_depth(question: str, session_id: str, response_style: str = "analytical") -> QueryResponse:
     """
-    Improved query processing with balanced context enforcement
+    Enhanced query processing that restores comprehensive analytical capability
     """
     try:
         # Load Database
@@ -382,10 +456,10 @@ def process_query_with_strict_context(question: str, session_id: str, response_s
         combined_query = " ".join(questions)
         
         # Get Conversation History
-        conversation_history_context = get_conversation_context(session_id, max_messages=8)
+        conversation_history_context = get_conversation_context(session_id, max_messages=12)  # Increased for better context
         
         # BALANCED: Enhanced Retrieval with relevance check
-        results, search_result, has_relevant_context = enhanced_retrieval_v3(db, combined_query, conversation_history_context, k=12)
+        results, search_result, has_relevant_context = enhanced_retrieval_v3(db, combined_query, conversation_history_context, k=15)  # Increased k for more comprehensive analysis
         
         # STRICT: If no relevant context found, return clear message
         if not has_relevant_context or not results:
@@ -407,13 +481,9 @@ I apologize, but I cannot find any relevant information in the available legal d
 1. **Try rephrasing your question** with different keywords
 2. **Consult with a qualified attorney** for authoritative legal advice
 3. **Check relevant statutes directly** (state/federal)
-4. **Ask about topics I do have information on** (see below)
 
 **Available Document Topics:**
 {', '.join(available_topics['coverage_areas'][:10])}
-
-**Document Types in Database:**
-{', '.join([f"{k}: {v}" for k, v in available_topics['document_types'].items()])}
 
 *If you believe this topic should be covered by the available documents, try rephrasing your question with different keywords.*"""
             
@@ -428,23 +498,23 @@ I apologize, but I cannot find any relevant information in the available legal d
                 expand_available=False
             )
         
-        # Create Context with better filtering
-        context_text, source_info = create_enhanced_context(results, search_result, questions)
+        # Create Context with better filtering - EXPANDED for analytical responses
+        context_text, source_info = create_enhanced_context_for_analysis(results, search_result, questions, response_style)
         
         # Calculate confidence
         confidence_score = calculate_confidence_score(results, search_result, len(context_text))
         
-        # Enhanced Prompt with stronger constraints
+        # Enhanced Prompt with analytical focus restored
         formatted_questions = "\n".join(f"{i+1}. {q}" for i, q in enumerate(questions)) if len(questions) > 1 else questions[0]
         
-        formatted_prompt = STRICT_CONTEXT_PROMPT_TEMPLATE.format(
+        formatted_prompt = ANALYTICAL_LEGAL_PROMPT_TEMPLATE.format(
             response_style=response_style.capitalize(),
             conversation_history=conversation_history_context if conversation_history_context else "No previous conversation.",
             context=context_text,
             questions=formatted_questions
         )
         
-        # Call LLM
+        # Call LLM with enhanced parameters for analytical responses
         api_key = os.environ.get("OPENAI_API_KEY")
         api_base = os.environ.get("OPENAI_API_BASE", "https://openrouter.ai/api/v1")
         
@@ -460,7 +530,7 @@ I apologize, but I cannot find any relevant information in the available legal d
                 expand_available=False
             )
         
-        raw_response = call_openrouter_api(formatted_prompt, api_key, api_base)
+        raw_response = call_openrouter_api_enhanced(formatted_prompt, api_key, api_base, response_style)
         
         # VALIDATION: Check if response contains unsupported claims
         if contains_unsupported_claims(raw_response, context_text):
@@ -479,10 +549,11 @@ REQUIREMENTS:
 - If the context doesn't contain enough information, say so explicitly
 - Do not add any legal knowledge not found in the context
 - Cite specific document names for each claim
+- Provide comprehensive analysis of what IS available in the context
 
 REVISED RESPONSE:"""
             
-            raw_response = call_openrouter_api(revision_prompt, api_key, api_base)
+            raw_response = call_openrouter_api_enhanced(revision_prompt, api_key, api_base, response_style)
         
         # Format response based on style
         formatted_response, expand_available = format_response_by_style(raw_response, source_info, response_style)
@@ -492,7 +563,7 @@ REVISED RESPONSE:"""
             formatted_response += f"\n\n**SOURCES** (Confidence: {confidence_score:.1%}):\n"
             for source in source_info:
                 page_info = f", Page {source['page']}" if source['page'] is not None else ""
-                formatted_response += f"- {source['file_name']}{page_info} (Relevance: {source['relevance']:.2f})\n"
+                formatted_response += f"• {source['file_name']}{page_info} (Relevance: {source['relevance']:.2f})\n"
         
         # Update conversation
         add_to_conversation(session_id, "user", question)
@@ -521,8 +592,8 @@ REVISED RESPONSE:"""
             expand_available=False
         )
 
-def create_enhanced_context(results: List, search_result: Dict, questions: List[str]) -> Tuple[str, List[Dict]]:
-    """Enhanced context creation with better relevance filtering"""
+def create_enhanced_context_for_analysis(results: List, search_result: Dict, questions: List[str], response_style: str) -> Tuple[str, List[Dict]]:
+    """Enhanced context creation optimized for analytical responses"""
     if not results:
         return "", []
     
@@ -530,8 +601,13 @@ def create_enhanced_context(results: List, search_result: Dict, questions: List[
     source_info = []
     seen_sources = set()
     
-    # BALANCED: Reasonable minimum for source inclusion - matches retrieval threshold
-    MIN_RELEVANCE_FOR_CONTEXT = 0.4
+    # For analytical responses, be more permissive with relevance to get comprehensive context
+    if response_style in ["analytical", "detailed"]:
+        MIN_RELEVANCE_FOR_CONTEXT = 0.3  # Lower threshold for comprehensive analysis
+        MAX_CONTENT_LENGTH = 1200  # Longer content allowed
+    else:
+        MIN_RELEVANCE_FOR_CONTEXT = 0.4  # Standard threshold
+        MAX_CONTENT_LENGTH = 800
     
     for i, (doc, score) in enumerate(zip(results, search_result.get("scores", [0.0]*len(results)))):
         # Skip low-relevance documents
@@ -553,9 +629,9 @@ def create_enhanced_context(results: List, search_result: Dict, questions: List[
         display_source = os.path.basename(source_path)
         page_info = f" (Page {page})" if page is not None else ""
         
-        # Truncate very long content
-        if len(content) > 800:
-            content = content[:800] + "... [truncated]"
+        # For analytical responses, include more content
+        if len(content) > MAX_CONTENT_LENGTH:
+            content = content[:MAX_CONTENT_LENGTH] + "... [truncated]"
         
         context_part = f"[{display_source}{page_info}] (Relevance: {score:.2f}):\n{content}"
         context_parts.append(context_part)
@@ -571,6 +647,69 @@ def create_enhanced_context(results: List, search_result: Dict, questions: List[
     context_text = "\n\n---\n\n".join(context_parts)
     return context_text, source_info
 
+def call_openrouter_api_enhanced(prompt: str, api_key: str, api_base: str = "https://openrouter.ai/api/v1", response_style: str = "analytical") -> str:
+    """Enhanced API call with parameters optimized for analytical responses"""
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+        "HTTP-Referer": "http://localhost:8000",
+        "X-Title": "Legal Assistant"
+    }
+    
+    models_to_try = [
+        "deepseek/deepseek-chat-v3-0324:free",
+        "microsoft/phi-3-mini-128k-instruct:free",
+        "meta-llama/llama-3.2-3b-instruct:free",
+        "google/gemma-2-9b-it:free",
+        "mistralai/mistral-7b-instruct:free",
+        "openchat/openchat-7b:free"
+    ]
+    
+    # Adjust parameters based on response style
+    if response_style in ["analytical", "detailed"]:
+        temperature = 0.3  # Lower for more structured analytical responses
+        max_tokens = 4000  # Higher for comprehensive analysis
+        top_p = 0.85  # Slightly lower for more focused responses
+    else:
+        temperature = 0.5
+        max_tokens = 2000
+        top_p = 0.9
+    
+    logger.info(f"Trying {len(models_to_try)} models for {response_style} response...")
+    last_exception = None
+
+    for i, model in enumerate(models_to_try):
+        try:
+            payload = {
+                "model": model,
+                "messages": [{"role": "user", "content": prompt}],
+                "temperature": temperature,
+                "max_tokens": max_tokens,
+                "top_p": top_p
+            }
+            logger.info(f"Attempting model {i+1}/{len(models_to_try)}: {model}")
+            
+            response = requests.post(f"{api_base}/chat/completions", headers=headers, json=payload, timeout=90)  # Longer timeout for analytical responses
+            
+            if response.status_code == 200:
+                result = response.json()
+                if 'choices' in result and result['choices']:
+                    content = result['choices'][0]['message']['content']
+                    if content and content.strip():
+                        logger.info(f"Success with model {model}! Response length: {len(content)}")
+                        return content.strip()
+        except Exception as e:
+            logger.error(f"Error with model {model}: {e}")
+            last_exception = e
+            continue
+    
+    # If all models failed
+    error_msg = f"All models failed. Last error: {str(last_exception)}"
+    logger.error(error_msg)
+    
+    return "I apologize, but I'm experiencing technical difficulties with the AI service. Please try again in a few moments."
+
+# Keep all your existing utility functions (get_database_topics, cleanup_expired_conversations, etc.)
 def get_database_topics() -> Dict:
     """Get information about what topics are covered in the database"""
     try:
@@ -661,15 +800,15 @@ def load_database():
         logger.error(f"Failed to load database: {e}")
         raise
 
-def get_conversation_context(session_id: str, max_messages: int = 8) -> str:
-    """Get recent conversation history as context (shortened for better performance)"""
+def get_conversation_context(session_id: str, max_messages: int = 12) -> str:
+    """Get recent conversation history as context (enhanced for analytical responses)"""
     if session_id not in conversations:
         return ""
     messages = conversations[session_id]['messages'][-max_messages:]
     context_parts = []
     for msg in messages:
         role = msg['role'].upper()
-        content = msg['content'][:400] + "..." if len(msg['content']) > 400 else msg['content']
+        content = msg['content'][:600] + "..." if len(msg['content']) > 600 else msg['content']  # Longer context for analytical responses
         context_parts.append(f"{role}: {content}")
     return "\n".join(context_parts) if context_parts else ""
 
@@ -689,8 +828,8 @@ def add_to_conversation(session_id: str, role: str, content: str, sources: Optio
     }
     conversations[session_id]['messages'].append(message)
     conversations[session_id]['last_accessed'] = datetime.utcnow()
-    if len(conversations[session_id]['messages']) > 20:
-        conversations[session_id]['messages'] = conversations[session_id]['messages'][-20:]
+    if len(conversations[session_id]['messages']) > 25:  # Increased for better analytical context
+        conversations[session_id]['messages'] = conversations[session_id]['messages'][-25:]
 
 def parse_multiple_questions(query_text: str) -> List[str]:
     """Parse multiple questions from input"""
@@ -720,63 +859,11 @@ def parse_multiple_questions(query_text: str) -> List[str]:
     
     return questions
 
-def call_openrouter_api(prompt: str, api_key: str, api_base: str = "https://openrouter.ai/api/v1") -> str:
-    """Call OpenRouter API with fallback models"""
-    headers = {
-        "Authorization": f"Bearer {api_key}",
-        "Content-Type": "application/json",
-        "HTTP-Referer": "http://localhost:8000",
-        "X-Title": "Legal Assistant"
-    }
-    
-    models_to_try = [
-        "deepseek/deepseek-chat-v3-0324:free",
-        "microsoft/phi-3-mini-128k-instruct:free",
-        "meta-llama/llama-3.2-3b-instruct:free",
-        "google/gemma-2-9b-it:free",
-        "mistralai/mistral-7b-instruct:free",
-        "openchat/openchat-7b:free"
-    ]
-    
-    logger.info(f"Trying {len(models_to_try)} models...")
-    last_exception = None
-
-    for i, model in enumerate(models_to_try):
-        try:
-            payload = {
-                "model": model,
-                "messages": [{"role": "user", "content": prompt}],
-                "temperature": 0.5,  # Lower temperature for more consistent responses
-                "max_tokens": 2000,
-                "top_p": 0.9
-            }
-            logger.info(f"Attempting model {i+1}/{len(models_to_try)}: {model}")
-            
-            response = requests.post(f"{api_base}/chat/completions", headers=headers, json=payload, timeout=60)
-            
-            if response.status_code == 200:
-                result = response.json()
-                if 'choices' in result and result['choices']:
-                    content = result['choices'][0]['message']['content']
-                    if content and content.strip():
-                        logger.info(f"Success with model {model}! Response length: {len(content)}")
-                        return content.strip()
-        except Exception as e:
-            logger.error(f"Error with model {model}: {e}")
-            last_exception = e
-            continue
-    
-    # If all models failed
-    error_msg = f"All models failed. Last error: {str(last_exception)}"
-    logger.error(error_msg)
-    
-    return "I apologize, but I'm experiencing technical difficulties with the AI service. Please try again in a few moments."
-
 # --- Updated API Endpoint ---
 @app.post("/ask", response_model=QueryResponse)
-async def ask_question_improved(query: Query):
+async def ask_question_enhanced_analytical(query: Query):
     """
-    Improved question endpoint with enhanced accuracy and user experience
+    Enhanced question endpoint with restored analytical depth and improved retrieval
     """
     cleanup_expired_conversations()
     
@@ -804,11 +891,11 @@ async def ask_question_improved(query: Query):
             expand_available=False
         )
     
-    # Process with improvements
-    response = process_query_with_strict_context(user_question, session_id, query.response_style)
+    # Process with enhanced analytical capabilities
+    response = process_query_with_analytical_depth(user_question, session_id, query.response_style)
     return response
 
-# --- NEW ENDPOINTS ---
+# --- Enhanced Endpoints ---
 @app.get("/document-topics", response_model=DocumentTopics)
 def get_document_topics():
     """Get information about what topics are covered in the database"""
@@ -893,11 +980,12 @@ def debug_database_enhanced():
                 "avg_threshold_pass_rate": avg_threshold_pass,
                 "threshold_used": 0.4
             },
-            "recommendations": [
-                "Test with your specific RCW question to verify functionality",
-                "Monitor logs for hallucination detection triggers",
-                "Use /document-topics endpoint to understand coverage"
-            ]
+            "analytical_features": {
+                "enhanced_context_length": "1200 chars for analytical responses",
+                "lower_analytical_threshold": "0.3 for comprehensive analysis",
+                "extended_conversation_history": "12 messages with 600 char limit",
+                "response_styles": ["concise", "balanced", "analytical", "detailed"]
+            }
         }
         
     except Exception as e:
@@ -937,21 +1025,22 @@ def health_check():
             
     return {
         "status": "healthy" if db_exists and bool(api_key) and db_health == "healthy" else "unhealthy",
-        "version": "3.1.0",
-        "improvements": [
-            "balanced_context_enforcement",
-            "enhanced_retrieval_v3", 
+        "version": "3.2.0",
+        "key_features": [
+            "restored_analytical_depth",
+            "balanced_context_enforcement", 
+            "enhanced_retrieval_v3",
+            "comprehensive_legal_analysis",
             "confidence_scoring",
-            "response_styles",
-            "hallucination_detection",
-            "document_topics_endpoint"
+            "multiple_response_styles",
+            "hallucination_detection"
         ],
         "database": {
             "exists": db_exists,
             "path": CHROMA_PATH,
             "contents": db_contents,
             "health": db_health,
-            "relevance_threshold": 0.4
+            "relevance_threshold": "0.4 (standard), 0.3 (analytical)"
         },
         "api_configuration": {
             "key_configured": bool(api_key),
@@ -963,11 +1052,12 @@ def health_check():
             "nlp_model_available": nlp is not None,
             "sentence_model_available": sentence_model is not None
         },
-        "features": {
-            "balanced_threshold": "0.4 (allows good matches like 0.54 RCW example)",
-            "strict_context_enforcement": "No fallback results, clear 'no information' messages",
-            "response_validation": "Checks for hallucination patterns",
-            "enhanced_legal_expansions": "Includes deferred prosecution, costs, indigent terms"
+        "analytical_enhancements": {
+            "comprehensive_prompt_template": "6-section structured analysis framework",
+            "enhanced_context_creation": "Up to 1200 chars for analytical responses", 
+            "improved_conversation_context": "12 messages with 600 char limit",
+            "response_validation": "Checks for unsupported claims and hallucination",
+            "multiple_retrieval_strategies": ["direct", "expanded", "sub_queries"]
         }
     }
 
@@ -1014,22 +1104,29 @@ def list_conversations():
 def read_root():
     """Root endpoint with API information"""
     return {
-        "message": "Enhanced Legal Assistant API is running",
-        "version": "3.1.0",
-        "features": [
-            "Balanced relevance threshold (0.4)",
-            "Strict context enforcement",
-            "Response validation",
-            "Enhanced legal query expansion",
-            "Document topics discovery",
-            "Conversation management"
+        "message": "Enhanced Legal Assistant API with Restored Analytical Depth is running",
+        "version": "3.2.0",
+        "key_improvements": [
+            "Comprehensive analytical response capability restored",
+            "6-section structured legal analysis framework", 
+            "Enhanced context creation for thorough analysis",
+            "Balanced relevance threshold (0.4 standard, 0.3 analytical)",
+            "Strict context enforcement with hallucination detection",
+            "Multiple response styles: concise, balanced, analytical, detailed"
         ],
         "endpoints": {
-            "ask": "POST /ask - Ask legal questions",
+            "ask": "POST /ask - Ask legal questions with analytical depth",
             "document_topics": "GET /document-topics - See available topics",
-            "debug_db": "GET /debug-db - Database diagnostics",
+            "debug_db": "GET /debug-db - Database diagnostics with analytical features",
             "health": "GET /health - System health check",
-            "conversations": "GET /conversations - List active sessions"
+            "conversations": "GET /conversations - List active sessions",
+            "test_relevance": "GET /test-relevance/{query} - Test query relevance scores"
+        },
+        "response_styles": {
+            "concise": "Key points with expansion options",
+            "balanced": "Structured overview with main elements", 
+            "analytical": "Comprehensive legal analysis (DEFAULT)",
+            "detailed": "Full exhaustive analysis"
         }
     }
 
@@ -1046,7 +1143,8 @@ def test_query_relevance(query: str, k: int = 5):
             test_results.append({
                 "content_preview": doc.page_content[:200] + "...",
                 "relevance_score": score,
-                "meets_threshold": score > 0.4,
+                "meets_standard_threshold": score > 0.4,
+                "meets_analytical_threshold": score > 0.3,
                 "source": os.path.basename(doc.metadata.get('source', 'Unknown')),
                 "page": doc.metadata.get('page')
             })
@@ -1054,9 +1152,11 @@ def test_query_relevance(query: str, k: int = 5):
         analysis = {
             "query": query,
             "total_results": len(results_with_scores),
-            "above_threshold": sum(1 for _, score in results_with_scores if score > 0.4),
-            "threshold_used": 0.4,
-            "would_generate_response": any(score > 0.4 for _, score in results_with_scores),
+            "above_standard_threshold": sum(1 for _, score in results_with_scores if score > 0.4),
+            "above_analytical_threshold": sum(1 for _, score in results_with_scores if score > 0.3),
+            "thresholds": {"standard": 0.4, "analytical": 0.3},
+            "would_generate_standard_response": any(score > 0.4 for _, score in results_with_scores),
+            "would_generate_analytical_response": any(score > 0.3 for _, score in results_with_scores),
             "results": test_results
         }
         
@@ -1068,11 +1168,13 @@ def test_query_relevance(query: str, k: int = 5):
 if __name__ == "__main__":
     import uvicorn
     port = int(os.environ.get("PORT", 8000))
-    logger.info(f"Starting Enhanced Legal Assistant API v3.1.0 on port {port}")
+    logger.info(f"Starting Enhanced Legal Assistant API with Restored Analytical Depth v3.2.0 on port {port}")
     logger.info("Key improvements:")
-    logger.info("- Balanced relevance threshold (0.4) allows good matches while filtering noise")
-    logger.info("- Strict context enforcement prevents hallucination")
-    logger.info("- Enhanced legal query expansion for better retrieval")
+    logger.info("- RESTORED comprehensive analytical response capability")
+    logger.info("- 6-section structured legal analysis framework")
+    logger.info("- Enhanced context creation (1200 chars for analytical responses)")
+    logger.info("- Dual relevance thresholds: 0.4 (standard), 0.3 (analytical)")
+    logger.info("- Improved conversation context (12 messages, 600 chars each)")
     logger.info("- Response validation with hallucination detection")
-    logger.info("- New /document-topics endpoint for coverage discovery")
+    logger.info("- Multiple response styles with 'analytical' as new default")
     uvicorn.run(app, host="0.0.0.0", port=port)
