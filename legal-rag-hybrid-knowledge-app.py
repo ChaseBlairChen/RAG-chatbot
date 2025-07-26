@@ -1,6 +1,5 @@
 # this version uses it's pretrained knowledge while anwering questions(risk of hallucination), but it is more creative.
-# - Improved app.py with Enhanced Accuracy & User Experience -
-# Standard library imports
+
 from fastapi import FastAPI, Request, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
