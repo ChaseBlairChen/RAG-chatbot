@@ -26,6 +26,34 @@ from chromadb.config import Settings
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+# Add this section after your imports (around line 30-35):
+
+# Create FastAPI app instance
+app = FastAPI(
+    title="Enhanced Legal AI Agent", 
+    description="Comprehensive Legal Analysis with Case Law Research", 
+    version="3.0.0"
+)
+
+# Add CORS middleware
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# Global variables and configuration
+CHROMA_PATH = "chroma"  # Update this to your actual Chroma database path
+CHROMA_CLIENT_SETTINGS = Settings(
+    chroma_db_impl="duckdb+parquet",
+    persist_directory=CHROMA_PATH
+)
+
+# In-memory conversation storage
+conversations = {}
+
 # --- Case Law Analysis Data Models ---
 class CaseType(Enum):
     CRIMINAL = "criminal"
