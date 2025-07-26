@@ -1,4 +1,4 @@
-# - app.py -
+# - Improved app.py with Enhanced Accuracy & User Experience -
 # Standard library imports
 from fastapi import FastAPI, Request, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -18,30 +18,646 @@ from langchain_huggingface import HuggingFaceEmbeddings
 import spacy
 from sentence_transformers import SentenceTransformer
 import numpy as np
-from chromadb.config import Settings # Import Settings for Chroma client
+from chromadb.config import Settings
 
 # Set up logging FIRST
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
-# --- End Logging Setup ---
 
 # --- ChromaDB Configuration ---
-# Match the database path and settings used in generate_db.py
 CHROMA_PATH = os.path.abspath(os.path.join(os.getcwd(), "chromadb-database"))
 logger.info(f"Using CHROMA_PATH: {CHROMA_PATH}")
 
-# Define consistent client settings to match generate_db.py
 CHROMA_CLIENT_SETTINGS = Settings(
     persist_directory=CHROMA_PATH,
-    anonymized_telemetry=False, # Crucial: Match generate_db.py
+    anonymized_telemetry=False,
     allow_reset=True,
     is_persistent=True
 )
-# --- End ChromaDB Configuration ---
 
-# In-memory conversation storage (in production, use Redis or a database)
+# In-memory conversation storage
 conversations: Dict[str, Dict] = {}
 
+# Load NLP Models
+try:
+    nlp = spacy.load("en_core_web_sm")
+    logger.info("spaCy model loaded successfully")
+except Exception as e:
+    logger.error(f"Failed to load spaCy model: {e}")
+    nlp = None
+
+try:
+    sentence_model = SentenceTransformer('all-MiniLM-L6-v2')
+    logger.info("Sentence transformer loaded successfully")
+except Exception as e:
+    logger.error(f"Failed to load Sentence Transformer model: {e}")
+    sentence_model = None
+
+app = FastAPI(title="Improved Legal Assistant API", version="3.0.0")
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# --- Enhanced Pydantic Models ---
+class Query(BaseModel):
+    question: str
+    session_id: Optional[str] = None
+    response_style: Optional[str] = "balanced"  # "concise", "balanced", "detailed"
+
+class QueryResponse(BaseModel):
+    response: Optional[str] = None
+    error: Optional[str] = None
+    context_found: bool = False
+    sources: Optional[list] = None
+    session_id: str
+    confidence_score: float = 0.0  # NEW: Confidence in response accuracy
+    expand_available: bool = False  # NEW: Whether user can request more details
+
+# --- IMPROVEMENT 1: Enhanced Retrieval System ---
+def enhanced_retrieval_v2(db, query_text: str, conversation_history_context: str, k: int = 12) -> Tuple[List, Any]:
+    """
+    Improved retrieval with better scoring and multi-query approach
+    """
+    logger.info(f"[ENHANCED_RETRIEVAL] Original query: '{query_text}'")
+    
+    try:
+        # Strategy 1: Direct query
+        results_with_scores = db.similarity_search_with_relevance_scores(query_text, k=k)
+        
+        # Strategy 2: Query expansion with legal terms
+        legal_expanded_query = expand_legal_query(query_text)
+        if legal_expanded_query != query_text:
+            logger.info(f"[ENHANCED_RETRIEVAL] Expanded query: '{legal_expanded_query}'")
+            expanded_results = db.similarity_search_with_relevance_scores(legal_expanded_query, k=k//2)
+            results_with_scores.extend(expanded_results)
+        
+        # Strategy 3: Break down complex questions
+        sub_queries = extract_sub_queries(query_text)
+        for sub_query in sub_queries[:2]:  # Limit to avoid too many queries
+            sub_results = db.similarity_search_with_relevance_scores(sub_query, k=k//3)
+            results_with_scores.extend(sub_results)
+        
+        # Remove duplicates and re-rank
+        unique_results = remove_duplicate_documents(results_with_scores)
+        
+        # IMPROVED: Dynamic threshold based on query complexity
+        min_threshold = calculate_dynamic_threshold(query_text, unique_results)
+        filtered_results = [(doc, score) for doc, score in unique_results if score > min_threshold]
+        
+        logger.info(f"[ENHANCED_RETRIEVAL] Found {len(unique_results)} unique results, {len(filtered_results)} above threshold {min_threshold:.3f}")
+        
+        final_results = filtered_results if filtered_results else unique_results[:k//2]
+        docs, scores = zip(*final_results) if final_results else ([], [])
+        
+        return list(docs), {
+            "query_used": query_text,
+            "scores": list(scores),
+            "threshold_used": min_threshold,
+            "strategies_used": ["direct", "expanded", "sub_queries"]
+        }
+        
+    except Exception as e:
+        logger.error(f"[ENHANCED_RETRIEVAL] Search failed: {e}")
+        return [], {"error": str(e)}
+
+def expand_legal_query(query: str) -> str:
+    """Expand query with legal synonyms and terms"""
+    legal_expansions = {
+        "asylum": "asylum refugee protection persecution",
+        "immigration": "immigration visa deportation removal",
+        "contract": "contract agreement terms conditions breach",
+        "criminal": "criminal penal prosecution sentence conviction",
+        "civil": "civil tort liability damages compensation",
+        "court": "court tribunal judge judicial proceeding",
+        "law": "law statute regulation rule code",
+        "rights": "rights protections constitutional fundamental"
+    }
+    
+    expanded_terms = []
+    query_lower = query.lower()
+    
+    for term, expansion in legal_expansions.items():
+        if term in query_lower:
+            expanded_terms.extend(expansion.split())
+    
+    if expanded_terms:
+        return f"{query} {' '.join(set(expanded_terms))}"
+    return query
+
+def extract_sub_queries(query: str) -> List[str]:
+    """Extract sub-questions from complex queries"""
+    sub_queries = []
+    
+    # Split on common conjunctions
+    conjunctions = [" and ", " or ", " also ", " plus ", " additionally "]
+    current_query = query
+    
+    for conj in conjunctions:
+        if conj in current_query.lower():
+            parts = current_query.split(conj)
+            sub_queries.extend([part.strip() for part in parts if len(part.strip()) > 10])
+            break
+    
+    # Extract specific legal concepts
+    legal_patterns = [
+        r"what (?:is|are) ([^?]+)\??",
+        r"how (?:does|do) ([^?]+)\??",
+        r"when (?:is|are) ([^?]+)\??",
+        r"(?:explain|describe) ([^?]+)\??"
+    ]
+    
+    for pattern in legal_patterns:
+        matches = re.findall(pattern, query, re.IGNORECASE)
+        for match in matches:
+            if len(match.strip()) > 5:
+                sub_queries.append(f"what is {match.strip()}?")
+    
+    return sub_queries[:3]  # Limit to 3 sub-queries
+
+def remove_duplicate_documents(results_with_scores: List[Tuple]) -> List[Tuple]:
+    """Remove duplicate documents based on content similarity"""
+    if not results_with_scores:
+        return []
+    
+    unique_results = []
+    seen_content = set()
+    
+    for doc, score in results_with_scores:
+        # Create a hash of the first 100 characters for deduplication
+        content_hash = hash(doc.page_content[:100])
+        if content_hash not in seen_content:
+            seen_content.add(content_hash)
+            unique_results.append((doc, score))
+    
+    # Sort by relevance score (descending)
+    return sorted(unique_results, key=lambda x: x[1], reverse=True)
+
+def calculate_dynamic_threshold(query: str, results: List[Tuple]) -> float:
+    """Calculate dynamic threshold based on query complexity and result distribution"""
+    if not results:
+        return 0.3
+    
+    scores = [score for _, score in results]
+    
+    # Query complexity factors
+    is_complex = len(query.split()) > 8 or '?' in query[:-1]  # Multiple questions
+    has_legal_terms = any(term in query.lower() for term in ['law', 'legal', 'court', 'statute', 'regulation'])
+    
+    # Statistical analysis of scores
+    if len(scores) > 1:
+        avg_score = np.mean(scores)
+        std_score = np.std(scores)
+        
+        if is_complex:
+            return max(0.25, avg_score - std_score)  # Lower threshold for complex queries
+        elif has_legal_terms:
+            return max(0.35, avg_score - 0.5 * std_score)  # Medium threshold
+        else:
+            return max(0.4, avg_score - 0.3 * std_score)  # Higher threshold
+    
+    return 0.3  # Default fallback
+
+# --- IMPROVEMENT 2: Response Style Management ---
+def format_response_by_style(content: str, sources: List[Dict], style: str = "balanced") -> Tuple[str, bool]:
+    """Format response based on user's preferred style"""
+    
+    if style == "concise":
+        # Extract key points and create concise response
+        concise_response = create_concise_response(content, sources)
+        return concise_response, True  # Expansion available
+    
+    elif style == "detailed":
+        # Return full detailed response
+        detailed_response = create_detailed_response(content, sources)
+        return detailed_response, False  # No expansion needed
+    
+    else:  # balanced
+        # Provide balanced response with clear structure
+        balanced_response = create_balanced_response(content, sources)
+        return balanced_response, True  # Expansion available
+
+def create_concise_response(content: str, sources: List[Dict]) -> str:
+    """Create a concise, bullet-point response"""
+    # This is a simplified version - in practice, you'd use NLP to extract key points
+    lines = content.split('\n')
+    key_points = []
+    
+    for line in lines[:5]:  # Limit to first 5 lines
+        if line.strip() and not line.startswith('#'):
+            key_points.append(f"• {line.strip()}")
+    
+    concise = f"""**Quick Answer:**
+{chr(10).join(key_points)}
+
+💡 *Need more details? Ask me to expand on any point above.*"""
+    
+    return concise
+
+def create_balanced_response(content: str, sources: List[Dict]) -> str:
+    """Create a balanced response with clear sections"""
+    # Structure the response with clear sections
+    if len(content) > 800:
+        preview = content[:600] + "..."
+        balanced = f"""{preview}
+
+📖 **Want the complete analysis?** Ask me to provide the full detailed response.
+🔍 **Have specific questions?** Ask about any particular aspect mentioned above."""
+    else:
+        balanced = content
+    
+    return balanced
+
+def create_detailed_response(content: str, sources: List[Dict]) -> str:
+    """Return the full detailed response"""
+    return content
+
+# --- IMPROVEMENT 3: Confidence Scoring ---
+def calculate_confidence_score(results: List, search_result: Dict, response_length: int) -> float:
+    """Calculate confidence score based on multiple factors"""
+    if not results:
+        return 0.1
+    
+    scores = search_result.get("scores", [])
+    if not scores:
+        return 0.2
+    
+    # Factor 1: Average relevance score
+    avg_relevance = np.mean(scores)
+    
+    # Factor 2: Number of supporting documents
+    doc_factor = min(1.0, len(results) / 5.0)  # Optimal around 5 documents
+    
+    # Factor 3: Score distribution (consistency)
+    if len(scores) > 1:
+        score_std = np.std(scores)
+        consistency_factor = max(0.5, 1.0 - score_std)
+    else:
+        consistency_factor = 0.7
+    
+    # Factor 4: Response completeness
+    completeness_factor = min(1.0, response_length / 500.0)  # Optimal around 500 chars
+    
+    # Weighted combination
+    confidence = (
+        avg_relevance * 0.4 +
+        doc_factor * 0.3 +
+        consistency_factor * 0.2 +
+        completeness_factor * 0.1
+    )
+    
+    return min(1.0, max(0.0, confidence))
+
+# --- IMPROVEMENT 4: Enhanced Prompt Template ---
+IMPROVED_PROMPT_TEMPLATE = """You are a legal research assistant. Your responses must be STRICTLY based on the provided legal documents.
+
+CRITICAL REQUIREMENTS:
+1. **ONLY use information from the provided context below**
+2. **If the context doesn't contain sufficient information, explicitly state this**
+3. **Cite specific document names for each claim**
+4. **Do NOT add general legal knowledge not found in the context**
+
+RESPONSE STYLE: {response_style}
+- Concise: Provide key points only
+- Balanced: Structured overview with main points
+- Detailed: Comprehensive analysis
+
+CONVERSATION HISTORY:
+{conversation_history}
+
+LEGAL DOCUMENT CONTEXT (USE ONLY THIS INFORMATION):
+{context}
+
+USER QUESTION:
+{questions}
+
+INSTRUCTIONS:
+- Base your response ONLY on the provided context
+- If context is insufficient, say: "Based on the available documents, I can only provide limited information..."
+- Cite document names for each fact: [document_name.pdf]
+- If no relevant information exists, say: "The available documents do not contain information about this topic."
+
+RESPONSE:"""
+
+# --- Updated Main Processing Function ---
+def process_query_improved(question: str, session_id: str, response_style: str = "balanced") -> QueryResponse:
+    """
+    Improved query processing with enhanced accuracy and user experience
+    """
+    try:
+        # Load Database
+        db = load_database()
+        
+        # Parse Question
+        questions = parse_multiple_questions(question)
+        combined_query = " ".join(questions)
+        
+        # Get Conversation History
+        conversation_history_context = get_conversation_context(session_id, max_messages=8)
+        
+        # IMPROVED: Enhanced Retrieval
+        results, search_result = enhanced_retrieval_v2(db, combined_query, conversation_history_context, k=12)
+        
+        if not results:
+            logger.warning("No relevant documents found")
+            no_info_response = "I couldn't find any relevant information in the available legal documents to answer your question. The documents may not contain information about this specific topic."
+            add_to_conversation(session_id, "assistant", no_info_response)
+            return QueryResponse(
+                response=no_info_response,
+                error=None,
+                context_found=False,
+                sources=[],
+                session_id=session_id,
+                confidence_score=0.0,
+                expand_available=False
+            )
+        
+        # Create Context with better filtering
+        context_text, source_info = create_enhanced_context(results, search_result, questions)
+        
+        # IMPROVED: Calculate confidence before generating response
+        confidence_score = calculate_confidence_score(results, search_result, len(context_text))
+        
+        # Enhanced Prompt
+        formatted_questions = "\n".join(f"{i+1}. {q}" for i, q in enumerate(questions)) if len(questions) > 1 else questions[0]
+        
+        formatted_prompt = IMPROVED_PROMPT_TEMPLATE.format(
+            response_style=response_style.capitalize(),
+            conversation_history=conversation_history_context if conversation_history_context else "No previous conversation.",
+            context=context_text,
+            questions=formatted_questions
+        )
+        
+        # Call LLM
+        api_key = os.environ.get("OPENAI_API_KEY")
+        api_base = os.environ.get("OPENAI_API_BASE", "https://openrouter.ai/api/v1")
+        
+        if not api_key:
+            error_msg = "OPENAI_API_KEY environment variable not set."
+            return QueryResponse(
+                response=None,
+                error=f"Configuration Error: {error_msg}",
+                context_found=True,
+                sources=source_info,
+                session_id=session_id,
+                confidence_score=0.0,
+                expand_available=False
+            )
+        
+        raw_response = call_openrouter_api(formatted_prompt, api_key, api_base)
+        
+        # IMPROVED: Format response based on style
+        formatted_response, expand_available = format_response_by_style(raw_response, source_info, response_style)
+        
+        # Add sources with confidence indicator
+        if source_info:
+            formatted_response += f"\n\n**SOURCES** (Confidence: {confidence_score:.1%}):\n"
+            for source in source_info:
+                page_info = f", Page {source['page']}" if source['page'] is not None else ""
+                formatted_response += f"- {source['file_name']}{page_info} (Relevance: {source['relevance']:.2f})\n"
+        
+        # Update conversation
+        add_to_conversation(session_id, "user", question)
+        add_to_conversation(session_id, "assistant", formatted_response, source_info)
+        
+        return QueryResponse(
+            response=formatted_response,
+            error=None,
+            context_found=True,
+            sources=source_info,
+            session_id=session_id,
+            confidence_score=confidence_score,
+            expand_available=expand_available
+        )
+        
+    except Exception as e:
+        logger.error(f"Query processing failed: {e}", exc_info=True)
+        error_msg = f"Failed to process your request: {str(e)}"
+        return QueryResponse(
+            response=None,
+            error=error_msg,
+            context_found=False,
+            sources=[],
+            session_id=session_id,
+            confidence_score=0.0,
+            expand_available=False
+        )
+
+def create_enhanced_context(results: List, search_result: Dict, questions: List[str]) -> Tuple[str, List[Dict]]:
+    """Enhanced context creation with better relevance filtering"""
+    if not results:
+        return "", []
+    
+    context_parts = []
+    source_info = []
+    seen_sources = set()
+    
+    # IMPROVED: Higher minimum threshold for source inclusion
+    MIN_RELEVANCE_FOR_CONTEXT = 0.4
+    
+    for i, (doc, score) in enumerate(zip(results, search_result.get("scores", [0.0]*len(results)))):
+        # Skip low-relevance documents
+        if score < MIN_RELEVANCE_FOR_CONTEXT:
+            continue
+            
+        content = doc.page_content.strip()
+        if not content:
+            continue
+        
+        source_path = doc.metadata.get('source', 'Unknown Source')
+        page = doc.metadata.get('page', None)
+        
+        source_id = (source_path, page)
+        if source_id in seen_sources:
+            continue
+        seen_sources.add(source_id)
+        
+        display_source = os.path.basename(source_path)
+        page_info = f" (Page {page})" if page is not None else ""
+        
+        # Truncate very long content
+        if len(content) > 800:
+            content = content[:800] + "... [truncated]"
+        
+        context_part = f"[{display_source}{page_info}] (Relevance: {score:.2f}):\n{content}"
+        context_parts.append(context_part)
+        
+        source_info.append({
+            'id': i+1,
+            'file_name': display_source,
+            'page': page,
+            'relevance': score,
+            'full_path': source_path
+        })
+    
+    context_text = "\n\n---\n\n".join(context_parts)
+    return context_text, source_info
+
+# --- Updated API Endpoint ---
+@app.post("/ask", response_model=QueryResponse)
+async def ask_question_improved(query: Query):
+    """
+    Improved question endpoint with enhanced accuracy and user experience
+    """
+    cleanup_expired_conversations()
+    
+    # Session management
+    session_id = query.session_id or str(uuid.uuid4())
+    if session_id not in conversations:
+        conversations[session_id] = {
+            "messages": [],
+            "created_at": datetime.utcnow(),
+            "last_accessed": datetime.utcnow()
+        }
+    else:
+        conversations[session_id]["last_accessed"] = datetime.utcnow()
+    
+    # Validate input
+    user_question = query.question.strip()
+    if not user_question:
+        return QueryResponse(
+            response=None,
+            error="Question cannot be empty.",
+            context_found=False,
+            sources=[],
+            session_id=session_id,
+            confidence_score=0.0,
+            expand_available=False
+        )
+    
+    # Process with improvements
+    response = process_query_improved(user_question, session_id, query.response_style)
+    return response
+
+# ... [Include all the utility functions from the original code] ...
+def cleanup_expired_conversations():
+    """Remove conversations older than 1 hour"""
+    now = datetime.utcnow()
+    expired_sessions = [
+        session_id for session_id, data in conversations.items()
+        if now - data['last_accessed'] > timedelta(hours=1)
+    ]
+    for session_id in expired_sessions:
+        del conversations[session_id]
+
+def load_database():
+    """Load the Chroma database"""
+    try:
+        embedding_function = HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2")
+        db = Chroma(
+            collection_name="default",
+            embedding_function=embedding_function,
+            persist_directory=CHROMA_PATH,
+            client_settings=CHROMA_CLIENT_SETTINGS
+        )
+        return db
+    except Exception as e:
+        logger.error(f"Failed to load database: {e}")
+        raise
+
+def get_conversation_context(session_id: str, max_messages: int = 8) -> str:
+    """Get conversation context (shortened for better performance)"""
+    if session_id not in conversations:
+        return ""
+    messages = conversations[session_id]['messages'][-max_messages:]
+    context_parts = []
+    for msg in messages:
+        role = msg['role'].upper()
+        content = msg['content'][:400] + "..." if len(msg['content']) > 400 else msg['content']
+        context_parts.append(f"{role}: {content}")
+    return "\n".join(context_parts) if context_parts else ""
+
+def add_to_conversation(session_id: str, role: str, content: str, sources: Optional[List] = None):
+    """Add message to conversation"""
+    if session_id not in conversations:
+        conversations[session_id] = {
+            'messages': [],
+            'created_at': datetime.utcnow(),
+            'last_accessed': datetime.utcnow()
+        }
+    message = {
+        'role': role,
+        'content': content,
+        'timestamp': datetime.utcnow().isoformat(),
+        'sources': sources or []
+    }
+    conversations[session_id]['messages'].append(message)
+    conversations[session_id]['last_accessed'] = datetime.utcnow()
+    if len(conversations[session_id]['messages']) > 20:
+        conversations[session_id]['messages'] = conversations[session_id]['messages'][-20:]
+
+def parse_multiple_questions(query_text: str) -> List[str]:
+    """Parse multiple questions from input"""
+    questions = []
+    query_text = query_text.strip()
+    
+    if '?' in query_text and not query_text.endswith('?'):
+        parts = query_text.split('?')
+        for part in parts:
+            part = part.strip()
+            if part:
+                questions.append(part + '?')
+    else:
+        final_question = query_text
+        if not final_question.endswith('?') and '?' not in final_question:
+            final_question += '?'
+        questions = [final_question]
+    
+    return questions
+
+def call_openrouter_api(prompt: str, api_key: str, api_base: str = "https://openrouter.ai/api/v1") -> str:
+    """Call OpenRouter API with fallback models"""
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+        "HTTP-Referer": "http://localhost:8000",
+        "X-Title": "Legal Assistant"
+    }
+    
+    models_to_try = [
+        "deepseek/deepseek-chat-v3-0324:free",
+        "microsoft/phi-3-mini-128k-instruct:free",
+        "meta-llama/llama-3.2-3b-instruct:free"
+    ]
+    
+    for model in models_to_try:
+        try:
+            payload = {
+                "model": model,
+                "messages": [{"role": "user", "content": prompt}],
+                "temperature": 0.5,  # Lower temperature for more consistent responses
+                "max_tokens": 2000,
+                "top_p": 0.9
+            }
+            
+            response = requests.post(f"{api_base}/chat/completions", headers=headers, json=payload, timeout=60)
+            
+            if response.status_code == 200:
+                result = response.json()
+                if 'choices' in result and result['choices']:
+                    content = result['choices'][0]['message']['content']
+                    if content and content.strip():
+                        return content.strip()
+        except Exception as e:
+            logger.error(f"Error with model {model}: {e}")
+            continue
+    
+    return "I apologize, but I'm experiencing technical difficulties. Please try again."
+
+# Additional endpoints...
+@app.get("/health")
+def health_check():
+    """Health check endpoint"""
+    return {"status": "healthy", "version": "3.0.0", "improvements": ["enhanced_retrieval", "confidence_scoring", "response_styles"]}
+
+if __name__ == "__main__":
+    import uvicorn
+    port = int(os.environ.get("PORT", 8000))
+    uvicorn.run(app, host="0.0.0.0", port=port)
 # --- Load NLP Models ---
 # Load models once at startup for efficiency
 try:
