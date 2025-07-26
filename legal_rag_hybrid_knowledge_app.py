@@ -1,4 +1,5 @@
 # this version uses it's pretrained knowledge while anwering questions(risk of hallucination), but it is more creative.
+# this is by far the best
 
 from fastapi import FastAPI, Request, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
