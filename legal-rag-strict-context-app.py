@@ -1,5 +1,6 @@
 # - Enhanced app.py with Restored Analytical Depth & Improved Retrieval -
 # Standard library imports
+#this version enforces strick RAG architecture, safer for legal domain, prevents any potential misinformation
 from fastapi import FastAPI, Request, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
