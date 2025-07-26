@@ -20,6 +20,11 @@ from sentence_transformers import SentenceTransformer
 import numpy as np
 from chromadb.config import Settings # Import Settings for Chroma client
 
+# Set up logging FIRST
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+# --- End Logging Setup ---
+
 # --- ChromaDB Configuration ---
 # Match the database path and settings used in generate_db.py
 CHROMA_PATH = os.path.abspath(os.path.join(os.getcwd(), "chromadb-database"))
@@ -33,10 +38,6 @@ CHROMA_CLIENT_SETTINGS = Settings(
     is_persistent=True
 )
 # --- End ChromaDB Configuration ---
-
-# Set up logging
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
 
 # In-memory conversation storage (in production, use Redis or a database)
 conversations: Dict[str, Dict] = {}
@@ -58,7 +59,7 @@ except Exception as e:
     sentence_model = None
 # --- End Load NLP Models ---
 
-app = FastAPI(title="Legal Assistant API", description="Retrieval-Augmented Generation API for Legal Documents", version="2.1.0")
+app = FastAPI(title="Legal Assistant API", description="Retrieval-Augmented Generation API for Legal Documents", version="2.1.1")
 
 # Configure CORS
 app.add_middleware(
