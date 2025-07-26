@@ -546,6 +546,30 @@ def split_documents(documents: List[Document]) -> List[Document]:
 
     return chunks
 
+def filter_metadata_for_chroma(metadata: dict) -> dict:
+    """Filter metadata to only include types supported by ChromaDB (str, int, float, bool)"""
+    filtered = {}
+    
+    for key, value in metadata.items():
+        if isinstance(value, (str, int, float, bool)):
+            filtered[key] = value
+        elif isinstance(value, dict):
+            # Convert dict to JSON string for storage
+            if value:  # Only if dict is not empty
+                import json
+                try:
+                    filtered[f"{key}_json"] = json.dumps(value)
+                except (TypeError, ValueError):
+                    # Skip if can't serialize
+                    pass
+        elif isinstance(value, list):
+            # Convert list to comma-separated string if it contains simple types
+            if value and all(isinstance(item, (str, int, float, bool)) for item in value):
+                filtered[f"{key}_list"] = ", ".join(str(item) for item in value[:10])  # Limit to first 10 items
+        # Skip other complex types
+    
+    return filtered
+
 def create_vector_database(chunks: List[Document]):
     """Create the Chroma vector database with explicit settings and error handling."""
     global CHROMA_PATH
@@ -594,9 +618,9 @@ def create_vector_database(chunks: List[Document]):
             
             print(f"[CREATION] Adding batch {batch_num}/{total_batches} ({len(batch)} chunks)...")
             
-            # Extract texts and metadatas for this batch
+            # Extract texts and filter metadatas for this batch
             texts = [chunk.page_content for chunk in batch]
-            metadatas = [chunk.metadata for chunk in batch]
+            metadatas = [filter_metadata_for_chroma(chunk.metadata) for chunk in batch]
             ids = [f"chunk_{chunk.metadata.get('chunk_id', i + j)}" for j, chunk in enumerate(batch)]
             
             # Add to database
@@ -653,9 +677,9 @@ def create_vector_database(chunks: List[Document]):
                     persist_directory=CHROMA_PATH
                 )
                 
-                # Add documents
+                # Add documents with filtered metadata
                 texts = [chunk.page_content for chunk in chunks]
-                metadatas = [chunk.metadata for chunk in chunks]
+                metadatas = [filter_metadata_for_chroma(chunk.metadata) for chunk in chunks]
                 db.add_texts(texts=texts, metadatas=metadatas)
                 
                 print("✅ Retry successful!")
