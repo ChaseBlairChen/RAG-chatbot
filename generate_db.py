@@ -8,6 +8,9 @@ from langchain_chroma import Chroma
 from langchain_huggingface import HuggingFaceEmbeddings
 from langchain.schema import Document
 import logging
+import sqlite3
+import chromadb
+from chromadb.config import Settings
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
@@ -16,8 +19,43 @@ logger = logging.getLogger(__name__)
 CHROMA_PATH = os.path.join(os.getcwd(), "my_chroma_db")
 DOCUMENTS_FOLDER = "documents"
 
+def fix_chroma_database():
+    """Fix Chroma database schema issues"""
+    try:
+        # Remove corrupted database
+        if os.path.exists(CHROMA_PATH):
+            logger.info(f"Removing corrupted database: {CHROMA_PATH}")
+            shutil.rmtree(CHROMA_PATH)
+        
+        # Create directory
+        os.makedirs(CHROMA_PATH, exist_ok=True)
+        
+        # Initialize a new ChromaDB client with proper settings
+        client = chromadb.PersistentClient(
+            path=CHROMA_PATH,
+            settings=Settings(
+                anonymized_telemetry=False,
+                allow_reset=True
+            )
+        )
+        
+        # Test client
+        client.heartbeat()
+        logger.info("✅ ChromaDB client initialized successfully")
+        
+        return True
+        
+    except Exception as e:
+        logger.error(f"Failed to fix Chroma database: {e}")
+        return False
+
 def main():
-    print("=== Enhanced Document Ingestion Script ===\n")
+    print("=== Fixed Document Ingestion Script ===\n")
+    
+    # Fix database issues first
+    if not fix_chroma_database():
+        print("❌ Failed to fix database issues")
+        return
     
     # Check if documents folder exists
     if not os.path.exists(DOCUMENTS_FOLDER):
@@ -54,8 +92,56 @@ def check_unstructured_availability():
         print("   Install with: pip install unstructured[pdf]")
         return False
 
+def extract_entities_and_aliases(text: str, filename: str) -> dict:
+    """Enhanced entity extraction with alias mapping for better retrieval"""
+    entities = {
+        'bills': [],
+        'acts': [],
+        'organizations': [],
+        'people': [],
+        'aliases': {}  # Map aliases to canonical names
+    }
+    
+    # Common bill aliases and their canonical names
+    bill_aliases = {
+        'one big beautiful bill': ['Inflation Reduction Act', 'IRA', 'H.R.5376'],
+        'build back better': ['Build Back Better Act', 'BBB', 'H.R.5376'],
+        'infrastructure bill': ['Infrastructure Investment and Jobs Act', 'IIJA', 'H.R.3684'],
+        'chips act': ['CHIPS and Science Act', 'H.R.4346'],
+        'climate bill': ['Inflation Reduction Act', 'Climate provisions'],
+    }
+    
+    # Extract potential bill names and numbers
+    import re
+    
+    # H.R./S. bill patterns
+    hr_pattern = r'\b(?:H\.R\.|S\.)\s*\d+(?:-\d+)?\b'
+    hr_matches = re.findall(hr_pattern, text, re.IGNORECASE)
+    entities['bills'].extend(hr_matches)
+    
+    # Act patterns
+    act_pattern = r'\b([A-Z][a-zA-Z\s]+(?:Act|Bill|Resolution))\b'
+    act_matches = re.findall(act_pattern, text)
+    entities['acts'].extend([act.strip() for act in act_matches if len(act.strip()) > 5])
+    
+    # Add filename-based context
+    if 'inflation' in filename.lower() or 'ira' in filename.lower():
+        entities['acts'].append('Inflation Reduction Act')
+        entities['aliases']['one big beautiful bill'] = 'Inflation Reduction Act'
+    
+    if 'infrastructure' in filename.lower():
+        entities['acts'].append('Infrastructure Investment and Jobs Act')
+        entities['aliases']['infrastructure bill'] = 'Infrastructure Investment and Jobs Act'
+    
+    # Merge common aliases
+    for alias, canonical_names in bill_aliases.items():
+        if any(name.lower() in text.lower() for name in canonical_names):
+            entities['aliases'][alias] = canonical_names[0]
+    
+    return entities
+
 def load_pdf_with_unstructured(pdf_path: str) -> List[Document]:
-    """Load PDF using Unstructured with advanced processing"""
+    """Load PDF using Unstructured with enhanced entity extraction"""
     try:
         from unstructured.partition.pdf import partition_pdf
         from unstructured.cleaners.core import clean_extra_whitespace, clean_dashes
@@ -65,8 +151,7 @@ def load_pdf_with_unstructured(pdf_path: str) -> List[Document]:
         # Partition PDF with advanced options
         elements = partition_pdf(
             filename=pdf_path,
-            # Basic options that work reliably
-            strategy="fast",  # Use "hi_res" for better quality but slower processing
+            strategy="fast",
             infer_table_structure=True,
             chunking_strategy="by_title",
             max_characters=1000,
@@ -76,6 +161,10 @@ def load_pdf_with_unstructured(pdf_path: str) -> List[Document]:
         
         documents = []
         file_name = os.path.basename(pdf_path)
+        
+        # Extract entities from the entire document first
+        full_text = " ".join([str(element) for element in elements])
+        entities = extract_entities_and_aliases(full_text, file_name)
         
         # Group elements into logical sections
         current_section = ""
@@ -108,7 +197,9 @@ def load_pdf_with_unstructured(pdf_path: str) -> List[Document]:
                             "section_title": current_title,
                             "processing_method": "unstructured",
                             "element_type": "section",
-                            "section_number": section_count
+                            "section_number": section_count,
+                            "entities": entities,  # Add entity metadata
+                            "aliases": entities.get('aliases', {})
                         }
                     )
                     documents.append(doc)
@@ -130,7 +221,9 @@ def load_pdf_with_unstructured(pdf_path: str) -> List[Document]:
                             "section_title": current_title,
                             "processing_method": "unstructured",
                             "element_type": "section",
-                            "section_number": section_count
+                            "section_number": section_count,
+                            "entities": entities,
+                            "aliases": entities.get('aliases', {})
                         }
                     )
                     documents.append(doc)
@@ -148,7 +241,9 @@ def load_pdf_with_unstructured(pdf_path: str) -> List[Document]:
                         "section_title": f"Table - {current_title}",
                         "processing_method": "unstructured",
                         "element_type": "table",
-                        "section_number": section_count
+                        "section_number": section_count,
+                        "entities": entities,
+                        "aliases": entities.get('aliases', {})
                     }
                 )
                 documents.append(doc)
@@ -169,7 +264,9 @@ def load_pdf_with_unstructured(pdf_path: str) -> List[Document]:
                     "section_title": current_title,
                     "processing_method": "unstructured",
                     "element_type": "section",
-                    "section_number": section_count
+                    "section_number": section_count,
+                    "entities": entities,
+                    "aliases": entities.get('aliases', {})
                 }
             )
             documents.append(doc)
@@ -182,7 +279,7 @@ def load_pdf_with_unstructured(pdf_path: str) -> List[Document]:
         raise e
 
 def load_pdf_with_pymupdf(pdf_path: str) -> List[Document]:
-    """Fallback PDF processing with PyMuPDF"""
+    """Fallback PDF processing with PyMuPDF and entity extraction"""
     try:
         import fitz
         
@@ -190,6 +287,14 @@ def load_pdf_with_pymupdf(pdf_path: str) -> List[Document]:
         documents = []
         pdf_document = fitz.open(pdf_path)
         file_name = os.path.basename(pdf_path)
+        
+        # Extract full text for entity analysis
+        full_text = ""
+        for page_num in range(len(pdf_document)):
+            page = pdf_document.load_page(page_num)
+            full_text += page.get_text() + "\n"
+        
+        entities = extract_entities_and_aliases(full_text, file_name)
         
         for page_num in range(len(pdf_document)):
             page = pdf_document.load_page(page_num)
@@ -206,7 +311,9 @@ def load_pdf_with_pymupdf(pdf_path: str) -> List[Document]:
                         "page_number": page_num + 1,
                         "total_pages": len(pdf_document),
                         "processing_method": "pymupdf",
-                        "element_type": "page"
+                        "element_type": "page",
+                        "entities": entities,
+                        "aliases": entities.get('aliases', {})
                     }
                 )
                 documents.append(doc)
@@ -220,21 +327,25 @@ def load_pdf_with_pymupdf(pdf_path: str) -> List[Document]:
         raise e
 
 def load_text_file(file_path: str, file_type: str) -> List[Document]:
-    """Load text or markdown files"""
+    """Load text or markdown files with entity extraction"""
     try:
         with open(file_path, 'r', encoding='utf-8') as f:
             content = f.read()
         
         content = clean_text_simple(content)
+        file_name = os.path.basename(file_path)
+        entities = extract_entities_and_aliases(content, file_name)
         
         if len(content.strip()) > 50:
             doc = Document(
                 page_content=content,
                 metadata={
                     "source": file_path,
-                    "file_name": os.path.basename(file_path),
+                    "file_name": file_name,
                     "file_type": file_type,
-                    "processing_method": "direct_load"
+                    "processing_method": "direct_load",
+                    "entities": entities,
+                    "aliases": entities.get('aliases', {})
                 }
             )
             return [doc]
@@ -270,7 +381,7 @@ def clean_text_simple(text: str) -> str:
     return '\n'.join(cleaned_lines).strip()
 
 def generate_data_store():
-    """Main function to create the vector database"""
+    """Main function to create the vector database with proper error handling"""
     
     # Check what processing methods are available
     use_unstructured = check_unstructured_availability()
@@ -363,10 +474,10 @@ def validate_documents(documents: List[Document]) -> List[Document]:
     return clean_documents
 
 def split_documents(documents: List[Document]) -> List[Document]:
-    """Split documents into chunks for RAG"""
+    """Split documents into chunks for RAG with entity preservation"""
     text_splitter = RecursiveCharacterTextSplitter(
         chunk_size=800,
-        chunk_overlap=100,
+        chunk_overlap=200,  # Increased overlap for better entity context
         length_function=len,
         add_start_index=True,
         separators=["\n\n", "\n", ". ", " ", ""]
@@ -375,10 +486,18 @@ def split_documents(documents: List[Document]) -> List[Document]:
     chunks = text_splitter.split_documents(documents)
     print(f"✂️  Split into {len(chunks)} chunks")
     
-    # Add chunk metadata
+    # Add chunk metadata and preserve entity information
     for i, chunk in enumerate(chunks):
         chunk.metadata["chunk_id"] = i
         chunk.metadata["chunk_size"] = len(chunk.page_content)
+        
+        # Preserve entity metadata from parent document
+        if 'entities' in chunk.metadata:
+            # Add entity aliases to chunk content for better matching
+            aliases = chunk.metadata.get('aliases', {})
+            if aliases:
+                alias_text = "\nKnown aliases: " + ", ".join([f"{alias} ({canonical})" for alias, canonical in aliases.items()])
+                chunk.page_content += alias_text
     
     if chunks:
         print(f"\n📄 First chunk preview:")
@@ -388,58 +507,36 @@ def split_documents(documents: List[Document]) -> List[Document]:
     return chunks
 
 def create_vector_database(chunks: List[Document]):
-    """Create the Chroma vector database"""
-    
-    # Remove existing database
-    if os.path.exists(CHROMA_PATH):
-        print(f"🗑️  Removing existing database: {CHROMA_PATH}")
-        shutil.rmtree(CHROMA_PATH)
-    
-    os.makedirs(os.path.dirname(CHROMA_PATH), exist_ok=True)
-    
-    # Use same embedding model as app.py
-    embedding_function = HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2")
+    """Create the Chroma vector database with proper error handling"""
     
     try:
+        # Use same embedding model as app.py
+        embedding_function = HuggingFaceEmbeddings(
+            model_name="all-MiniLM-L6-v2",
+            model_kwargs={'device': 'cpu'},
+            encode_kwargs={'normalize_embeddings': True}
+        )
+        
         print(f"🔄 Creating vector database with {len(chunks)} chunks...")
         
-        # Process in batches for stability
-        batch_size = 20
-        db = None
+        # Create database with proper settings
+        db = Chroma.from_documents(
+            chunks,
+            embedding_function,
+            persist_directory=CHROMA_PATH,
+            collection_name="default"
+        )
         
-        for i in range(0, len(chunks), batch_size):
-            batch = chunks[i:i + batch_size]
-            batch_num = (i // batch_size) + 1
-            total_batches = (len(chunks) + batch_size - 1) // batch_size
-            
-            print(f"   Processing batch {batch_num}/{total_batches} ({len(batch)} chunks)")
-            
-            if db is None:
-                # Create database with first batch
-                db = Chroma.from_documents(
-                    batch, 
-                    embedding_function, 
-                    persist_directory=CHROMA_PATH
-                )
-            else:
-                # Add subsequent batches
-                db.add_documents(batch)
+        print("💾 Database created successfully")
         
-        if db:
-            # Database persists automatically with persist_directory
-            print("💾 Database persisted automatically")
-            
-            # Test the database
-            test_results = db.similarity_search("test", k=3)
-            print(f"✅ Database created successfully!")
-            print(f"   Test search returned {len(test_results)} results")
-            
-            # Print summary
-            print_summary(chunks)
-            
-        else:
-            raise Exception("Failed to create database")
-            
+        # Test the database
+        test_results = db.similarity_search("test", k=3)
+        print(f"✅ Database created successfully!")
+        print(f"   Test search returned {len(test_results)} results")
+        
+        # Print summary
+        print_summary(chunks)
+        
     except Exception as e:
         print(f"❌ Error creating database: {e}")
         if os.path.exists(CHROMA_PATH):
@@ -457,6 +554,9 @@ def print_summary(chunks: List[Document]):
     unstructured_chunks = sum(1 for chunk in chunks if chunk.metadata.get('processing_method') == 'unstructured')
     pymupdf_chunks = sum(1 for chunk in chunks if chunk.metadata.get('processing_method') == 'pymupdf')
     
+    # Count entities
+    total_entities = sum(len(chunk.metadata.get('entities', {}).get('acts', [])) for chunk in chunks)
+    
     print(f"\n📊 Database Summary:")
     print(f"   • Total chunks: {len(chunks)}")
     print(f"   • PDF chunks: {pdf_chunks}")
@@ -465,6 +565,7 @@ def print_summary(chunks: List[Document]):
     print(f"   • Average chunk size: {avg_chunk_size:.0f} characters")
     print(f"   • Enhanced processing: {unstructured_chunks} chunks")
     print(f"   • Standard processing: {pymupdf_chunks} chunks")
+    print(f"   • Total entities extracted: {total_entities}")
     print(f"   • Database location: {CHROMA_PATH}")
 
 def check_dependencies():
@@ -491,6 +592,13 @@ def check_dependencies():
     except ImportError:
         print("❌ langchain_huggingface missing")
         missing.append("langchain_huggingface")
+    
+    try:
+        import chromadb
+        print("✅ chromadb available")
+    except ImportError:
+        print("❌ chromadb missing")
+        missing.append("chromadb")
     
     # Optional dependency
     try:
