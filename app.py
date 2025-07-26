@@ -1,5 +1,4 @@
 # --- app.py ---
-# --- app.py ---
 from fastapi import FastAPI, Request, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -23,12 +22,16 @@ import numpy as np
 # Set up logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
-CHROMA_PATH = os.path.join(os.getcwd(), "my_chroma_db")
+
+# --- SUGGESTION: Match the new database folder name ---
+CHROMA_PATH = os.path.join(os.getcwd(), "chromadb-database") # Changed from "my_chroma_db"
+# --- END SUGGESTION ---
 logger.info(f"Checking CHROMA_PATH: {CHROMA_PATH}")
 if os.path.exists(CHROMA_PATH):
     logger.info(f"Database contents: {os.listdir(CHROMA_PATH)}")
 else:
     logger.warning("Database folder not found!")
+
 # In-memory conversation storage (in production, use Redis or a database)
 conversations: Dict[str, Dict] = {}
 
@@ -139,7 +142,6 @@ def enhanced_retrieval(db, query_text: str, k: int = 5):
         logger.info(f"Searching for: '{query_text}' with k={k}")
         results = []
         try:
-            # --- SUGGESTION 4: Increase relevance threshold ---
             results = db.similarity_search_with_relevance_scores(query_text, k=k*3)
             logger.info(f"Similarity search returned {len(results)} results")
         except Exception as e:
@@ -856,7 +858,7 @@ def ask_question(query: Query):
             # --- SUGGESTION 1: More specific error message ---
             return QueryResponse(
                 response=None,
-                error=f"Failed to load vector database: {str(e)}. This might be due to a schema mismatch. Try deleting the 'my_chroma_db' folder and re-running the ingestion script.",
+                error=f"Failed to load vector database: {str(e)}. This might be due to a schema mismatch. Try deleting the '{CHROMA_PATH}' folder and re-running the ingestion script.",
                 context_found=False,
                 session_id=session_id
             )
