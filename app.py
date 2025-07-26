@@ -122,7 +122,7 @@ def load_database():
         logger.error(f"Failed to load database: {e}")
         raise
 
-def get_conversation_context(session_id: str, max_messages: int = 10) -> str:
+def get_conversation_context(session_id: str, max_messages: int = 12) -> str:
     """Get recent conversation history as context"""
     if session_id not in conversations:
         return ""
@@ -131,11 +131,15 @@ def get_conversation_context(session_id: str, max_messages: int = 10) -> str:
     for msg in messages:
         role = msg['role'].upper()
         content = msg['content']
-        # Truncate very long messages for context prompt
-        if len(content) > 500:
-            content = content[:500] + "..."
+        # For conversation history, keep more content but still truncate very long messages
+        if len(content) > 800:
+            content = content[:800] + "..."
         context_parts.append(f"{role}: {content}")
-    return "\n".join(context_parts)
+    
+    # If we have conversation history, make it clear this is ongoing context
+    if context_parts:
+        return "Previous conversation:\n" + "\n".join(context_parts)
+    return ""
 
 def add_to_conversation(session_id: str, role: str, content: str, sources: Optional[List] = None):
     """Add a message to the conversation history"""
@@ -153,9 +157,9 @@ def add_to_conversation(session_id: str, role: str, content: str, sources: Optio
     }
     conversations[session_id]['messages'].append(message)
     conversations[session_id]['last_accessed'] = datetime.utcnow()
-    # Keep only last 20 messages to prevent memory issues
-    if len(conversations[session_id]['messages']) > 20:
-        conversations[session_id]['messages'] = conversations[session_id]['messages'][-20:]
+    # Keep only last 30 messages to prevent memory issues but maintain more history
+    if len(conversations[session_id]['messages']) > 30:
+        conversations[session_id]['messages'] = conversations[session_id]['messages'][-30:]
 
 def parse_multiple_questions(query_text: str) -> List[str]:
     """Parse a query that might contain multiple questions."""
@@ -199,26 +203,37 @@ def parse_multiple_questions(query_text: str) -> List[str]:
 # Placeholder for more complex agent logic if needed in the future
 # For now, we'll use the core retrieval augmented by conversation history
 
-def enhanced_retrieval(db, query_text: str, conversation_history_context: str, k: int = 5) -> Tuple[List, Any]:
+def enhanced_retrieval(db, query_text: str, conversation_history_context: str, k: int = 8) -> Tuple[List, Any]:
     """
     Performs retrieval, potentially using conversation history to refine the query.
     This is a simplified version based on the original logic.
     """
-    combined_query = f"{conversation_history_context}\n\n{query_text}".strip() if conversation_history_context else query_text
-    logger.info(f"[RETRIEVAL] Searching for combined query: '{combined_query}'")
+    # First, try the original query
+    logger.info(f"[RETRIEVAL] Searching for query: '{query_text}'")
     
     try:
-        # Perform similarity search with scores
-        results_with_scores = db.similarity_search_with_relevance_scores(combined_query, k=k)
+        # Perform similarity search with scores using original query
+        results_with_scores = db.similarity_search_with_relevance_scores(query_text, k=k)
         logger.info(f"[RETRIEVAL] Found {len(results_with_scores)} raw results")
         
-        # Filter based on a minimum relevance score if needed (adjust threshold)
-        # filtered_results = [(doc, score) for doc, score in results_with_scores if score > 0.2]
-        # logger.info(f"[RETRIEVAL] Filtered to {len(filtered_results)} results")
+        # If we have conversation history and few results, try combined query
+        if conversation_history_context and len(results_with_scores) < 3:
+            combined_query = f"{conversation_history_context}\n\n{query_text}".strip()
+            logger.info(f"[RETRIEVAL] Trying combined query: '{combined_query}'")
+            combined_results = db.similarity_search_with_relevance_scores(combined_query, k=k)
+            # Use combined results if they're better
+            if len(combined_results) > len(results_with_scores):
+                results_with_scores = combined_results
         
-        # For simplicity, return all results found
-        docs, scores = zip(*results_with_scores) if results_with_scores else ([], [])
-        return list(docs), {"query_used": combined_query, "scores": list(scores)}
+        # Filter based on a minimum relevance score
+        filtered_results = [(doc, score) for doc, score in results_with_scores if score > 0.2]
+        logger.info(f"[RETRIEVAL] Filtered to {len(filtered_results)} results with score > 0.2")
+        
+        # If we have filtered results, use them; otherwise use all results
+        final_results = filtered_results if filtered_results else results_with_scores
+        
+        docs, scores = zip(*final_results) if final_results else ([], [])
+        return list(docs), {"query_used": query_text, "scores": list(scores)}
         
     except Exception as e:
         logger.error(f"[RETRIEVAL] Search failed: {e}")
@@ -270,26 +285,31 @@ def create_context(results: List, search_result: Dict, questions: List[str]) -> 
     return context_text, source_info
 
 # --- Prompt Template ---
-ENHANCED_PROMPT_TEMPLATE = """You are a helpful assistant engaged in an ongoing conversation. Answer the current question using the provided context sources and conversation history.
+ENHANCED_PROMPT_TEMPLATE = """You are a legal assistant providing detailed, comprehensive answers about legal documents and policies. Your role is to analyze legal documents thoroughly and provide informative, well-structured responses.
 
-IMPORTANT INSTRUCTIONS FOR RESPONSE:
-1.  **Answer Strictly from Context:** Base your answer primarily and strictly on the provided CURRENT CONTEXT and CONVERSATION HISTORY. If the context contains no information related to the query, explicitly state that.
-2.  **Clarification Dialogue:** If the question is ambiguous or refers to a term that could have multiple meanings (e.g., 'the bill'), and the context contains information about multiple potential referents, ask a clarifying question to the user before providing a specific answer. For example:
-    User: "What does the bill say about tax credits?"
-    Assistant: "Could you please specify which bill you are referring to? Are you asking about the Inflation Reduction Act, the Infrastructure Investment and Jobs Act, or another specific bill?"
-3.  **Citation Format:** When citing information, use the document name format shown in brackets, for example [RCW 10.01.240.pdf] or [RCW 10.01.240.pdf (Page 1)] - do NOT use generic SOURCE numbers.
-4.  **Conversation Awareness:** If the user is asking a follow-up question or referring to something mentioned earlier in the conversation, acknowledge that context in your response.
+RESPONSE REQUIREMENTS:
+1. **Provide Detailed Analysis**: Give comprehensive explanations, not brief summaries. Include relevant details, context, and implications.
+2. **Use All Available Context**: Analyze ALL provided documents and sources. Don't limit yourself to just one source when multiple are available.
+3. **Structure Your Response**: Use clear paragraphs, bullet points when appropriate, and logical organization.
+4. **Answer Follow-up Questions**: If the user asks about a document you just cited, provide detailed information from that document.
+5. **Cite Properly**: Use document names as shown in context (e.g., [document_name.pdf] or [document_name.pdf (Page X)]).
+6. **Be Conversational and Context-Aware**: 
+   - Always acknowledge and reference previous parts of our conversation when relevant
+   - If the user asks about something mentioned earlier, explicitly connect it to the previous discussion
+   - Build upon previous answers and maintain conversational flow
+   - Reference earlier questions and answers when they provide context for the current question
 
-CONVERSATION HISTORY:
+CONVERSATION HISTORY (ALWAYS consider this context):
 {conversation_history}
 
-CURRENT CONTEXT:
+AVAILABLE LEGAL DOCUMENTS AND CONTEXT:
 {context}
 
-CURRENT QUESTION(S):
+USER QUESTION:
 {questions}
 
-Please provide a helpful answer based on the context above and the conversation history. When you reference information, cite it using the document name in brackets as shown in the context (e.g., [document_name.pdf] or [document_name.pdf (Page X)]).
+Provide a comprehensive, detailed response using the available legal documents AND the conversation history above. If this question relates to something we discussed earlier, acknowledge that connection. Include specific provisions, explanations, and relevant details from the sources. If multiple documents are relevant, synthesize information from all of them. Aim for thorough, informative responses that fully address the user's question while maintaining awareness of our ongoing conversation.
+
 RESPONSE:"""
 # --- End Prompt Template ---
 
@@ -323,9 +343,9 @@ def call_openrouter_api(prompt: str, api_key: str, api_base: str = "https://open
             payload = {
                 "model": model,
                 "messages": [{"role": "user", "content": prompt}],
-                "temperature": 0.3,
-                "max_tokens": 1500,
-                "top_p": 0.9
+                "temperature": 0.7,
+                "max_tokens": 3000,
+                "top_p": 0.95
             }
             logger.info(f"Attempting model {i+1}/{len(models_to_try)}: {model}")
             
@@ -438,11 +458,12 @@ def process_query(question: str, session_id: str) -> QueryResponse:
 
         # --- Get Conversation History ---
         conversation_history_list = conversations.get(session_id, {}).get('messages', [])
-        conversation_history_context = get_conversation_context(session_id, max_messages=8)
+        conversation_history_context = get_conversation_context(session_id, max_messages=12)
+        logger.info(f"Using conversation history with {len(conversation_history_list)} total messages")
         # --- End Get Conversation History ---
 
         # --- Perform Retrieval ---
-        results, search_result = enhanced_retrieval(db, combined_query, conversation_history_context, k=5)
+        results, search_result = enhanced_retrieval(db, combined_query, conversation_history_context, k=8)
         logger.info(f"Retrieved {len(results)} results")
         # --- End Perform Retrieval ---
 
@@ -470,11 +491,12 @@ def process_query(question: str, session_id: str) -> QueryResponse:
             formatted_questions = questions[0]
 
         formatted_prompt = ENHANCED_PROMPT_TEMPLATE.format(
-            conversation_history=conversation_history_context if conversation_history_context else "No previous conversation.",
+            conversation_history=conversation_history_context if conversation_history_context else "No previous conversation in this session.",
             context=context_text,
             questions=formatted_questions
         )
         logger.info(f"Prompt length: {len(formatted_prompt)} characters")
+        logger.info(f"Conversation history length: {len(conversation_history_context)} characters")
         # --- End Format Prompt ---
 
         # --- Call LLM ---
@@ -499,7 +521,7 @@ def process_query(question: str, session_id: str) -> QueryResponse:
         # --- End Call LLM ---
 
         # --- Post-process Response (Add Sources) ---
-        MIN_RELEVANCE_SCORE_FOR_SOURCE_DISPLAY = 0.3
+        MIN_RELEVANCE_SCORE_FOR_SOURCE_DISPLAY = 0.25
         relevant_source_info = [source for source in source_info if source['relevance'] >= MIN_RELEVANCE_SCORE_FOR_SOURCE_DISPLAY]
 
         # Add sources section only if there are relevant sources
