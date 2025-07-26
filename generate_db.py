@@ -16,9 +16,9 @@ from chromadb.config import Settings
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# --- IMPORTANT: Ensure this path matches your app.py CHROMA_PATH ---
-# Using an absolute path can prevent issues related to the current working directory
-CHROMA_PATH = os.path.join(os.getcwd(), "my_chroma_db")
+# --- SUGGESTION: Change database folder name to avoid conflicts ---
+CHROMA_PATH = os.path.join(os.getcwd(), "chromadb-database") # Changed from "my_chroma_db"
+# --- END SUGGESTION ---
 DOCUMENTS_FOLDER = "documents"
 
 def fix_chroma_database():
@@ -149,14 +149,7 @@ def extract_entities_and_aliases(text: str, filename: str) -> dict:
             # Add the alias mapping
             entities['aliases'][alias] = canonical_name
         # Also check if the alias itself is mentioned (might be useful for direct alias mentions in docs)
-        elif alias.lower() in lower_text:
-             # If alias is mentioned but canonical name isn't explicitly, we can still map it
-             # This helps if the document uses the alias but not the full formal name
-             # However, we should be careful not to add mappings that aren't strongly supported.
-             # Let's add it only if the canonical name isn't already strongly present.
-             # A simple heuristic: if canonical name is not in acts list, add the alias mapping.
-             # This is a bit nuanced, but aims to capture alias usage.
-             pass # We'll rely on the filename logic and canonical name presence for now.
+        # This part is nuanced; rely on filename logic and canonical name presence for now.
 
     # Deduplicate acts list
     entities['acts'] = list(set(entities['acts']))
@@ -670,7 +663,7 @@ def print_summary(chunks: List[Document]):
     print(f"   • Average chunk size: {avg_chunk_size:.0f} characters")
     print(f"   • Enhanced processing (Unstructured): {unstructured_chunks} chunks")
     print(f"   • Standard processing (PyMuPDF): {pymupdf_chunks} chunks")
-    print(f"   • Total 'Act' names mentioned in metadata: {total_acts_mentioned}")
+    print(f"   • Total 'Act' names mentioned in meta {total_acts_mentioned}")
     print(f"   • Chunks containing alias information: {chunks_with_aliases}")
     print(f"   • Database location: {CHROMA_PATH}")
 
