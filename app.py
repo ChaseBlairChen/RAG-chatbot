@@ -293,7 +293,7 @@ Please provide a helpful answer based on the context above and the conversation 
 RESPONSE:"""
 # --- End Prompt Template ---
 
-def call_openrouter_api(prompt: str, api_key: str, api_base: str = "https://openrouter.ai/api/v1") -> str:
+def call_openrouter_api(prompt: str, api_key: str, api_base: str = "deepseek/deepseek-r1-0528:free") -> str:
     """
     Call the OpenRouter API (or compatible service) with the given prompt.
     Includes fallback logic for models.
