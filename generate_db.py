@@ -1,5 +1,6 @@
 # --- generate_db.py ---
 import os
+import sys  # Added this import
 import shutil
 import glob
 from typing import List
@@ -23,9 +24,29 @@ CHROMA_PATH = os.path.abspath(os.path.join(os.getcwd(), "chromadb-database")) # 
 DOCUMENTS_FOLDER = "documents"
 
 def fix_chroma_database():
-    """Fix Chroma database schema issues with aggressive cleanup."""
+    """Fix Chroma database schema issues with aggressive cleanup and client reset."""
     try:
         print(f"[INIT] Intended database path is: {CHROMA_PATH}")
+        
+        # CRITICAL: Reset ChromaDB's internal client cache first
+        # This is the key fix for your error
+        try:
+            import chromadb
+            from chromadb.api.client import SharedSystemClient
+            
+            # Reset the shared system client cache
+            if hasattr(SharedSystemClient, '_identifer_to_system'):
+                SharedSystemClient._identifer_to_system.clear()
+                print("[INIT] Cleared ChromaDB client cache")
+            
+            # Alternative approach - clear the entire module cache
+            if 'chromadb.api.client' in sys.modules:
+                delattr(sys.modules['chromadb.api.client'], '_identifer_to_system') if hasattr(sys.modules['chromadb.api.client'], '_identifer_to_system') else None
+                print("[INIT] Reset ChromaDB module state")
+                
+        except Exception as cache_clear_error:
+            print(f"[INIT] Cache clear attempt failed (this might be OK): {cache_clear_error}")
+        
         # --- AGGRESSIVE CLEANUP ---
         if os.path.exists(CHROMA_PATH):
             print(f"[INIT] Found existing directory at {CHROMA_PATH}. Removing it to ensure a clean start.")
@@ -66,23 +87,15 @@ def fix_chroma_database():
         os.makedirs(CHROMA_PATH, exist_ok=True)
         print(f"[INIT] Created clean database directory: {CHROMA_PATH}")
 
-        # Small delay to allow OS to release handles (might help on some systems)
+        # Longer delay to allow OS and ChromaDB to release handles
         import time
-        time.sleep(0.2)
+        time.sleep(1.0)  # Increased from 0.2 to 1.0 seconds
 
-        # Initialize a new ChromaDB client with known settings to test the path
-        # This step is mostly for verification; the actual DB creation will use LangChain.
-        client = chromadb.PersistentClient(
-            path=CHROMA_PATH,
-            settings=Settings(
-                anonymized_telemetry=False,
-                allow_reset=True
-            )
-        )
-        # Test client
-        client.heartbeat()
-        logger.info("✅ ChromaDB client initialized successfully on clean path")
+        # DON'T test the client here - let the main creation process handle it
+        # This avoids creating a client with different settings than what will be used later
+        print("✅ Database path prepared successfully")
         return True
+        
     except Exception as e:
         logger.error(f"Failed to fix Chroma database: {e}")
         return False
@@ -533,11 +546,10 @@ def split_documents(documents: List[Document]) -> List[Document]:
 
     return chunks
 
-# --- MODIFIED: Simplified and Robust Database Creation ---
 def create_vector_database(chunks: List[Document]):
-    """Create the Chroma vector database with aggressive cleanup and simplified creation."""
-    global CHROMA_PATH # Ensure we are using the correct path
-
+    """Create the Chroma vector database with explicit settings and error handling."""
+    global CHROMA_PATH
+    
     try:
         # Use same embedding model as app.py
         embedding_function = HuggingFaceEmbeddings(
@@ -547,39 +559,121 @@ def create_vector_database(chunks: List[Document]):
         )
         print(f"🔄 Creating vector database with {len(chunks)} chunks...")
 
-        # --- PRIMARY METHOD: Chroma.from_documents ---
-        # This is the standard and generally most reliable way if the path is clean.
-        # The aggressive cleanup in fix_chroma_database should ensure this works.
-        print("[CREATION] Attempting database creation with Chroma.from_documents...")
-        db = Chroma.from_documents(
-            chunks,
-            embedding_function,
+        # --- ROBUST METHOD: Create client with explicit settings ---
+        print("[CREATION] Creating ChromaDB client with explicit settings...")
+        
+        # Import required settings
+        from chromadb.config import Settings
+        
+        # Create client with explicit settings that match what we want
+        client_settings = Settings(
             persist_directory=CHROMA_PATH,
-            collection_name="default"
+            anonymized_telemetry=False,
+            allow_reset=True,
+            is_persistent=True
         )
-        print("[CREATION] Database created successfully with Chroma.from_documents.")
-        # --- END PRIMARY METHOD ---
-
+        
+        # Create the Chroma instance with explicit client settings
+        db = Chroma(
+            collection_name="default",
+            embedding_function=embedding_function,
+            persist_directory=CHROMA_PATH,
+            client_settings=client_settings
+        )
+        
+        print("[CREATION] ChromaDB client created successfully.")
+        
+        # Add documents in batches to avoid memory issues
+        batch_size = 100
+        total_chunks = len(chunks)
+        
+        for i in range(0, total_chunks, batch_size):
+            batch = chunks[i:i + batch_size]
+            batch_num = (i // batch_size) + 1
+            total_batches = (total_chunks + batch_size - 1) // batch_size
+            
+            print(f"[CREATION] Adding batch {batch_num}/{total_batches} ({len(batch)} chunks)...")
+            
+            # Extract texts and metadatas for this batch
+            texts = [chunk.page_content for chunk in batch]
+            metadatas = [chunk.metadata for chunk in batch]
+            ids = [f"chunk_{chunk.metadata.get('chunk_id', i + j)}" for j, chunk in enumerate(batch)]
+            
+            # Add to database
+            db.add_texts(
+                texts=texts,
+                metadatas=metadatas,
+                ids=ids
+            )
+        
+        print("[CREATION] All chunks added successfully.")
+        
+        # Persist the database
+        print("[CREATION] Persisting database...")
+        # Note: Modern versions of Chroma auto-persist, but we can be explicit
+        if hasattr(db, 'persist'):
+            db.persist()
+        
         print("💾 Database creation process completed.")
+        
         # Test the database
         test_results = db.similarity_search("test", k=3)
         print(f"✅ Database created and tested successfully!")
         print(f"   Test search returned {len(test_results)} results")
+        
         # Print summary
         print_summary(chunks)
 
     except Exception as e:
         print(f"❌ Error during database creation process: {e}")
-        # Final attempt to clean up if it failed during creation
+        print(f"   Full error type: {type(e).__name__}")
+        
+        # If it's the specific "different settings" error, try one more approach
+        if "different settings" in str(e):
+            print("🔄 Attempting to resolve 'different settings' error...")
+            try:
+                # Force garbage collection to clear any cached clients
+                import gc
+                gc.collect()
+                
+                # Try to reset ChromaDB's internal state more aggressively
+                import chromadb
+                if hasattr(chromadb, '_client_cache'):
+                    chromadb._client_cache.clear()
+                
+                # Wait a bit more
+                import time
+                time.sleep(2.0)
+                
+                # Try the creation one more time with a different collection name
+                print("🔄 Retrying with fresh client...")
+                db = Chroma(
+                    collection_name=f"default_{int(time.time())}",  # Unique collection name
+                    embedding_function=embedding_function,
+                    persist_directory=CHROMA_PATH
+                )
+                
+                # Add documents
+                texts = [chunk.page_content for chunk in chunks]
+                metadatas = [chunk.metadata for chunk in chunks]
+                db.add_texts(texts=texts, metadatas=metadatas)
+                
+                print("✅ Retry successful!")
+                print_summary(chunks)
+                return
+                
+            except Exception as retry_error:
+                print(f"❌ Retry also failed: {retry_error}")
+        
+        # Final cleanup attempt
         if os.path.exists(CHROMA_PATH):
             try:
                 shutil.rmtree(CHROMA_PATH)
                 print("🧹 Final cleanup: Database path removed after creation failure.")
             except Exception as cleanup_e:
-                print(f"🧹 Final cleanup failed: Could not remove database path after failure: {cleanup_e}")
-        raise # Re-raise the original error
-
-# --- END MODIFICATION ---
+                print(f"🧹 Final cleanup failed: {cleanup_e}")
+        
+        raise  # Re-raise the original error
 
 def print_summary(chunks: List[Document]):
     """Print a summary of the created database"""
