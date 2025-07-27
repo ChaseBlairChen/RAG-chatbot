@@ -470,55 +470,68 @@ class SafeDocumentProcessor:
                 # Create document from bytes
                 pdf_doc = fitz.open(stream=pdf_content, filetype="pdf")
                 
-                if pdf_doc.page_count == 0:
-                    raise ValueError("PDF contains no pages")
-                
-                text = ""
-                pages_with_text = 0
-                tables_found = 0
-                
-                for page_num in range(pdf_doc.page_count):
-                    page = pdf_doc[page_num]
+                try:
+                    if pdf_doc.page_count == 0:
+                        raise ValueError("PDF contains no pages")
                     
-                    # Extract text with better formatting
-                    page_text = page.get_text()
-                    if page_text and page_text.strip():
-                        text += f"[Page {page_num + 1}]\n{page_text}\n"
-                        pages_with_text += 1
+                    text = ""
+                    pages_with_text = 0
+                    tables_found = 0
+                    total_pages = pdf_doc.page_count
+                    
+                    for page_num in range(total_pages):
+                        try:
+                            page = pdf_doc[page_num]
+                            
+                            # Extract text with better formatting
+                            page_text = page.get_text()
+                            if page_text and page_text.strip():
+                                text += f"[Page {page_num + 1}]\n{page_text}\n"
+                                pages_with_text += 1
+                            else:
+                                warnings.append(f"Page {page_num + 1} contains no extractable text")
+                            
+                            # Extract tables (PyMuPDF can detect table-like structures)
+                            try:
+                                tables = page.find_tables()
+                                if tables:
+                                    for table_num, table in enumerate(tables):
+                                        try:
+                                            table_data = table.extract()
+                                            if table_data:
+                                                text += f"\n[TABLE {table_num + 1} FROM PAGE {page_num + 1}]\n"
+                                                for row in table_data:
+                                                    if row:
+                                                        clean_row = [str(cell) if cell else "" for cell in row]
+                                                        text += " | ".join(clean_row) + "\n"
+                                                text += "[/TABLE]\n\n"
+                                                tables_found += 1
+                                        except Exception as table_error:
+                                            logger.debug(f"Table extraction error: {table_error}")
+                            except Exception as e:
+                                # Table extraction is optional
+                                logger.debug(f"Table detection error: {e}")
+                                
+                        except Exception as page_error:
+                            warnings.append(f"Error processing page {page_num + 1}: {str(page_error)}")
+                            logger.warning(f"Page {page_num + 1} error: {page_error}")
+                    
+                    if pages_with_text == 0:
+                        raise ValueError("No readable text found in any PDF pages")
+                    
+                    if pages_with_text < total_pages:
+                        warnings.append(f"Only {pages_with_text} of {total_pages} pages contained extractable text")
+                    
+                    if tables_found > 0:
+                        warnings.append(f"PyMuPDF extracted {tables_found} tables with preserved structure")
                     else:
-                        warnings.append(f"Page {page_num + 1} contains no extractable text")
+                        warnings.append("PyMuPDF processed PDF successfully - excellent for legal documents")
                     
-                    # Extract tables (PyMuPDF can detect table-like structures)
-                    try:
-                        tables = page.find_tables()
-                        for table_num, table in enumerate(tables):
-                            table_data = table.extract()
-                            if table_data:
-                                text += f"\n[TABLE {table_num + 1} FROM PAGE {page_num + 1}]\n"
-                                for row in table_data:
-                                    if row:
-                                        clean_row = [str(cell) if cell else "" for cell in row]
-                                        text += " | ".join(clean_row) + "\n"
-                                text += "[/TABLE]\n\n"
-                                tables_found += 1
-                    except Exception as e:
-                        # Table extraction is optional
-                        pass
-                
-                pdf_doc.close()
-                
-                if pages_with_text == 0:
-                    raise ValueError("No readable text found in any PDF pages")
-                
-                if pages_with_text < pdf_doc.page_count:
-                    warnings.append(f"Only {pages_with_text} of {pdf_doc.page_count} pages contained extractable text")
-                
-                if tables_found > 0:
-                    warnings.append(f"PyMuPDF extracted {tables_found} tables with preserved structure")
-                else:
-                    warnings.append("PyMuPDF processed PDF successfully - excellent for legal documents")
-                
-                return text, warnings
+                    return text, warnings
+                    
+                finally:
+                    # Always close the document
+                    pdf_doc.close()
                 
             except Exception as e:
                 warnings.append(f"PyMuPDF processing failed: {str(e)}, falling back to pdfplumber")
