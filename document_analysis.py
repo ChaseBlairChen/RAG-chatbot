@@ -1,5 +1,5 @@
-## Hallucination-Free Document Analysis System
-# Only extracts verifiable information - says "Failed to extract" when uncertain
+# Clean Hallucination-Free Document Analysis System
+# Fixed syntax errors and optimized for PyMuPDF
 
 from fastapi import FastAPI, Request, HTTPException, File, UploadFile, Form
 from fastapi.middleware.cors import CORSMiddleware
@@ -16,13 +16,12 @@ from dataclasses import dataclass
 from enum import Enum
 import io
 import tempfile
-import os
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Lightweight document processing - PyMuPDF first approach
+# Clean document processing imports - PyMuPDF focus
 try:
     import PyPDF2
     import docx
@@ -34,7 +33,7 @@ try:
         print("✅ PyMuPDF available - using high-quality PDF processing (lightweight)")
     except ImportError:
         PYMUPDF_AVAILABLE = False
-        print("⚠️ PyMuPDF not available")
+        print("⚠️ PyMuPDF not available - install with: pip install PyMuPDF")
     
     # pdfplumber (good secondary option ~20MB)
     try:
@@ -43,18 +42,15 @@ try:
         print("✅ pdfplumber available - using enhanced PDF extraction")
     except ImportError:
         PDFPLUMBER_AVAILABLE = False
-        print("⚠️ pdfplumber not available")
+        print("⚠️ pdfplumber not available - install with: pip install pdfplumber")
     
-    # Skip heavy Unstructured to save 3-4GB of space
-    UNSTRUCTURED_AVAILABLE = False
-    print("ℹ️ Using lightweight PDF processing - skipping heavy ML dependencies")
+    print("ℹ️ Using lightweight PDF processing - no heavy ML dependencies")
         
 except ImportError:
-    print("Document processing libraries not installed. Run: pip install PyMuPDF python-docx pdfplumber")
+    print("Document processing libraries not installed.")
+    print("Run: pip install PyMuPDF python-docx pdfplumber")
     PYMUPDF_AVAILABLE = False
     PDFPLUMBER_AVAILABLE = False
-    UNSTRUCTURED_AVAILABLE = Falsestructured[all-docs]")
-    UNSTRUCTURED_AVAILABLE = False
 
 class VerifiableExtractor:
     """Extract only verifiable information from documents with source locations"""
@@ -819,6 +815,11 @@ def health_check():
             "❌ No interpretation or guessing",
             "⚠️ Explicit failure reporting"
         ],
+        "pdf_processing": {
+            "pymupdf_available": PYMUPDF_AVAILABLE,
+            "pdfplumber_available": PDFPLUMBER_AVAILABLE,
+            "processing_order": ["PyMuPDF (best)", "pdfplumber (good)", "PyPDF2 (basic)"]
+        },
         "timestamp": datetime.utcnow().isoformat()
     }
 
@@ -876,6 +877,7 @@ def get_safe_interface():
             <div class="feature">
                 <h3>🔍 Available Endpoints</h3>
                 <p><strong>POST /safe-document-analysis</strong> - Extract only verifiable facts</p>
+                <p><strong>POST /document-analysis</strong> - Compatibility endpoint (same as above)</p>
                 <p><strong>POST /verify-extraction</strong> - Verify specific claims against document</p>
                 <p><strong>GET /extraction-capabilities</strong> - See detailed capabilities and limitations</p>
             </div>
