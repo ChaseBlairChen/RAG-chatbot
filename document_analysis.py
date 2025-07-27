@@ -920,7 +920,129 @@ class DocumentProcessor:
             return text
         except Exception as e:
             raise HTTPException(status_code=400, detail=f"Error processing DOCX: {str(e)}")
+# Add this endpoint to your existing backend code
+# Insert this BEFORE the enhanced endpoint
 
+@app.post("/document-analysis", response_model=LegalAnalysisResponse)
+async def standard_document_analysis_endpoint(
+    file: UploadFile = File(...),
+    analysis_type: str = Form(...),
+    session_id: Optional[str] = Form(None),
+    response_style: str = Form("balanced")
+):
+    """Standard document analysis endpoint that the frontend expects"""
+    cleanup_expired_conversations()
+    
+    session_id = session_id or str(uuid.uuid4())
+    if session_id not in conversations:
+        conversations[session_id] = {
+            "messages": [],
+            "created_at": datetime.utcnow(),
+            "last_accessed": datetime.utcnow()
+        }
+    else:
+        conversations[session_id]["last_accessed"] = datetime.utcnow()
+
+    try:
+        # Process the document and extract text
+        document_text, doc_type = DocumentProcessor.process_document(file)
+        
+        # Map frontend analysis types to backend analysis types
+        analysis_type_mapping = {
+            'summarize': 'smart_summary',
+            'extract-clauses': 'clause_analysis', 
+            'missing-clauses': 'missing_elements',
+            'risk-flagging': 'risk_assessment',
+            'timeline-extraction': 'timeline_intelligence',
+            'obligations': 'party_obligations'
+        }
+        
+        # Get the mapped analysis type, fallback to original if not found
+        mapped_analysis_type = analysis_type_mapping.get(analysis_type, analysis_type)
+        
+        # Use enhanced AI analysis
+        analysis_data = enhanced_document_analyzer.analyze_document_with_ai(
+            document_text, 
+            mapped_analysis_type
+        )
+        
+        # Get API key
+        api_key = os.environ.get("OPENAI_API_KEY")
+        if not api_key:
+            return LegalAnalysisResponse(
+                response=None,
+                error="API configuration error. Please contact administrator.",
+                context_found=False,
+                sources=[],
+                session_id=session_id,
+                confidence_score=0.0,
+                expand_available=False
+            )
+
+        # Call enhanced LLM with the AI-generated prompt
+        api_base = os.environ.get("OPENAI_API_BASE", "https://openrouter.ai/api/v1")
+        raw_response = call_openrouter_api_enhanced(analysis_data['prompt'], api_key, api_base)
+        
+        # Enhanced document info with AI insights
+        document_info = {
+            'filename': file.filename,
+            'file_type': doc_type,
+            'file_size': len(document_text),
+            'ai_analysis': analysis_data['document_analysis'],
+            'metadata': analysis_data['metadata']
+        }
+        
+        # Calculate enhanced confidence score
+        confidence_score = calculate_enhanced_confidence(document_text, analysis_data, raw_response)
+        
+        # Add AI insights to response (but keep it cleaner for standard endpoint)
+        clean_response = clean_response_for_frontend(raw_response, analysis_data)
+        
+        # Update conversation with enhanced context
+        user_message = f"Document Analysis: {analysis_type} for {file.filename}"
+        add_to_conversation(session_id, "user", user_message, document_info=document_info)
+        add_to_conversation(session_id, "assistant", clean_response, document_info=document_info)
+        
+        return LegalAnalysisResponse(
+            response=clean_response,
+            error=None,
+            context_found=True,
+            sources=[],
+            session_id=session_id,
+            confidence_score=confidence_score,
+            expand_available=True,
+            document_info=document_info,
+            analysis_metadata={
+                'analysis_type': analysis_type,
+                'mapped_type': mapped_analysis_type,
+                'ai_enhanced': True,
+                'processing_time': datetime.utcnow().isoformat()
+            }
+        )
+        
+    except Exception as e:
+        logger.error(f"Document analysis failed: {e}", exc_info=True)
+        return LegalAnalysisResponse(
+            response=None,
+            error=f"Document analysis failed: {str(e)}",
+            context_found=False,
+            sources=[],
+            session_id=session_id,
+            confidence_score=0.0,
+            expand_available=False
+        )
+
+def clean_response_for_frontend(response: str, analysis_data: Dict) -> str:
+    """Clean up the AI response for frontend display"""
+    # Remove any excessive AI insights headers that might clutter the frontend
+    if response.startswith("🤖 **AI Document Intelligence Summary**"):
+        # Find the end of the header section
+        parts = response.split("---", 2)
+        if len(parts) >= 3:
+            response = parts[2].strip()
+    
+    # Keep the response clean but informative
+    return response
 
 
 @app.post("/document-analysis-enhanced", response_model=LegalAnalysisResponse)
