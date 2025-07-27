@@ -30,6 +30,24 @@ try:
     
     # Try to import Unstructured for better PDF processing (compatible with v0.11.8)
     try:
+        # Check for required dependencies first
+        missing_deps = []
+        
+        try:
+            import pdf2image
+        except ImportError:
+            missing_deps.append("pdf2image")
+            
+        try:
+            import PIL
+        except ImportError:
+            missing_deps.append("Pillow")
+        
+        if missing_deps:
+            print(f"⚠️ Missing dependencies for Unstructured: {', '.join(missing_deps)}")
+            print("Install with: pip install pdf2image Pillow")
+            raise ImportError(f"Missing dependencies: {missing_deps}")
+        
         # Try newer import paths first
         try:
             from unstructured.partition.auto import partition
@@ -48,7 +66,10 @@ try:
         UNSTRUCTURED_AVAILABLE = False
         print("⚠️ Unstructured library not available - using basic PDF processing")
         print(f"Import error: {e}")
-        print("For better PDF processing, try: pip install 'unstructured[pdf]' or pip install 'unstructured[all-docs]'")
+        print("For better PDF processing, install:")
+        print("  pip install pdf2image Pillow")
+        print("  pip install 'unstructured[pdf]'")
+        print("Or for full support: pip install 'unstructured[all-docs]'")
         
 except ImportError:
     print("Document processing libraries not installed. Run: pip install PyPDF2 python-docx pdfplumber unstructured[all-docs]")
@@ -443,7 +464,7 @@ class SafeDocumentProcessor:
         if len(pdf_content) == 0:
             raise ValueError("PDF file is empty")
         
-        # Try Unstructured library first (best quality)
+        # Try Unstructured library first (best quality) - only if dependencies available
         if UNSTRUCTURED_AVAILABLE:
             try:
                 # Write to temporary file for Unstructured
@@ -495,7 +516,10 @@ class SafeDocumentProcessor:
                             elements_found += 1
                     
                     # Clean up temp file
-                    os.unlink(temp_file_path)
+                    try:
+                        os.unlink(temp_file_path)
+                    except:
+                        pass  # Don't fail if cleanup fails
                     
                     if elements_found == 0:
                         raise ValueError("Unstructured found no elements in PDF")
@@ -513,6 +537,8 @@ class SafeDocumentProcessor:
                     
             except Exception as e:
                 warnings.append(f"Unstructured setup failed: {str(e)}, using fallback methods")
+        else:
+            warnings.append("Unstructured not available, using pdfplumber for enhanced extraction")
         
         # Fallback to pdfplumber (medium quality)
         pdf_file = io.BytesIO(pdf_content)
