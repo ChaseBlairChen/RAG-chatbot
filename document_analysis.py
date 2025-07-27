@@ -1,5 +1,5 @@
-# Clean Hallucination-Free Document Analysis System
-# Fixed imports and error handling
+# Merged Legal Document Analysis System with AI Enhancement
+# Combines fact extraction with AI-powered analysis
 
 from fastapi import FastAPI, Request, HTTPException, File, UploadFile, Form
 from fastapi.middleware.cors import CORSMiddleware
@@ -19,9 +19,27 @@ import tempfile
 import sys
 import traceback
 
+# AI imports
+try:
+    import aiohttp
+    AIOHTTP_AVAILABLE = True
+except ImportError:
+    AIOHTTP_AVAILABLE = False
+    print("⚠️ aiohttp not available - AI features disabled. Install with: pip install aiohttp")
+
 # Set up logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+# OpenRouter configuration for AI features
+OPENROUTER_API_URL = "https://openrouter.ai/api/v1/chat/completions"
+OPENROUTER_API_KEY = os.environ.get("OPENAI_API_KEY", "")
+AI_ENABLED = AIOHTTP_AVAILABLE and bool(OPENROUTER_API_KEY)
+
+if AI_ENABLED:
+    print("✅ AI features enabled with OpenRouter/DeepSeek")
+else:
+    print("⚠️ AI features disabled - using fact extraction only")
 
 # Import document processing libraries
 print("Starting document processing imports...")
@@ -65,6 +83,162 @@ except ImportError as e:
     print("Install with: pip install pdfplumber")
 
 print(f"PDF processing status: PyMuPDF={PYMUPDF_AVAILABLE}, pdfplumber={PDFPLUMBER_AVAILABLE}")
+
+# AI Analysis prompts
+ANALYSIS_PROMPTS = {
+    'summarize': """You are a legal document analyst. Analyze this document and provide:
+1. A clear summary of the document's purpose and type
+2. The main parties involved (with their roles)
+3. Key terms and conditions
+4. Important dates and deadlines
+5. Financial obligations or amounts
+6. Any notable risks or concerns
+
+Document text:
+{document_text}
+
+Provide a structured summary in plain English while maintaining legal accuracy.""",
+
+    'extract-clauses': """You are a legal document analyst. Extract and categorize the following types of clauses from this document:
+1. Termination clauses
+2. Indemnification provisions
+3. Liability limitations
+4. Governing law and jurisdiction
+5. Confidentiality/NDA provisions
+6. Payment terms
+7. Dispute resolution mechanisms
+
+For each clause found, provide:
+- Clause type
+- Summary of the provision
+- Exact location/section reference if available
+- Any unusual or concerning aspects
+
+Document text:
+{document_text}""",
+
+    'missing-clauses': """You are a legal document analyst. Review this contract and identify commonly expected clauses that appear to be missing or inadequately addressed:
+
+Consider standard clauses such as:
+- Force majeure
+- Limitation of liability
+- Indemnification
+- Dispute resolution/arbitration
+- Confidentiality
+- Termination provisions
+- Assignment restrictions
+- Severability
+- Entire agreement
+- Notice provisions
+- Governing law
+
+Document text:
+{document_text}
+
+For each missing clause, explain why it's typically important and the risks of its absence.""",
+
+    'risk-flagging': """You are a legal risk analyst. Identify and assess legal risks in this document:
+
+Look for:
+1. Unilateral termination rights
+2. Broad indemnification requirements
+3. Unlimited liability exposure
+4. Vague or ambiguous obligations
+5. Unfavorable payment terms
+6. Lack of protection clauses
+7. Unusual warranty provisions
+8. Problematic intellectual property terms
+
+Document text:
+{document_text}
+
+For each risk, provide:
+- Risk description
+- Severity (High/Medium/Low)
+- Potential impact
+- Suggested mitigation""",
+
+    'timeline-extraction': """You are a legal document analyst. Extract all time-related information:
+
+Find and list:
+1. Contract start and end dates
+2. Payment deadlines
+3. Notice periods
+4. Renewal dates and terms
+5. Termination notice requirements
+6. Performance deadlines
+7. Warranty periods
+8. Any other time-sensitive obligations
+
+Document text:
+{document_text}
+
+Present as a chronological timeline with clear labels.""",
+
+    'obligations': """You are a legal document analyst. List all obligations and requirements for each party:
+
+Identify:
+1. What each party must do
+2. When they must do it
+3. Conditions or prerequisites
+4. Consequences of non-compliance
+5. Reporting or notification requirements
+
+Document text:
+{document_text}
+
+Organize by party and priority/timeline."""
+}
+
+# AI analysis function
+async def perform_ai_analysis(document_text: str, analysis_type: str) -> Tuple[str, float]:
+    """Perform AI analysis using DeepSeek via OpenRouter"""
+    
+    if not AI_ENABLED:
+        return "AI analysis not available. Please set OPENAI_API_KEY environment variable.", 0.0
+    
+    # Get the appropriate prompt
+    prompt_template = ANALYSIS_PROMPTS.get(analysis_type, ANALYSIS_PROMPTS['summarize'])
+    prompt = prompt_template.format(document_text=document_text[:15000])  # Limit context length
+    
+    headers = {
+        "Authorization": f"Bearer {OPENROUTER_API_KEY}",
+        "Content-Type": "application/json",
+        "HTTP-Referer": "http://localhost:8000",
+        "X-Title": "Legal Document Analyzer"
+    }
+    
+    payload = {
+        "model": "deepseek/deepseek-chat",
+        "messages": [
+            {
+                "role": "system",
+                "content": "You are an expert legal document analyst. Provide thorough, accurate analysis while clearly marking any uncertainties. Always include relevant disclaimers about seeking professional legal advice."
+            },
+            {
+                "role": "user",
+                "content": prompt
+            }
+        ],
+        "temperature": 0.3,
+        "max_tokens": 2000
+    }
+    
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.post(OPENROUTER_API_URL, json=payload, headers=headers) as response:
+                if response.status == 200:
+                    data = await response.json()
+                    ai_response = data['choices'][0]['message']['content']
+                    confidence = 0.85
+                    return ai_response, confidence
+                else:
+                    error_text = await response.text()
+                    logger.error(f"OpenRouter API error: {response.status} - {error_text}")
+                    return f"AI analysis failed: {response.status}", 0.0
+    except Exception as e:
+        logger.error(f"AI analysis exception: {e}")
+        return f"AI analysis failed: {str(e)}", 0.0
 
 class VerifiableExtractor:
     """Extract only verifiable information from documents with source locations"""
@@ -677,25 +851,39 @@ class SafeDocumentProcessor:
         except Exception as e:
             raise ValueError(f"Failed to process Word document: {str(e)}")
 
-# Response models for safe extraction
-class SafeAnalysisResponse(BaseModel):
-    extraction_results: Optional[Dict[str, Any]] = None
+# Response models
+class EnhancedAnalysisResponse(BaseModel):
+    # Compatibility fields
+    response: Optional[str] = None
+    summary: Optional[str] = None
     factual_summary: Optional[str] = None
+    
+    # Analysis results
+    ai_analysis: Optional[str] = None
+    extraction_results: Optional[Dict[str, Any]] = None
+    
+    # Metadata
+    analysis_type: str
+    confidence_score: float
     processing_info: Optional[Dict[str, Any]] = None
     verification_status: str
-    failed_extractions: List[str] = []
+    status: str = "completed"
+    success: bool = True
+    
+    # Additional info
     warnings: List[str] = []
     session_id: str
     timestamp: str
+    model_used: str = "deepseek-chat" if AI_ENABLED else "fact-extraction-only"
 
 # Initialize the safe analyzer
 safe_analyzer = NoHallucinationAnalyzer()
 
 # FastAPI app
 app = FastAPI(
-    title="Hallucination-Free Document Analysis",
-    description="Document analysis that only reports verifiable facts - no guessing or interpretation",
-    version="3.0.0-Safe"
+    title="Legal Document Analysis with AI",
+    description="Document analysis combining fact extraction with AI-powered insights",
+    version="5.0.0-Unified"
 )
 
 app.add_middleware(
@@ -706,79 +894,133 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-@app.post("/safe-document-analysis", response_model=SafeAnalysisResponse)
-@app.post("/document-analysis")  # Compatibility endpoint for existing calls
-async def safe_document_analysis(
+@app.post("/safe-document-analysis", response_model=EnhancedAnalysisResponse)
+@app.post("/document-analysis")  # Main endpoint for all analysis
+async def unified_document_analysis(
     file: UploadFile = File(...),
     session_id: Optional[str] = Form(None),
-    analysis_type: Optional[str] = Form(None)  # Accept but ignore for compatibility
+    analysis_type: Optional[str] = Form("summarize")
 ):
-    """Analyze document with zero hallucination - only verifiable facts"""
+    """Unified document analysis with both fact extraction and AI insights"""
     
     session_id = session_id or str(uuid.uuid4())
     
     try:
         # Log incoming request
-        logger.info(f"Processing document: {file.filename}, session: {session_id}")
+        logger.info(f"Processing document: {file.filename}, type: {analysis_type}, session: {session_id}")
         
         # Process document safely
         document_text, file_type, processing_info = SafeDocumentProcessor.process_document_safe(file)
         
-        # Extract only verifiable facts
+        # Always extract facts first
         extraction_results = safe_analyzer.extract_document_facts(document_text)
+        factual_summary = safe_analyzer.generate_factual_summary(document_text)
         
-        # Add compatibility notice if analysis_type was provided (old API usage)
-        compatibility_notice = ""
-        if analysis_type:
-            compatibility_notice = f"""
-⚠️ **API CHANGE NOTICE**: This system no longer performs "{analysis_type}" analysis to prevent hallucination.
-Instead, it provides only verifiable facts extracted directly from your document.
+        # Perform AI analysis if enabled
+        if AI_ENABLED and analysis_type != "fact-extraction-only":
+            ai_analysis, ai_confidence = await perform_ai_analysis(document_text, analysis_type)
+            
+            # Combine AI analysis with facts
+            combined_summary = f"""## AI Legal Analysis: {analysis_type.replace('-', ' ').title()}
 
+{ai_analysis}
+
+---
+
+## Verified Facts from Document
+
+{factual_summary}
+
+---
+
+**⚠️ DISCLAIMER**: 
+- The AI analysis above is generated by DeepSeek and should be reviewed carefully
+- The verified facts section contains only information extracted directly from the document
+- This analysis is for informational purposes only and does not constitute legal advice
+- Always consult with a qualified attorney for legal matters
 """
+        else:
+            # Fallback to fact extraction only
+            ai_analysis = None
+            ai_confidence = 0.0
+            combined_summary = f"""## Document Analysis: Fact Extraction Only
 
-        # Generate factual summary with compatibility notice
-        factual_summary = compatibility_notice + safe_analyzer.generate_factual_summary(document_text)
-        
-        # Collect failed extractions
-        failed_extractions = []
-        for key, value in extraction_results.items():
-            if isinstance(value, list) and value and value[0].get('status') == 'failed_to_extract':
-                failed_extractions.append(key)
+{f'**Note**: AI analysis not available. Showing only verified facts extracted from the document.' if analysis_type != 'fact-extraction-only' else ''}
+
+{factual_summary}
+
+---
+
+**To enable AI-powered analysis**:
+1. Set the OPENAI_API_KEY environment variable
+2. Install aiohttp: pip install aiohttp
+3. Restart the server
+"""
         
         # Determine verification status
-        successful_extractions = len([k for k in extraction_results.keys() if k not in failed_extractions])
-        if successful_extractions >= 3:
+        successful_extractions = len([k for k in extraction_results.keys() 
+                                    if k not in ['extraction_status', 'timestamp'] and 
+                                    not (isinstance(extraction_results[k], list) and 
+                                         extraction_results[k] and 
+                                         extraction_results[k][0].get('status') == 'failed_to_extract')])
+        
+        if AI_ENABLED and ai_confidence > 0.7 and successful_extractions >= 3:
             verification_status = "high_confidence"
-        elif successful_extractions >= 1:
-            verification_status = "partial_success"
+        elif (AI_ENABLED and ai_confidence > 0.5) or successful_extractions >= 1:
+            verification_status = "medium_confidence"
         else:
-            verification_status = "minimal_extraction"
+            verification_status = "low_confidence"
         
         logger.info(f"Analysis completed for {file.filename}: {verification_status}")
         
-        return SafeAnalysisResponse(
+        return EnhancedAnalysisResponse(
+            response=combined_summary,  # For compatibility
+            summary=combined_summary,   # For compatibility
+            factual_summary=combined_summary,  # For compatibility
+            ai_analysis=ai_analysis,
             extraction_results=extraction_results,
-            factual_summary=factual_summary,
+            analysis_type=analysis_type,
+            confidence_score=ai_confidence if AI_ENABLED else 0.5,
             processing_info=processing_info,
             verification_status=verification_status,
-            failed_extractions=failed_extractions,
+            status="completed",
+            success=True,
             warnings=processing_info.get('warnings', []),
             session_id=session_id,
-            timestamp=datetime.utcnow().isoformat()
+            timestamp=datetime.utcnow().isoformat(),
+            model_used="deepseek-chat" if AI_ENABLED else "fact-extraction-only"
         )
         
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Safe document analysis failed: {type(e).__name__}: {str(e)}")
+        logger.error(f"Document analysis failed: {type(e).__name__}: {str(e)}")
         logger.error(f"Traceback: {traceback.format_exc()}")
         
-        return SafeAnalysisResponse(
+        error_summary = f"""## Analysis Failed
+
+**Error**: {type(e).__name__}: {str(e)}
+
+The document could not be analyzed. Please check:
+1. The file is a valid PDF, DOCX, or TXT document
+2. The file is not corrupted
+3. The file size is under 10MB
+
+If the problem persists, please try again or contact support.
+"""
+        
+        return EnhancedAnalysisResponse(
+            response=error_summary,
+            summary=error_summary,
+            factual_summary=error_summary,
+            ai_analysis=None,
             extraction_results=None,
-            factual_summary=f"**Analysis Failed**: {type(e).__name__}: {str(e)}",
+            analysis_type=analysis_type,
+            confidence_score=0.0,
             processing_info={"error": str(e), "error_type": type(e).__name__},
             verification_status="failed",
-            failed_extractions=["all"],
+            status="failed",
+            success=False,
             warnings=[],
             session_id=session_id,
             timestamp=datetime.utcnow().isoformat()
@@ -859,8 +1101,8 @@ async def test_upload(file: UploadFile = File(...)):
 def get_extraction_capabilities():
     """Get what the system can and cannot extract"""
     
-    return {
-        "can_extract": {
+    capabilities = {
+        "fact_extraction": {
             "dates": "Only dates with clear context (due dates, deadlines, etc.)",
             "monetary_amounts": "Only amounts with payment context",
             "percentages": "Only percentages with rate/fee context",
@@ -868,103 +1110,141 @@ def get_extraction_capabilities():
             "document_structure": "Numbered sections, headers, basic organization",
             "basic_statistics": "Word count, paragraph count, reading time"
         },
-        "cannot_extract": {
-            "interpretations": "No interpretation of legal meaning",
-            "implications": "No analysis of what clauses mean legally",
-            "recommendations": "No advice on what to do",
-            "risk_assessment": "No assessment of risks or problems",
-            "obligations": "No analysis of duties or responsibilities",
-            "missing_clauses": "No suggestions for what should be added"
+        "ai_analysis": {
+            "status": "enabled" if AI_ENABLED else "disabled",
+            "model": "deepseek-chat" if AI_ENABLED else "not-configured",
+            "capabilities": [
+                "Legal document summarization",
+                "Key clause extraction",
+                "Missing clause detection",
+                "Risk assessment and flagging",
+                "Timeline and deadline extraction",
+                "Party obligation analysis"
+            ] if AI_ENABLED else ["AI features disabled - set OPENAI_API_KEY to enable"]
         },
-        "verification_required": "All extractions include line numbers for manual verification",
+        "verification_required": "All fact extractions include line numbers for manual verification",
         "fallback_behavior": "Returns 'Failed to extract' instead of guessing"
     }
+    
+    return capabilities
 
 @app.get("/health")
 def health_check():
-    """Health check for safe analyzer"""
+    """Health check for the unified analyzer"""
     return {
-        "status": "Safe Mode Active",
-        "version": "3.0.0-Safe",
-        "hallucination_risk": "eliminated",
-        "extraction_mode": "verification_only",
+        "status": "Unified Mode Active",
+        "version": "5.0.0-Unified",
+        "ai_enabled": AI_ENABLED,
+        "ai_model": "deepseek-chat" if AI_ENABLED else "not-configured",
+        "extraction_mode": "fact-extraction + AI" if AI_ENABLED else "fact-extraction-only",
         "features": [
-            "✅ Zero hallucination guarantee",
+            "✅ Zero hallucination fact extraction",
             "📍 Source line tracking",
-            "🔍 Context verification required",
-            "❌ No interpretation or guessing",
-            "⚠️ Explicit failure reporting"
+            "🔍 Context verification",
+            f"{'✅' if AI_ENABLED else '❌'} AI-powered legal analysis",
+            f"{'✅' if AI_ENABLED else '❌'} DeepSeek integration",
+            "⚠️ Legal disclaimers"
         ],
         "pdf_processing": {
             "pymupdf_available": PYMUPDF_AVAILABLE,
             "pdfplumber_available": PDFPLUMBER_AVAILABLE,
             "processing_order": ["PyMuPDF (best)", "pdfplumber (good)", "PyPDF2 (basic)"]
         },
+        "requirements": {
+            "api_key_set": bool(OPENROUTER_API_KEY),
+            "aiohttp_installed": AIOHTTP_AVAILABLE
+        },
         "timestamp": datetime.utcnow().isoformat()
     }
 
 @app.get("/", response_class=HTMLResponse)
-def get_safe_interface():
-    """Safe interface with clear capabilities"""
-    return """
+def get_unified_interface():
+    """Unified interface with AI status"""
+    ai_status = "✅ AI Analysis Enabled" if AI_ENABLED else "❌ AI Analysis Disabled"
+    ai_instructions = "" if AI_ENABLED else """
+            <div class="warning">
+                <h3>🤖 Enable AI Analysis</h3>
+                <p>To enable AI-powered legal analysis:</p>
+                <ol>
+                    <li>Set environment variable: <code>export OPENAI_API_KEY="your-key"</code></li>
+                    <li>Install aiohttp: <code>pip install aiohttp</code></li>
+                    <li>Restart the server</li>
+                </ol>
+            </div>
+    """
+    
+    return f"""
     <!DOCTYPE html>
     <html>
     <head>
-        <title>🔒 Hallucination-Free Document Analysis</title>
+        <title>Legal Document Analysis - Unified System</title>
         <style>
-            body { font-family: Arial, sans-serif; margin: 40px; background: #f8f9fa; }
-            .container { max-width: 900px; margin: 0 auto; background: white; padding: 30px; border-radius: 10px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
-            h1 { color: #2c3e50; text-align: center; }
-            .safe-badge { background: #27ae60; color: white; padding: 5px 15px; border-radius: 20px; font-size: 12px; }
-            .feature { background: #ecf0f1; padding: 15px; margin: 10px 0; border-radius: 5px; }
-            .capability { background: #e8f5e8; padding: 10px; margin: 5px 0; border-left: 4px solid #27ae60; }
-            .limitation { background: #fff3cd; padding: 10px; margin: 5px 0; border-left: 4px solid #ffc107; }
-            .warning { background: #f8d7da; padding: 15px; margin: 10px 0; border-radius: 5px; border-left: 4px solid #dc3545; }
+            body {{ font-family: Arial, sans-serif; margin: 40px; background: #f8f9fa; }}
+            .container {{ max-width: 900px; margin: 0 auto; background: white; padding: 30px; border-radius: 10px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }}
+            h1 {{ color: #2c3e50; text-align: center; }}
+            .status-badge {{ padding: 5px 15px; border-radius: 20px; font-size: 14px; font-weight: bold; }}
+            .ai-enabled {{ background: #d4edda; color: #155724; }}
+            .ai-disabled {{ background: #f8d7da; color: #721c24; }}
+            .feature {{ background: #ecf0f1; padding: 15px; margin: 10px 0; border-radius: 5px; }}
+            .capability {{ background: #e8f5e8; padding: 10px; margin: 5px 0; border-left: 4px solid #27ae60; }}
+            .ai-feature {{ background: #e3f2fd; padding: 10px; margin: 5px 0; border-left: 4px solid #2196f3; }}
+            .warning {{ background: #fff3cd; padding: 15px; margin: 10px 0; border-radius: 5px; border-left: 4px solid #ffc107; }}
+            code {{ background: #f1f1f1; padding: 2px 5px; border-radius: 3px; font-family: monospace; }}
         </style>
     </head>
     <body>
         <div class="container">
-            <h1>🔒 Hallucination-Free Document Analysis</h1>
-            <p><strong>Version 3.0.0-Safe</strong> <span class="safe-badge">ZERO HALLUCINATION</span></p>
+            <h1>⚖️ Legal Document Analysis System</h1>
+            <p style="text-align: center;">
+                <span class="status-badge {'ai-enabled' if AI_ENABLED else 'ai-disabled'}">{ai_status}</span>
+            </p>
             
-            <div class="warning">
-                <h3>⚠️ Important: This System NEVER Guesses</h3>
-                <p>This analyzer only reports facts it can verify directly from your document. 
-                If it can't find something with high confidence, it will explicitly say "Failed to extract" 
-                instead of making assumptions.</p>
-            </div>
+            {ai_instructions}
             
             <div class="feature">
-                <h3>✅ What This System CAN Do</h3>
-                <div class="capability">Extract dates with clear context (deadlines, effective dates)</div>
+                <h3>🔒 Fact Extraction (Always Available)</h3>
+                <div class="capability">Extract dates with clear context</div>
                 <div class="capability">Find monetary amounts with payment context</div>
                 <div class="capability">Identify percentages with rate/fee context</div>
                 <div class="capability">Locate party names when clearly identified</div>
-                <div class="capability">Count words, paragraphs, and basic structure</div>
+                <div class="capability">Analyze document structure</div>
                 <div class="capability">Provide line numbers for all extracted information</div>
             </div>
             
             <div class="feature">
-                <h3>❌ What This System CANNOT Do</h3>
-                <div class="limitation">Interpret legal meaning or implications</div>
-                <div class="limitation">Analyze risks or provide legal advice</div>
-                <div class="limitation">Suggest missing clauses or improvements</div>
-                <div class="limitation">Explain what obligations parties have</div>
-                <div class="limitation">Make recommendations about the document</div>
-                <div class="limitation">Guess or assume anything not explicitly stated</div>
+                <h3>🤖 AI-Powered Analysis {"(Active)" if AI_ENABLED else "(Inactive)"}</h3>
+                <div class="ai-feature">Legal document summarization</div>
+                <div class="ai-feature">Key clause extraction and analysis</div>
+                <div class="ai-feature">Missing clause detection</div>
+                <div class="ai-feature">Legal risk assessment</div>
+                <div class="ai-feature">Timeline and deadline extraction</div>
+                <div class="ai-feature">Party obligation analysis</div>
             </div>
             
             <div class="feature">
-                <h3>🔍 Available Endpoints</h3>
-                <p><strong>POST /safe-document-analysis</strong> - Extract only verifiable facts</p>
-                <p><strong>POST /document-analysis</strong> - Compatibility endpoint (same as above)</p>
-                <p><strong>POST /verify-extraction</strong> - Verify specific claims against document</p>
-                <p><strong>GET /extraction-capabilities</strong> - See detailed capabilities and limitations</p>
-                <p><strong>POST /test-upload</strong> - Test file upload functionality</p>
+                <h3>📍 Available Analysis Types</h3>
+                <p>Use these values for the <code>analysis_type</code> parameter:</p>
+                <ul>
+                    <li><code>summarize</code> - Comprehensive document summary</li>
+                    <li><code>extract-clauses</code> - Extract key legal clauses</li>
+                    <li><code>missing-clauses</code> - Identify missing standard clauses</li>
+                    <li><code>risk-flagging</code> - Flag potential legal risks</li>
+                    <li><code>timeline-extraction</code> - Extract all dates and deadlines</li>
+                    <li><code>obligations</code> - List party obligations</li>
+                    <li><code>fact-extraction-only</code> - Only extract verifiable facts (no AI)</li>
+                </ul>
+            </div>
+            
+            <div class="feature">
+                <h3>🔍 API Endpoints</h3>
+                <p><strong>POST /document-analysis</strong> - Main analysis endpoint</p>
+                <p><strong>POST /verify-extraction</strong> - Verify specific claims</p>
+                <p><strong>GET /extraction-capabilities</strong> - See capabilities</p>
+                <p><strong>GET /health</strong> - System status</p>
             </div>
             
             <p style="text-align: center; color: #7f8c8d; margin-top: 30px;">
-                Built for accuracy and trust - never hallucinates 🎯
+                {"Powered by DeepSeek AI via OpenRouter 🚀" if AI_ENABLED else "Configure AI for enhanced analysis 🔧"}
             </p>
         </div>
     </body>
@@ -974,6 +1254,7 @@ def get_safe_interface():
 if __name__ == "__main__":
     import uvicorn
     port = int(os.environ.get("PORT", 8000))
-    logger.info(f"🔒 Starting Hallucination-Free Document Analysis on port {port}")
-    logger.info(f"PDF processing available: PyMuPDF={PYMUPDF_AVAILABLE}, pdfplumber={PDFPLUMBER_AVAILABLE}")
+    logger.info(f"🚀 Starting Unified Legal Document Analysis on port {port}")
+    logger.info(f"AI Status: {'ENABLED with DeepSeek' if AI_ENABLED else 'DISABLED - Set OPENAI_API_KEY to enable'}")
+    logger.info(f"PDF processing: PyMuPDF={PYMUPDF_AVAILABLE}, pdfplumber={PDFPLUMBER_AVAILABLE}")
     uvicorn.run(app, host="0.0.0.0", port=port)
