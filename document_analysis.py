@@ -789,6 +789,140 @@ def call_openrouter_api_enhanced(prompt: str, api_key: str, api_base: str = "htt
 enhanced_document_analyzer = EnhancedDocumentAnalysisEngine()
 
 # Enhanced document analysis endpoint (replace your existing one)
+# Add this after your imports and before any @app.post decorators
+
+# Initialize FastAPI app
+app = FastAPI(
+    title="Enhanced Legal Document Analysis System",
+    description="AI-powered document analysis with intelligent component identification",
+    version="1.0.0"
+)
+
+# Add CORS middleware
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # Configure appropriately for production
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# You'll also need to add these missing imports if they're not already there:
+from pydantic import BaseModel
+from typing import Optional, List, Dict, Any
+
+# Define your response models (add these if missing)
+class LegalAnalysisResponse(BaseModel):
+    response: Optional[str] = None
+    error: Optional[str] = None
+    context_found: bool = False
+    sources: List[str] = []
+    session_id: str
+    confidence_score: float = 0.0
+    expand_available: bool = False
+    document_info: Optional[Dict[str, Any]] = None
+    analysis_metadata: Optional[Dict[str, Any]] = None
+
+# You'll also need these missing components:
+conversations = {}
+
+def cleanup_expired_conversations():
+    """Clean up old conversations"""
+    current_time = datetime.utcnow()
+    expired_sessions = []
+    
+    for session_id, conversation in conversations.items():
+        if current_time - conversation["last_accessed"] > timedelta(hours=24):
+            expired_sessions.append(session_id)
+    
+    for session_id in expired_sessions:
+        del conversations[session_id]
+
+def add_to_conversation(session_id: str, role: str, content: str, document_info: Dict = None):
+    """Add message to conversation history"""
+    if session_id not in conversations:
+        conversations[session_id] = {
+            "messages": [],
+            "created_at": datetime.utcnow(),
+            "last_accessed": datetime.utcnow()
+        }
+    
+    message = {
+        "role": role,
+        "content": content,
+        "timestamp": datetime.utcnow().isoformat()
+    }
+    
+    if document_info:
+        message["document_info"] = document_info
+    
+    conversations[session_id]["messages"].append(message)
+    conversations[session_id]["last_accessed"] = datetime.utcnow()
+
+# Document processor class (add if missing)
+class DocumentProcessor:
+    @staticmethod
+    def process_document(file: UploadFile) -> tuple[str, str]:
+        """Process uploaded document and extract text"""
+        file_extension = file.filename.split('.')[-1].lower()
+        
+        if file_extension == 'pdf':
+            return DocumentProcessor.extract_pdf_text(file), 'pdf'
+        elif file_extension in ['docx', 'doc']:
+            return DocumentProcessor.extract_docx_text(file), 'docx'
+        elif file_extension == 'txt':
+            content = file.file.read()
+            return content.decode('utf-8'), 'txt'
+        else:
+            raise HTTPException(status_code=400, detail=f"Unsupported file type: {file_extension}")
+    
+    @staticmethod
+    def extract_pdf_text(file: UploadFile) -> str:
+        """Extract text from PDF file"""
+        try:
+            pdf_content = file.file.read()
+            pdf_file = io.BytesIO(pdf_content)
+            
+            try:
+                # Try pdfplumber first (better for complex layouts)
+                import pdfplumber
+                with pdfplumber.open(pdf_file) as pdf:
+                    text = ""
+                    for page in pdf.pages:
+                        page_text = page.extract_text()
+                        if page_text:
+                            text += page_text + "\n"
+                    return text
+            except:
+                # Fallback to PyPDF2
+                pdf_file.seek(0)
+                reader = PyPDF2.PdfReader(pdf_file)
+                text = ""
+                for page in reader.pages:
+                    text += page.extract_text() + "\n"
+                return text
+                
+        except Exception as e:
+            raise HTTPException(status_code=400, detail=f"Error processing PDF: {str(e)}")
+    
+    @staticmethod
+    def extract_docx_text(file: UploadFile) -> str:
+        """Extract text from DOCX file"""
+        try:
+            docx_content = file.file.read()
+            docx_file = io.BytesIO(docx_content)
+            doc = docx.Document(docx_file)
+            
+            text = ""
+            for paragraph in doc.paragraphs:
+                text += paragraph.text + "\n"
+            
+            return text
+        except Exception as e:
+            raise HTTPException(status_code=400, detail=f"Error processing DOCX: {str(e)}")
+
+
+
 @app.post("/document-analysis-enhanced", response_model=LegalAnalysisResponse)
 async def enhanced_document_analysis_endpoint(
     file: UploadFile = File(...),
