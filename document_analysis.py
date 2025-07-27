@@ -84,9 +84,31 @@ except ImportError as e:
 
 print(f"PDF processing status: PyMuPDF={PYMUPDF_AVAILABLE}, pdfplumber={PDFPLUMBER_AVAILABLE}")
 
-# AI Analysis prompts
+# Function to clean markdown from AI responses
+def clean_ai_response(text: str) -> str:
+    """Remove markdown headers and clean up AI response formatting"""
+    if not text:
+        return text
+    
+    # Remove markdown headers (####, ###, ##, #)
+    text = re.sub(r'^#{1,6}\s+', '', text, flags=re.MULTILINE)
+    
+    # Remove ** markdown bold markers but keep the text
+    text = re.sub(r'\*\*([^*]+)\*\*', r'\1', text)
+    
+    # Clean up any double spaces
+    text = re.sub(r'\s+', ' ', text)
+    
+    # Fix line breaks
+    text = re.sub(r'\n\s*\n', '\n\n', text)
+    
+    return text.strip()
+
+# AI Analysis prompts - Updated to request plain text output
 ANALYSIS_PROMPTS = {
-    'summarize': """You are a legal document analyst. Analyze this document and provide:
+    'summarize': """You are a legal document analyst. Analyze this document and provide a plain text summary without using markdown headers (#, ##, ###, ####).
+
+Include the following sections:
 1. A clear summary of the document's purpose and type
 2. The main parties involved (with their roles)
 3. Key terms and conditions
@@ -94,12 +116,16 @@ ANALYSIS_PROMPTS = {
 5. Financial obligations or amounts
 6. Any notable risks or concerns
 
+Format your response with section numbers and bold text using asterisks where appropriate, but DO NOT use markdown headers.
+
 Document text:
 {document_text}
 
 Provide a structured summary in plain English while maintaining legal accuracy.""",
 
-    'extract-clauses': """You are a legal document analyst. Extract and categorize the following types of clauses from this document:
+    'extract-clauses': """You are a legal document analyst. Extract and categorize clauses from this document. DO NOT use markdown headers (#, ##, ###, ####).
+
+Find and list:
 1. Termination clauses
 2. Indemnification provisions
 3. Liability limitations
@@ -117,7 +143,7 @@ For each clause found, provide:
 Document text:
 {document_text}""",
 
-    'missing-clauses': """You are a legal document analyst. Review this contract and identify commonly expected clauses that appear to be missing or inadequately addressed:
+    'missing-clauses': """You are a legal document analyst. Review this contract and identify missing clauses. Format your response in plain text without markdown headers.
 
 Consider standard clauses such as:
 - Force majeure
@@ -137,7 +163,7 @@ Document text:
 
 For each missing clause, explain why it's typically important and the risks of its absence.""",
 
-    'risk-flagging': """You are a legal risk analyst. Identify and assess legal risks in this document:
+    'risk-flagging': """You are a legal risk analyst. Identify and assess legal risks in this document using plain text formatting without markdown headers.
 
 Look for:
 1. Unilateral termination rights
@@ -158,7 +184,7 @@ For each risk, provide:
 - Potential impact
 - Suggested mitigation""",
 
-    'timeline-extraction': """You are a legal document analyst. Extract all time-related information:
+    'timeline-extraction': """You are a legal document analyst. Extract all time-related information in plain text format without markdown headers.
 
 Find and list:
 1. Contract start and end dates
@@ -175,7 +201,7 @@ Document text:
 
 Present as a chronological timeline with clear labels.""",
 
-    'obligations': """You are a legal document analyst. List all obligations and requirements for each party:
+    'obligations': """You are a legal document analyst. List all obligations and requirements for each party using plain text without markdown headers.
 
 Identify:
 1. What each party must do
@@ -213,7 +239,7 @@ async def perform_ai_analysis(document_text: str, analysis_type: str) -> Tuple[s
         "messages": [
             {
                 "role": "system",
-                "content": "You are an expert legal document analyst. Provide thorough, accurate analysis while clearly marking any uncertainties. Always include relevant disclaimers about seeking professional legal advice."
+                "content": "You are an expert legal document analyst. Provide thorough, accurate analysis while clearly marking any uncertainties. Always include relevant disclaimers about seeking professional legal advice. Format your responses in plain text without using markdown headers (#, ##, ###, ####)."
             },
             {
                 "role": "user",
@@ -230,6 +256,8 @@ async def perform_ai_analysis(document_text: str, analysis_type: str) -> Tuple[s
                 if response.status == 200:
                     data = await response.json()
                     ai_response = data['choices'][0]['message']['content']
+                    # Clean the AI response to remove markdown headers
+                    ai_response = clean_ai_response(ai_response)
                     confidence = 0.85
                     return ai_response, confidence
                 else:
@@ -1012,7 +1040,7 @@ async def unified_document_analysis(
         if AI_ENABLED and analysis_type != "fact-extraction-only":
             ai_analysis, ai_confidence = await perform_ai_analysis(document_text, analysis_type)
             
-            # Combine AI analysis with facts
+            # Clean the combined summary as well
             combined_summary = f"""## AI Legal Analysis: {analysis_type.replace('-', ' ').title()}
 
 {ai_analysis}
