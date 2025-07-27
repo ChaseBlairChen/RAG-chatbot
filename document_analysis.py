@@ -661,9 +661,11 @@ app.add_middleware(
 )
 
 @app.post("/safe-document-analysis", response_model=SafeAnalysisResponse)
+@app.post("/document-analysis")  # Compatibility endpoint for existing calls
 async def safe_document_analysis(
     file: UploadFile = File(...),
-    session_id: Optional[str] = Form(None)
+    session_id: Optional[str] = Form(None),
+    analysis_type: Optional[str] = Form(None)  # Accept but ignore for compatibility
 ):
     """Analyze document with zero hallucination - only verifiable facts"""
     
@@ -676,8 +678,17 @@ async def safe_document_analysis(
         # Extract only verifiable facts
         extraction_results = safe_analyzer.extract_document_facts(document_text)
         
-        # Generate factual summary
-        factual_summary = safe_analyzer.generate_factual_summary(document_text)
+        # Add compatibility notice if analysis_type was provided (old API usage)
+        compatibility_notice = ""
+        if analysis_type:
+            compatibility_notice = f"""
+⚠️ **API CHANGE NOTICE**: This system no longer performs "{analysis_type}" analysis to prevent hallucination.
+Instead, it provides only verifiable facts extracted directly from your document.
+
+"""
+
+        # Generate factual summary with compatibility notice
+        factual_summary = compatibility_notice + safe_analyzer.generate_factual_summary(document_text)
         
         # Collect failed extractions
         failed_extractions = []
