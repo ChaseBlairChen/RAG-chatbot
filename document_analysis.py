@@ -256,20 +256,39 @@ class VerifiableExtractor:
             },
             'monetary_amounts': {
                 'patterns': [
+                    r'\$\s*[\d,]+(?:\.\d{2})?(?:\s*(?:million|Million|billion|Billion|M|B))?\b',
                     r'\$\s*[\d,]+(?:\.\d{2})?(?:\s*(?:per|each|monthly|annually|yearly))?',
-                    r'\b[\d,]+\s*dollars?(?:\s*(?:per|each|monthly|annually|yearly))?\b',
-                    r'\b[\d,]+\s*USD\b'
+                    r'\b[\d,]+(?:\.\d{2})?\s*(?:USD|usd|dollars?|Dollars?)(?:\s*(?:per|each|monthly|annually|yearly))?\b',
+                    r'\b(?:USD|usd)\s*[\d,]+(?:\.\d{2})?\b',
+                    r'\b[\d,]+\s*cents?\b'
                 ],
-                'context_required': ['pay', 'payment', 'fee', 'cost', 'price', 'rent', 'salary', 'compensation']
+                'context_required': ['pay', 'payment', 'fee', 'cost', 'price', 'rent', 'salary', 'compensation', 'amount', 'value', 'worth', 'charge', 'expense']
             },
             'percentages': {
-                'patterns': [r'\b\d+(?:\.\d+)?%'],
-                'context_required': ['rate', 'interest', 'fee', 'penalty', 'commission', 'tax']
+                'patterns': [
+                    r'\b\d+(?:\.\d+)?%',
+                    r'\b\d+(?:\.\d+)?\s*(?:percent|per cent)\b'
+                ],
+                'context_required': ['rate', 'interest', 'fee', 'penalty', 'commission', 'tax', 'discount', 'margin', 'share', 'ownership', 'equity', 'royalty']
             },
             'party_names': {
                 'patterns': [
+                    # Company names with corporate designators
+                    r'([A-Z][A-Za-z\s&.,\'"-]+?(?:Corporation|Corp\.|Company|Co\.|LLC|L\.L\.C\.|Inc\.|Incorporated|Limited|Ltd\.|LLP|LP|plc|PLC))',
+                    # Names after "by:" in signatures
+                    r'[Bb]y:\s*/?s?/?\s*([A-Z][A-Za-z\s\.-]+?)(?:\n|,|\s{2,})',
+                    # Names in "Name:" format
+                    r'Name:\s*([A-Z][A-Za-z\s\.-]+?)(?:\n|,|\s{2,})',
+                    # Between parties pattern
+                    r'between\s+([A-Z][A-Za-z\s&.,\'"-]+?)\s+(?:and|AND)\s+([A-Z][A-Za-z\s&.,\'"-]+?)(?:\s|,|\()',
+                    # Parties in parentheses
+                    r'\((?:the\s+)?"?([A-Z][A-Za-z\s&.,\'"-]+?)"?\)(?:\s+(?:and|AND)|,)',
+                    # Undersigned pattern
+                    r'undersigned,?\s+([A-Z][A-Za-z\s&.,\'"-]+?)(?:,|\s+(?:hereby|certifies|agrees))',
+                    # Professional titles with names
+                    r'([A-Z][A-Za-z\s\.-]+?),?\s*(?:P\.E\.|P\.Eng\.|Ph\.D\.|Esq\.|CPA|MBA|MD|JD)',
+                    # Your existing patterns
                     r'(?:party|parties)[:\s]+([A-Z][a-zA-Z\s&.,]+?)(?:\s*(?:and|,|\n))',
-                    r'between\s+([A-Z][a-zA-Z\s&.,]+?)\s+and\s+([A-Z][a-zA-Z\s&.,]+?)(?:\s|,)',
                     r'(?:company|corporation|llc|inc\.?)[:\s]*([A-Z][a-zA-Z\s&.,]+?)(?:\s*(?:and|,|\n))'
                 ],
                 'context_required': []
@@ -284,6 +303,7 @@ class VerifiableExtractor:
         
         pattern_config = self.extraction_patterns[extraction_type]
         extracted_items = []
+        seen_values = set()  # Track duplicates
         
         # Split document into lines for source tracking
         lines = document_text.split('\n')
@@ -295,37 +315,89 @@ class VerifiableExtractor:
                 matches = re.finditer(pattern, line, re.IGNORECASE)
                 
                 for match in matches:
-                    extracted_value = match.group(0).strip()
-                    
-                    # Check if context requirements are met
-                    context_verified = True
-                    if pattern_config['context_required']:
-                        context_verified = any(
-                            keyword in line_lower 
-                            for keyword in pattern_config['context_required']
-                        )
-                    
-                    if context_verified:
-                        extracted_items.append({
-                            "value": extracted_value,
-                            "line_number": line_num,
-                            "context": line.strip(),
-                            "confidence": "high",
-                            "verified": True
-                        })
+                    # Extract all groups if pattern has multiple capture groups
+                    if len(match.groups()) > 0:
+                        for group_idx in range(1, len(match.groups()) + 1):
+                            if match.group(group_idx):
+                                extracted_value = match.group(group_idx).strip()
+                                
+                                # Clean up extracted value
+                                extracted_value = re.sub(r'\s+', ' ', extracted_value)  # Normalize whitespace
+                                extracted_value = extracted_value.strip(' ,.')  # Remove trailing punctuation
+                                
+                                # Skip if too short or already seen
+                                if len(extracted_value) < 3 or extracted_value.lower() in seen_values:
+                                    continue
+                                
+                                # Additional validation for party names
+                                if extraction_type == 'party_names':
+                                    # Skip if it's just a title or generic term
+                                    if extracted_value.lower() in ['the company', 'the corporation', 'party', 'parties', 'undersigned']:
+                                        continue
+                                    # Ensure it has at least one uppercase word
+                                    if not any(word[0].isupper() for word in extracted_value.split() if word):
+                                        continue
+                                
+                                seen_values.add(extracted_value.lower())
+                                
+                                # Check if context requirements are met
+                                context_verified = True
+                                if pattern_config['context_required']:
+                                    context_verified = any(
+                                        keyword in line_lower 
+                                        for keyword in pattern_config['context_required']
+                                    )
+                                
+                                if context_verified:
+                                    extracted_items.append({
+                                        "value": extracted_value,
+                                        "line_number": line_num,
+                                        "context": line.strip(),
+                                        "confidence": "high",
+                                        "verified": True
+                                    })
+                                else:
+                                    # Found pattern but no context - mark as unverified
+                                    extracted_items.append({
+                                        "value": extracted_value,
+                                        "line_number": line_num,
+                                        "context": line.strip(),
+                                        "confidence": "low",
+                                        "verified": False,
+                                        "reason": "No supporting context found"
+                                    })
                     else:
-                        # Found pattern but no context - mark as unverified
-                        extracted_items.append({
-                            "value": extracted_value,
-                            "line_number": line_num,
-                            "context": line.strip(),
-                            "confidence": "low",
-                            "verified": False,
-                            "reason": "No supporting context found"
-                        })
+                        # Handle patterns without capture groups
+                        extracted_value = match.group(0).strip()
+                        
+                        # Skip if already seen
+                        if extracted_value.lower() in seen_values:
+                            continue
+                        
+                        seen_values.add(extracted_value.lower())
+                        
+                        # Check if context requirements are met
+                        context_verified = True
+                        if pattern_config['context_required']:
+                            context_verified = any(
+                                keyword in line_lower 
+                                for keyword in pattern_config['context_required']
+                            )
+                        
+                        if context_verified:
+                            extracted_items.append({
+                                "value": extracted_value,
+                                "line_number": line_num,
+                                "context": line.strip(),
+                                "confidence": "high",
+                                "verified": True
+                            })
         
         # Filter to only high-confidence, verified items
         verified_items = [item for item in extracted_items if item.get('verified', False)]
+        
+        # Sort by line number for better presentation
+        verified_items.sort(key=lambda x: x['line_number'])
         
         if not verified_items:
             return [{"status": "failed_to_extract", "reason": f"No verifiable {extraction_type} found in document"}]
@@ -359,6 +431,26 @@ class NoHallucinationAnalyzer:
                 'required_keywords': ['policy'],
                 'supporting_keywords': ['procedure', 'guidelines', 'rules'],
                 'minimum_matches': 1
+            },
+            'consent': {
+                'required_keywords': ['consent'],
+                'supporting_keywords': ['authorize', 'permit', 'sec', 'filing', 'qualified person', 'technical report'],
+                'minimum_matches': 2
+            },
+            'nda': {
+                'required_keywords': ['confidential', 'non-disclosure', 'nda'],
+                'supporting_keywords': ['proprietary', 'secret', 'disclose'],
+                'minimum_matches': 2
+            },
+            'license': {
+                'required_keywords': ['license', 'licensing'],
+                'supporting_keywords': ['grant', 'rights', 'royalty', 'software', 'intellectual property'],
+                'minimum_matches': 2
+            },
+            'purchase': {
+                'required_keywords': ['purchase', 'sale', 'acquisition'],
+                'supporting_keywords': ['buyer', 'seller', 'price', 'assets', 'shares'],
+                'minimum_matches': 2
             }
         }
     
@@ -934,7 +1026,7 @@ async def unified_document_analysis(
 ---
 
 **⚠️ DISCLAIMER**: 
-- The analysis above is generated by AI and should be reviewed carefully
+- The AI analysis above is generated by DeepSeek and should be reviewed carefully
 - The verified facts section contains only information extracted directly from the document
 - This analysis is for informational purposes only and does not constitute legal advice
 - Always consult with a qualified attorney for legal matters
