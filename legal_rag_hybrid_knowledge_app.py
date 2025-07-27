@@ -944,7 +944,7 @@ def call_openrouter_api(prompt: str, api_key: str, api_base: str = "https://open
     
     # List of models to try in order
     models_to_try = [
-        "deepseek/deepseek-chat-v3-0324:free",
+        "deepseek/deepseek-chat",
         "microsoft/phi-3-mini-128k-instruct:free",
         "meta-llama/llama-3.2-3b-instruct:free",
         "google/gemma-2-9b-it:free",
