@@ -387,11 +387,19 @@ async def document_analysis_endpoint(
         conversations[session_id]["last_accessed"] = datetime.utcnow()
 
     try:
-        # Process the document
+        # Process the document and extract text
         document_text, doc_type = DocumentProcessor.process_document(file)
         
-        # Analyze the document
+        # Get the analysis prompt template
         analysis_data = document_analyzer.analyze_document(document_text, analysis_type)
+        
+        # Create the complete prompt with document content
+        complete_prompt = f"""You are a legal document analysis assistant. {analysis_data['prompt']}
+
+DOCUMENT CONTENT TO ANALYZE:
+{document_text}
+
+Please provide a detailed analysis based on the request above. Focus on being accurate, thorough, and helpful."""
         
         # Get API key
         api_key = os.environ.get("OPENAI_API_KEY")
@@ -406,9 +414,9 @@ async def document_analysis_endpoint(
                 expand_available=False
             )
 
-        # Call LLM with the analysis prompt
+        # Call LLM with the complete prompt including document content
         api_base = os.environ.get("OPENAI_API_BASE", "https://openrouter.ai/api/v1")
-        raw_response = call_openrouter_api(analysis_data['prompt'], api_key, api_base)
+        raw_response = call_openrouter_api(complete_prompt, api_key, api_base)
         
         # Document info for response
         document_info = {
@@ -428,11 +436,13 @@ async def document_analysis_endpoint(
             }
         }
         
-        # Calculate confidence score
+        # Calculate confidence score based on document length and successful processing
         confidence_score = min(1.0, max(0.3, len(document_text) / 10000))
+        if len(document_text) > 1000:  # Good amount of text extracted
+            confidence_score = max(confidence_score, 0.8)
         
         # Update conversation
-        add_to_conversation(session_id, "user", f"Document Analysis Request: {analysis_type}", document_info=document_info)
+        add_to_conversation(session_id, "user", f"Document Analysis Request: {analysis_type} for {file.filename}", document_info=document_info)
         add_to_conversation(session_id, "assistant", raw_response, document_info=document_info)
         
         return LegalAnalysisResponse(
@@ -458,107 +468,6 @@ async def document_analysis_endpoint(
             confidence_score=0.0,
             expand_available=False
         )
-
-@app.post("/ask", response_model=LegalAnalysisResponse)
-async def ask_endpoint(query: AskQuery):
-    """Simplified ask endpoint"""
-    cleanup_expired_conversations()
-    session_id = query.session_id or str(uuid.uuid4())
-    
-    if session_id not in conversations:
-        conversations[session_id] = {
-            "messages": [],
-            "created_at": datetime.utcnow(),
-            "last_accessed": datetime.utcnow()
-        }
-    else:
-        conversations[session_id]["last_accessed"] = datetime.utcnow()
-
-    user_question = query.question.strip()
-    if not user_question:
-        return LegalAnalysisResponse(
-            response=None,
-            error="Question cannot be empty.",
-            context_found=False,
-            sources=[],
-            session_id=session_id,
-            confidence_score=0.0,
-            expand_available=False
-        )
-
-    try:
-        # Get API key
-        api_key = os.environ.get("OPENAI_API_KEY")
-        if not api_key:
-            return LegalAnalysisResponse(
-                response=None,
-                error="API configuration error.",
-                context_found=False,
-                sources=[],
-                session_id=session_id,
-                confidence_score=0.0,
-                expand_available=False
-            )
-
-        # Get conversation context
-        conversation_context = get_conversation_context(session_id, max_messages=5)
-        
-        # Create enhanced prompt
-        enhanced_prompt = f"""You are a legal document analysis assistant. Provide helpful, accurate legal information based on the user's question.
-
-Previous conversation context:
-{conversation_context if conversation_context else "No previous context."}
-
-User question: {user_question}
-
-Please provide a clear, helpful response. If this involves document analysis, explain what information would be needed."""
-
-        # Call API
-        api_base = os.environ.get("OPENAI_API_BASE", "https://openrouter.ai/api/v1")
-        raw_response = call_openrouter_api(enhanced_prompt, api_key, api_base)
-        
-        # Update conversation
-        add_to_conversation(session_id, "user", user_question)
-        add_to_conversation(session_id, "assistant", raw_response)
-        
-        return LegalAnalysisResponse(
-            response=raw_response,
-            error=None,
-            context_found=True,
-            sources=[],
-            session_id=session_id,
-            confidence_score=0.8,
-            expand_available=True
-        )
-        
-    except Exception as e:
-        logger.error(f"Ask endpoint failed: {e}", exc_info=True)
-        return LegalAnalysisResponse(
-            response=None,
-            error=f"Request failed: {str(e)}",
-            context_found=False,
-            sources=[],
-            session_id=session_id,
-            confidence_score=0.0,
-            expand_available=False
-        )
-
-@app.get("/health")
-def health_check():
-    """Health check endpoint"""
-    return {
-        "status": "healthy",
-        "version": "4.0.0-document-analysis",
-        "features": [
-            "document_upload",
-            "pdf_processing", 
-            "docx_processing",
-            "text_processing",
-            "predefined_analysis_tools",
-            "legal_chat"
-        ],
-        "active_sessions": len(conversations)
-    }
 
 @app.get("/analysis-types")
 def get_analysis_types():
