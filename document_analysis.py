@@ -1,5 +1,5 @@
 # Clean Hallucination-Free Document Analysis System
-# Fixed syntax errors and optimized for PyMuPDF
+# Fixed imports and error handling
 
 from fastapi import FastAPI, Request, HTTPException, File, UploadFile, Form
 from fastapi.middleware.cors import CORSMiddleware
@@ -16,41 +16,55 @@ from dataclasses import dataclass
 from enum import Enum
 import io
 import tempfile
+import sys
+import traceback
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Clean document processing imports - PyMuPDF focus
+# Import document processing libraries
+print("Starting document processing imports...")
+PYMUPDF_AVAILABLE = False
+PDFPLUMBER_AVAILABLE = False
+
+# Import PyPDF2 (always needed as fallback)
 try:
     import PyPDF2
+    print("✅ PyPDF2 imported successfully")
+except ImportError as e:
+    print(f"❌ CRITICAL: PyPDF2 import failed: {e}")
+    print("Install with: pip install PyPDF2")
+    sys.exit(1)
+
+# Import python-docx
+try:
     import docx
-    
-    # PyMuPDF (best for legal documents, lightweight ~50MB)
-    try:
-        import fitz  # PyMuPDF
-        PYMUPDF_AVAILABLE = True
-        print("✅ PyMuPDF available - using high-quality PDF processing (lightweight)")
-    except ImportError:
-        PYMUPDF_AVAILABLE = False
-        print("⚠️ PyMuPDF not available - install with: pip install PyMuPDF")
-    
-    # pdfplumber (good secondary option ~20MB)
-    try:
-        import pdfplumber
-        PDFPLUMBER_AVAILABLE = True
-        print("✅ pdfplumber available - using enhanced PDF extraction")
-    except ImportError:
-        PDFPLUMBER_AVAILABLE = False
-        print("⚠️ pdfplumber not available - install with: pip install pdfplumber")
-    
-    print("ℹ️ Using lightweight PDF processing - no heavy ML dependencies")
-        
-except ImportError:
-    print("Document processing libraries not installed.")
-    print("Run: pip install PyMuPDF python-docx pdfplumber")
-    PYMUPDF_AVAILABLE = False
-    PDFPLUMBER_AVAILABLE = False
+    print("✅ python-docx imported successfully")
+except ImportError as e:
+    print(f"❌ CRITICAL: python-docx import failed: {e}")
+    print("Install with: pip install python-docx")
+    sys.exit(1)
+
+# Try to import PyMuPDF
+try:
+    import fitz  # PyMuPDF
+    PYMUPDF_AVAILABLE = True
+    print("✅ PyMuPDF available - using high-quality PDF processing")
+except ImportError as e:
+    print(f"⚠️ PyMuPDF not available: {e}")
+    print("Install with: pip install PyMuPDF")
+
+# Try to import pdfplumber
+try:
+    import pdfplumber
+    PDFPLUMBER_AVAILABLE = True
+    print("✅ pdfplumber available - using enhanced PDF extraction")
+except ImportError as e:
+    print(f"⚠️ pdfplumber not available: {e}")
+    print("Install with: pip install pdfplumber")
+
+print(f"PDF processing status: PyMuPDF={PYMUPDF_AVAILABLE}, pdfplumber={PDFPLUMBER_AVAILABLE}")
 
 class VerifiableExtractor:
     """Extract only verifiable information from documents with source locations"""
@@ -395,6 +409,9 @@ class SafeDocumentProcessor:
         }
         
         try:
+            # Reset file pointer to beginning
+            file.file.seek(0)
+            
             if file_extension == 'pdf':
                 text, warnings = SafeDocumentProcessor._extract_pdf_safe(file)
                 processing_info['processing_method'] = 'PDF extraction'
@@ -429,6 +446,7 @@ class SafeDocumentProcessor:
             
         except Exception as e:
             processing_info['errors'].append(str(e))
+            logger.error(f"Document processing error: {type(e).__name__}: {str(e)}")
             raise HTTPException(status_code=400, detail=f"Document processing failed: {str(e)}")
     
     @staticmethod
@@ -436,6 +454,9 @@ class SafeDocumentProcessor:
         """Extract PDF text with PyMuPDF first (better than Unstructured for legal docs)"""
         
         warnings = []
+        
+        # Reset file pointer and read content
+        file.file.seek(0)
         pdf_content = file.file.read()
         
         if len(pdf_content) == 0:
@@ -501,6 +522,7 @@ class SafeDocumentProcessor:
                 
             except Exception as e:
                 warnings.append(f"PyMuPDF processing failed: {str(e)}, falling back to pdfplumber")
+                logger.warning(f"PyMuPDF error: {e}")
         
         # Fallback to pdfplumber (good quality)
         if PDFPLUMBER_AVAILABLE:
@@ -551,42 +573,52 @@ class SafeDocumentProcessor:
                     
                     return text, warnings
                     
-            except ImportError:
-                warnings.append("pdfplumber not available, using basic PyPDF2 extraction")
+            except Exception as e:
+                warnings.append(f"pdfplumber failed: {str(e)}, using basic PyPDF2")
+                logger.warning(f"pdfplumber error: {e}")
         
         # Final fallback to PyPDF2 (basic quality)
         pdf_file = io.BytesIO(pdf_content)
         pdf_file.seek(0)
-        reader = PyPDF2.PdfReader(pdf_file)
         
-        if len(reader.pages) == 0:
-            raise ValueError("PDF contains no pages")
-        
-        text = ""
-        pages_with_text = 0
-        
-        for page_num, page in enumerate(reader.pages):
-            try:
-                page_text = page.extract_text()
-                if page_text and page_text.strip():
-                    text += f"[Page {page_num + 1}]\n{page_text}\n\n"
-                    pages_with_text += 1
-                else:
-                    warnings.append(f"Page {page_num + 1} contains no extractable text")
-            except Exception as e:
-                warnings.append(f"Error extracting text from page {page_num + 1}: {str(e)}")
-        
-        if pages_with_text == 0:
-            raise ValueError("No readable text found in any PDF pages")
-        
-        warnings.append("Used basic PDF extraction - complex layouts may not be preserved")
-        return text, warnings
+        try:
+            reader = PyPDF2.PdfReader(pdf_file)
+            
+            if len(reader.pages) == 0:
+                raise ValueError("PDF contains no pages")
+            
+            text = ""
+            pages_with_text = 0
+            
+            for page_num, page in enumerate(reader.pages):
+                try:
+                    page_text = page.extract_text()
+                    if page_text and page_text.strip():
+                        text += f"[Page {page_num + 1}]\n{page_text}\n\n"
+                        pages_with_text += 1
+                    else:
+                        warnings.append(f"Page {page_num + 1} contains no extractable text")
+                except Exception as e:
+                    warnings.append(f"Error extracting text from page {page_num + 1}: {str(e)}")
+            
+            if pages_with_text == 0:
+                raise ValueError("No readable text found in any PDF pages")
+            
+            warnings.append("Used basic PDF extraction - complex layouts may not be preserved")
+            return text, warnings
+            
+        except Exception as e:
+            logger.error(f"PyPDF2 failed: {e}")
+            raise ValueError(f"All PDF extraction methods failed. Last error: {str(e)}")
     
     @staticmethod
     def _extract_docx_safe(file: UploadFile) -> Tuple[str, List[str]]:
         """Extract DOCX text with warnings about potential issues"""
         
         warnings = []
+        
+        # Reset file pointer and read content
+        file.file.seek(0)
         docx_content = file.file.read()
         
         if len(docx_content) == 0:
@@ -609,6 +641,17 @@ class SafeDocumentProcessor:
             tables_found = len(doc.tables)
             if tables_found > 0:
                 warnings.append(f"Document contains {tables_found} tables - table content may not be fully extracted")
+                
+                # Try to extract table content
+                for table_num, table in enumerate(doc.tables):
+                    text += f"\n[TABLE {table_num + 1}]\n"
+                    for row in table.rows:
+                        row_text = []
+                        for cell in row.cells:
+                            row_text.append(cell.text.strip())
+                        if any(row_text):
+                            text += " | ".join(row_text) + "\n"
+                    text += "[/TABLE]\n\n"
             
             if paragraphs_with_text == 0:
                 raise ValueError("No readable text found in Word document")
@@ -662,6 +705,9 @@ async def safe_document_analysis(
     session_id = session_id or str(uuid.uuid4())
     
     try:
+        # Log incoming request
+        logger.info(f"Processing document: {file.filename}, session: {session_id}")
+        
         # Process document safely
         document_text, file_type, processing_info = SafeDocumentProcessor.process_document_safe(file)
         
@@ -695,6 +741,8 @@ Instead, it provides only verifiable facts extracted directly from your document
         else:
             verification_status = "minimal_extraction"
         
+        logger.info(f"Analysis completed for {file.filename}: {verification_status}")
+        
         return SafeAnalysisResponse(
             extraction_results=extraction_results,
             factual_summary=factual_summary,
@@ -706,13 +754,16 @@ Instead, it provides only verifiable facts extracted directly from your document
             timestamp=datetime.utcnow().isoformat()
         )
         
+    except HTTPException:
+        raise
     except Exception as e:
-        logger.error(f"Safe document analysis failed: {e}")
+        logger.error(f"Safe document analysis failed: {type(e).__name__}: {str(e)}")
+        logger.error(f"Traceback: {traceback.format_exc()}")
         
         return SafeAnalysisResponse(
             extraction_results=None,
-            factual_summary=f"**Analysis Failed**: {str(e)}",
-            processing_info={"error": str(e)},
+            factual_summary=f"**Analysis Failed**: {type(e).__name__}: {str(e)}",
+            processing_info={"error": str(e), "error_type": type(e).__name__},
             verification_status="failed",
             failed_extractions=["all"],
             warnings=[],
@@ -774,6 +825,22 @@ async def verify_extraction(
             "verification_status": "error",
             "error": str(e)
         }
+
+@app.post("/test-upload")
+async def test_upload(file: UploadFile = File(...)):
+    """Simple test endpoint to verify file upload"""
+    try:
+        file.file.seek(0)
+        content = await file.read()
+        return {
+            "filename": file.filename,
+            "size": len(content),
+            "content_type": file.content_type,
+            "first_100_bytes": content[:100].hex() if len(content) > 0 else "empty"
+        }
+    except Exception as e:
+        logger.error(f"Test upload failed: {e}")
+        return {"error": str(e), "type": type(e).__name__}
 
 @app.get("/extraction-capabilities")
 def get_extraction_capabilities():
@@ -880,6 +947,7 @@ def get_safe_interface():
                 <p><strong>POST /document-analysis</strong> - Compatibility endpoint (same as above)</p>
                 <p><strong>POST /verify-extraction</strong> - Verify specific claims against document</p>
                 <p><strong>GET /extraction-capabilities</strong> - See detailed capabilities and limitations</p>
+                <p><strong>POST /test-upload</strong> - Test file upload functionality</p>
             </div>
             
             <p style="text-align: center; color: #7f8c8d; margin-top: 30px;">
@@ -894,4 +962,5 @@ if __name__ == "__main__":
     import uvicorn
     port = int(os.environ.get("PORT", 8000))
     logger.info(f"🔒 Starting Hallucination-Free Document Analysis on port {port}")
+    logger.info(f"PDF processing available: PyMuPDF={PYMUPDF_AVAILABLE}, pdfplumber={PDFPLUMBER_AVAILABLE}")
     uvicorn.run(app, host="0.0.0.0", port=port)
