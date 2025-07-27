@@ -2,13 +2,13 @@
 fastapi==0.104.1
 uvicorn[standard]==0.24.0
 
-# LangChain core and components (Let pip find compatible versions)
-langchain # Remove ==0.1.0
-langchain-community # Remove ==0.0.10
+# LangChain core and components
+langchain
+langchain-community
 langchain-chroma==0.1.4
 langchain-huggingface==0.0.3
 
-# Vector database (pinned to avoid onnxruntime conflict)
+# Vector database
 chromadb==0.4.17
 
 # Embeddings and ML
@@ -17,27 +17,41 @@ huggingface-hub==0.23.1
 torch==2.2.0
 transformers==4.40.0
 
-# PDF processing - without unstructured-inference to avoid conflict
+# PDF processing
 PyMuPDF==1.23.8
 pypdf==3.17.4
-# Note: Install unstructured separately with: pip install unstructured[pdf]==0.11.8 --no-deps
+pdfplumber==0.10.3
+PyPDF2==3.0.1
+
+# Document processing
+python-docx==1.1.0
 
 # HTTP and API
 httpx==0.25.2
 requests==2.31.0
+aiohttp==3.9.1  # For async AI requests
 
 # Environment and utilities
 python-dotenv==1.0.0
 pydantic==2.5.0
 
-# Optional: OpenAI SDK
+# Optional: OpenAI SDK (for OpenRouter compatibility)
 openai==1.3.8
 
-# Additional dependencies for enhanced conversation features
+# Additional dependencies for enhanced features
 typing-extensions==4.8.0
 python-multipart==0.0.6
 
-# --- NEW DEPENDENCIES FOR ENHANCED AI AGENT ---
+# NLP and AI dependencies
 spacy==3.7.2
 numpy==1.26.4
-# --- END NEW DEPENDENCIES ---
+
+# Additional dependencies for open-source NLP models
+# Note: transformers is already included above
+accelerate==0.26.1  # For faster model loading
+sentencepiece==0.1.99  # Required by some transformer models
+protobuf==4.25.2  # Required by some models
+scipy==1.12.0  # For scientific computing
+
+# Optional but recommended for better performance
+# tokenizers==0.15.1  # Fast tokenizers for transformers
