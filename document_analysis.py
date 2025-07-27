@@ -16,6 +16,7 @@ from dataclasses import dataclass
 from enum import Enum
 import io
 import tempfile
+import os
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
@@ -27,17 +28,27 @@ try:
     import docx
     from pdfplumber import PDF
     
-    # Try to import Unstructured for better PDF processing
+    # Try to import Unstructured for better PDF processing (compatible with v0.11.8)
     try:
-        from unstructured.partition.auto import partition
-        from unstructured.partition.pdf import partition_pdf
-        from unstructured.staging.base import elements_to_json
+        # Try newer import paths first
+        try:
+            from unstructured.partition.auto import partition
+            from unstructured.partition.pdf import partition_pdf
+            UNSTRUCTURED_VERSION = "new"
+        except ImportError:
+            # Try older import paths for v0.11.8
+            from unstructured.partition.pdf import partition_pdf
+            from unstructured.documents.elements import Text, Title
+            UNSTRUCTURED_VERSION = "old"
+        
         UNSTRUCTURED_AVAILABLE = True
-        print("✅ Unstructured library available - using enhanced PDF processing")
-    except ImportError:
+        print(f"✅ Unstructured library available (version: {UNSTRUCTURED_VERSION}) - using enhanced PDF processing")
+        
+    except ImportError as e:
         UNSTRUCTURED_AVAILABLE = False
         print("⚠️ Unstructured library not available - using basic PDF processing")
-        print("For better PDF processing, install: pip install unstructured[all-docs]")
+        print(f"Import error: {e}")
+        print("For better PDF processing, try: pip install 'unstructured[pdf]' or pip install 'unstructured[all-docs]'")
         
 except ImportError:
     print("Document processing libraries not installed. Run: pip install PyPDF2 python-docx pdfplumber unstructured[all-docs]")
@@ -441,18 +452,25 @@ class SafeDocumentProcessor:
                     temp_file_path = temp_file.name
                 
                 try:
-                    # Use Unstructured to partition the PDF
-                    elements = partition_pdf(
-                        filename=temp_file_path,
-                        strategy="fast",  # Options: fast, hi_res, auto
-                        extract_images_in_pdf=False,  # We only want text
-                        infer_table_structure=True,   # Better table handling
-                        chunking_strategy="by_title", # Preserve document structure
-                        max_characters=4000,          # Reasonable chunk size
-                        combine_text_under_n_chars=100  # Combine small fragments
-                    )
+                    # Use Unstructured to partition the PDF (compatible with v0.11.8)
+                    if UNSTRUCTURED_VERSION == "new":
+                        elements = partition_pdf(
+                            filename=temp_file_path,
+                            strategy="fast",
+                            extract_images_in_pdf=False,
+                            infer_table_structure=True,
+                            chunking_strategy="by_title",
+                            max_characters=4000,
+                            combine_text_under_n_chars=100
+                        )
+                    else:
+                        # Older version - simpler parameters
+                        elements = partition_pdf(
+                            filename=temp_file_path,
+                            strategy="fast"
+                        )
                     
-                    # Convert elements to structured text
+                    # Convert elements to structured text (works for both versions)
                     text = ""
                     page_num = 1
                     elements_found = 0
@@ -463,13 +481,13 @@ class SafeDocumentProcessor:
                         
                         if element_text:
                             # Add element type context for better extraction
-                            if element_type == "Title":
+                            if "title" in element_type.lower():
                                 text += f"\n## {element_text}\n"
-                            elif element_type == "Header":
+                            elif "header" in element_type.lower():
                                 text += f"\n### {element_text}\n"
-                            elif element_type == "Table":
+                            elif "table" in element_type.lower():
                                 text += f"\n[TABLE]\n{element_text}\n[/TABLE]\n"
-                            elif element_type == "ListItem":
+                            elif "list" in element_type.lower():
                                 text += f"• {element_text}\n"
                             else:
                                 text += f"{element_text}\n"
@@ -482,7 +500,7 @@ class SafeDocumentProcessor:
                     if elements_found == 0:
                         raise ValueError("Unstructured found no elements in PDF")
                     
-                    warnings.append(f"Used Unstructured library - extracted {elements_found} document elements")
+                    warnings.append(f"Used Unstructured library v{UNSTRUCTURED_VERSION} - extracted {elements_found} document elements")
                     return text, warnings
                     
                 except Exception as e:
