@@ -1,5 +1,6 @@
 # Unified Legal Assistant Backend - Combines RAG Q&A and Document Analysis
 # This version merges both backends to run on a single port
+# RAG portion modified to behave like the second backend
 
 from fastapi import FastAPI, Request, HTTPException, File, UploadFile, Form
 from fastapi.middleware.cors import CORSMiddleware
@@ -197,7 +198,7 @@ class EnhancedAnalysisResponse(BaseModel):
     timestamp: str
     model_used: str = "deepseek-chat" if AI_ENABLED else "fact-extraction-only"
 
-# --- RAG System Functions (from first backend) ---
+# --- RAG System Functions (Modified to behave like second backend) ---
 
 def cleanup_expired_conversations():
     """Remove conversations older than 1 hour"""
@@ -224,20 +225,27 @@ def load_database():
         logger.error(f"Failed to load database: {e}")
         raise
 
-def get_conversation_context(session_id: str, max_messages: int = 8) -> str:
-    """Get conversation context"""
+def get_conversation_context(session_id: str, max_messages: int = 12) -> str:
+    """Get recent conversation history as context"""
     if session_id not in conversations:
         return ""
     messages = conversations[session_id]['messages'][-max_messages:]
     context_parts = []
     for msg in messages:
         role = msg['role'].upper()
-        content = msg['content'][:400] + "..." if len(msg['content']) > 400 else msg['content']
+        content = msg['content']
+        # For conversation history, keep more content but still truncate very long messages
+        if len(content) > 800:
+            content = content[:800] + "..."
         context_parts.append(f"{role}: {content}")
-    return "\n".join(context_parts) if context_parts else ""
+    
+    # If we have conversation history, make it clear this is ongoing context
+    if context_parts:
+        return "Previous conversation:\n" + "\n".join(context_parts)
+    return ""
 
 def add_to_conversation(session_id: str, role: str, content: str, sources: Optional[List] = None):
-    """Add message to conversation"""
+    """Add a message to the conversation history"""
     if session_id not in conversations:
         conversations[session_id] = {
             'messages': [],
@@ -252,8 +260,9 @@ def add_to_conversation(session_id: str, role: str, content: str, sources: Optio
     }
     conversations[session_id]['messages'].append(message)
     conversations[session_id]['last_accessed'] = datetime.utcnow()
-    if len(conversations[session_id]['messages']) > 20:
-        conversations[session_id]['messages'] = conversations[session_id]['messages'][-20:]
+    # Keep only last 30 messages to prevent memory issues but maintain more history
+    if len(conversations[session_id]['messages']) > 30:
+        conversations[session_id]['messages'] = conversations[session_id]['messages'][-30:]
 
 def parse_multiple_questions(query_text: str) -> List[str]:
     """Parse multiple questions from input"""
@@ -274,48 +283,40 @@ def parse_multiple_questions(query_text: str) -> List[str]:
     
     return questions
 
-def enhanced_retrieval_v2(db, query_text: str, conversation_history_context: str, k: int = 12) -> Tuple[List, Any]:
-    """Improved retrieval with better scoring and multi-query approach"""
-    logger.info(f"[ENHANCED_RETRIEVAL] Original query: '{query_text}'")
+def enhanced_retrieval_v2(db, query_text: str, conversation_history_context: str, k: int = 8) -> Tuple[List, Any]:
+    """
+    Performs retrieval, potentially using conversation history to refine the query.
+    Modified to be less strict like the second backend.
+    """
+    # First, try the original query
+    logger.info(f"[RETRIEVAL] Searching for query: '{query_text}'")
     
     try:
-        # Strategy 1: Direct query
+        # Perform similarity search with scores using original query
         results_with_scores = db.similarity_search_with_relevance_scores(query_text, k=k)
+        logger.info(f"[RETRIEVAL] Found {len(results_with_scores)} raw results")
         
-        # Strategy 2: Query expansion with legal terms
-        legal_expanded_query = expand_legal_query(query_text)
-        if legal_expanded_query != query_text:
-            logger.info(f"[ENHANCED_RETRIEVAL] Expanded query: '{legal_expanded_query}'")
-            expanded_results = db.similarity_search_with_relevance_scores(legal_expanded_query, k=k//2)
-            results_with_scores.extend(expanded_results)
+        # If we have conversation history and few results, try combined query
+        if conversation_history_context and len(results_with_scores) < 3:
+            combined_query = f"{conversation_history_context}\n\n{query_text}".strip()
+            logger.info(f"[RETRIEVAL] Trying combined query: '{combined_query}'")
+            combined_results = db.similarity_search_with_relevance_scores(combined_query, k=k)
+            # Use combined results if they're better
+            if len(combined_results) > len(results_with_scores):
+                results_with_scores = combined_results
         
-        # Strategy 3: Break down complex questions
-        sub_queries = extract_sub_queries(query_text)
-        for sub_query in sub_queries[:2]:
-            sub_results = db.similarity_search_with_relevance_scores(sub_query, k=k//3)
-            results_with_scores.extend(sub_results)
+        # Filter based on a minimum relevance score (LOWERED from 0.4 to 0.2)
+        filtered_results = [(doc, score) for doc, score in results_with_scores if score > 0.2]
+        logger.info(f"[RETRIEVAL] Filtered to {len(filtered_results)} results with score > 0.2")
         
-        # Remove duplicates and re-rank
-        unique_results = remove_duplicate_documents(results_with_scores)
+        # If we have filtered results, use them; otherwise use all results
+        final_results = filtered_results if filtered_results else results_with_scores
         
-        # Dynamic threshold based on query complexity
-        min_threshold = calculate_dynamic_threshold(query_text, unique_results)
-        filtered_results = [(doc, score) for doc, score in unique_results if score > min_threshold]
-        
-        logger.info(f"[ENHANCED_RETRIEVAL] Found {len(unique_results)} unique results, {len(filtered_results)} above threshold {min_threshold:.3f}")
-        
-        final_results = filtered_results if filtered_results else unique_results[:k//2]
         docs, scores = zip(*final_results) if final_results else ([], [])
-        
-        return list(docs), {
-            "query_used": query_text,
-            "scores": list(scores),
-            "threshold_used": min_threshold,
-            "strategies_used": ["direct", "expanded", "sub_queries"]
-        }
+        return list(docs), {"query_used": query_text, "scores": list(scores)}
         
     except Exception as e:
-        logger.error(f"[ENHANCED_RETRIEVAL] Search failed: {e}")
+        logger.error(f"[RETRIEVAL] Search failed: {e}")
         return [], {"error": str(e)}
 
 def expand_legal_query(query: str) -> str:
@@ -495,9 +496,11 @@ def create_enhanced_context(results: List, search_result: Dict, questions: List[
     source_info = []
     seen_sources = set()
     
-    MIN_RELEVANCE_FOR_CONTEXT = 0.4
+    # LOWERED threshold from 0.4 to match second backend behavior
+    MIN_RELEVANCE_FOR_CONTEXT = 0.25
     
     for i, (doc, score) in enumerate(zip(results, search_result.get("scores", [0.0]*len(results)))):
+        # Skip low-relevance documents
         if score < MIN_RELEVANCE_FOR_CONTEXT:
             continue
             
@@ -516,10 +519,8 @@ def create_enhanced_context(results: List, search_result: Dict, questions: List[
         display_source = os.path.basename(source_path)
         page_info = f" (Page {page})" if page is not None else ""
         
-        if len(content) > 800:
-            content = content[:800] + "... [truncated]"
-        
-        context_part = f"[{display_source}{page_info}] (Relevance: {score:.2f}):\n{content}"
+        # Format exactly like second backend
+        context_part = f"[{display_source}{page_info}] (Relevance: {score:.2f}): {content}"
         context_parts.append(context_part)
         
         source_info.append({
@@ -530,11 +531,11 @@ def create_enhanced_context(results: List, search_result: Dict, questions: List[
             'full_path': source_path
         })
     
-    context_text = "\n\n---\n\n".join(context_parts)
+    context_text = "\n\n".join(context_parts)
     return context_text, source_info
 
 def call_openrouter_api(prompt: str, api_key: str, api_base: str = "https://openrouter.ai/api/v1") -> str:
-    """Call OpenRouter API with fallback models"""
+    """Call OpenRouter API with fallback models - matching second backend exactly"""
     headers = {
         "Authorization": f"Bearer {api_key}",
         "Content-Type": "application/json",
@@ -542,35 +543,115 @@ def call_openrouter_api(prompt: str, api_key: str, api_base: str = "https://open
         "X-Title": "Legal Assistant"
     }
     
+    # Use same model list and order as second backend
     models_to_try = [
-        "deepseek/deepseek-chat-v3-0324:free",
+        "deepseek/deepseek-chat",
         "microsoft/phi-3-mini-128k-instruct:free",
-        "meta-llama/llama-3.2-3b-instruct:free"
+        "meta-llama/llama-3.2-3b-instruct:free",
+        "google/gemma-2-9b-it:free",
+        "mistralai/mistral-7b-instruct:free",
+        "openchat/openchat-7b:free"
     ]
     
-    for model in models_to_try:
+    logger.info(f"Trying {len(models_to_try)} models...")
+    last_exception = None
+    
+    for i, model in enumerate(models_to_try):
         try:
             payload = {
                 "model": model,
                 "messages": [{"role": "user", "content": prompt}],
-                "temperature": 0.5,
-                "max_tokens": 2000,
-                "top_p": 0.9
+                "temperature": 0.7,  # Changed from 0.5 to 0.7 to match second backend
+                "max_tokens": 3000,  # Changed from 2000 to 3000 to match second backend
+                "top_p": 0.95       # Changed from 0.9 to 0.95 to match second backend
             }
+            logger.info(f"Attempting model {i+1}/{len(models_to_try)}: {model}")
             
-            response = requests.post(f"{api_base}/chat/completions", headers=headers, json=payload, timeout=60)
+            response = requests.post(
+                f"{api_base}/chat/completions",
+                headers=headers,
+                json=payload,
+                timeout=60
+            )
             
-            if response.status_code == 200:
+            # Log response details for debugging
+            logger.info(f"Response status: {response.status_code}")
+            logger.info(f"Response headers: {dict(response.headers)}")
+            
+            # Check if response is empty
+            if not response.content:
+                logger.error(f"Empty response from {model}")
+                last_exception = Exception("Empty response from API")
+                continue
+                
+            # Log raw response content for debugging
+            response_text = response.content.decode('utf-8')
+            logger.info(f"Raw response content (first 200 chars): {response_text[:200]}")
+            
+            # Check HTTP status
+            if response.status_code != 200:
+                logger.error(f"HTTP {response.status_code} error from {model}: {response_text}")
+                last_exception = requests.exceptions.HTTPError(f"HTTP {response.status_code}: {response_text}")
+                continue
+            
+            # Try to parse JSON
+            try:
                 result = response.json()
-                if 'choices' in result and result['choices']:
-                    content = result['choices'][0]['message']['content']
-                    if content and content.strip():
-                        return content.strip()
+            except json.JSONDecodeError as json_err:
+                logger.error(f"JSON decode error from {model}: {json_err}")
+                logger.error(f"Response content: {response_text}")
+                last_exception = json_err
+                continue
+            
+            # Check if response has expected structure
+            if 'choices' not in result or not result['choices']:
+                logger.error(f"Invalid response structure from {model}: {result}")
+                last_exception = Exception(f"Invalid response structure: {result}")
+                continue
+                
+            if 'message' not in result['choices'][0] or 'content' not in result['choices'][0]['message']:
+                logger.error(f"Missing message content from {model}: {result}")
+                last_exception = Exception(f"Missing message content: {result}")
+                continue
+            
+            response_content = result['choices'][0]['message']['content']
+            if not response_content or not response_content.strip():
+                logger.error(f"Empty content from {model}")
+                last_exception = Exception("Empty content in response")
+                continue
+                
+            logger.info(f"Success with model {model}! Response length: {len(response_content)}")
+            return response_content.strip()
+            
+        except requests.exceptions.Timeout:
+            logger.error(f"Timeout error for model {model}")
+            last_exception = Exception("Request timeout")
+            continue
+        except requests.exceptions.ConnectionError as conn_err:
+            logger.error(f"Connection error for model {model}: {conn_err}")
+            last_exception = conn_err
+            continue
+        except requests.exceptions.RequestException as req_err:
+            logger.error(f"Request error for model {model}: {req_err}")
+            last_exception = req_err
+            continue
         except Exception as e:
-            logger.error(f"Error with model {model}: {e}")
+            logger.error(f"Unexpected error for model {model}: {e}")
+            last_exception = e
             continue
     
-    return "I apologize, but I'm experiencing technical difficulties. Please try again."
+    # If all models failed
+    error_msg = f"All models failed. Last error: {str(last_exception)}"
+    logger.error(error_msg)
+    
+    # Return a fallback response instead of raising an exception
+    fallback_response = (
+        "I apologize, but I'm currently experiencing technical difficulties with the AI service. "
+        "This could be due to API limitations, network issues, or temporary service unavailability. "
+        "Please try again in a few moments, or contact support if the issue persists."
+    )
+    
+    return fallback_response
 
 # --- Document Analysis System (from second backend) ---
 
@@ -1860,52 +1941,66 @@ if OPEN_SOURCE_NLP_AVAILABLE:
         logger.error(f"Failed to initialize open-source analyzer: {e}")
         open_source_analyzer = None
 
-# Prompt template for improved RAG
-IMPROVED_PROMPT_TEMPLATE = """You are a legal research assistant. Your responses must be STRICTLY based on the provided legal documents.
+# Modified Prompt template for improved RAG - behaving like second backend
+IMPROVED_PROMPT_TEMPLATE = """You are a legal assistant providing detailed, comprehensive answers about legal documents and policies. Your role is to analyze legal documents thoroughly and provide informative, well-structured responses.
 
-CRITICAL REQUIREMENTS:
-1. **ONLY use information from the provided context below**
-2. **If the context doesn't contain sufficient information, explicitly state this**
-3. **Cite specific document names for each claim**
-4. **Do NOT add general legal knowledge not found in the context**
+RESPONSE REQUIREMENTS:
+1. **Provide Detailed Analysis**: Give comprehensive explanations, not brief summaries. Include relevant details, context, and implications.
+2. **Use All Available Context**: Analyze ALL provided documents and sources. Don't limit yourself to just one source when multiple are available.
+3. **Structure Your Response**: Use clear paragraphs, bullet points when appropriate, and logical organization.
+4. **Answer Follow-up Questions**: If the user asks about a document you just cited, provide detailed information from that document.
+5. **Cite Properly**: Use document names as shown in context (e.g., [document_name.pdf] or [document_name.pdf (Page X)]).
+6. **Be Conversational and Context-Aware**: 
+   - Always acknowledge and reference previous parts of our conversation when relevant
+   - If the user asks about something mentioned earlier, explicitly connect it to the previous discussion
+   - Build upon previous answers and maintain conversational flow
+   - Reference earlier questions and answers when they provide context for the current question
 
 RESPONSE STYLE: {response_style}
 - Concise: Provide key points only
 - Balanced: Structured overview with main points
 - Detailed: Comprehensive analysis
 
-CONVERSATION HISTORY:
+CONVERSATION HISTORY (ALWAYS consider this context):
 {conversation_history}
 
-LEGAL DOCUMENT CONTEXT (USE ONLY THIS INFORMATION):
+AVAILABLE LEGAL DOCUMENTS AND CONTEXT:
 {context}
 
 USER QUESTION:
 {questions}
 
-INSTRUCTIONS:
-- Base your response ONLY on the provided context
-- If context is insufficient, say: "Based on the available documents, I can only provide limited information..."
-- Cite document names for each fact: [document_name.pdf]
-- If no relevant information exists, say: "The available documents do not contain information about this topic."
+Provide a comprehensive, detailed response using the available legal documents AND the conversation history above. If this question relates to something we discussed earlier, acknowledge that connection. Include specific provisions, explanations, and relevant details from the sources. If multiple documents are relevant, synthesize information from all of them. Aim for thorough, informative responses that fully address the user's question while maintaining awareness of our ongoing conversation.
 
 RESPONSE:"""
 
 def process_query_improved(question: str, session_id: str, response_style: str = "balanced") -> QueryResponse:
-    """Improved query processing with enhanced accuracy and user experience"""
+    """Improved query processing matching second backend behavior"""
     try:
+        # Load Database
         db = load_database()
         
+        # Test database connectivity
+        test_results = db.similarity_search("test", k=1)
+        logger.info(f"Database loaded successfully with {len(test_results)} test results")
+        
+        # Parse Question
         questions = parse_multiple_questions(question)
+        logger.info(f"Parsed {len(questions)} questions: {questions}")
         combined_query = " ".join(questions)
         
-        conversation_history_context = get_conversation_context(session_id, max_messages=8)
+        # Get Conversation History
+        conversation_history_list = conversations.get(session_id, {}).get('messages', [])
+        conversation_history_context = get_conversation_context(session_id, max_messages=12)
+        logger.info(f"Using conversation history with {len(conversation_history_list)} total messages")
         
-        results, search_result = enhanced_retrieval_v2(db, combined_query, conversation_history_context, k=12)
+        # Perform Retrieval - using modified function
+        results, search_result = enhanced_retrieval_v2(db, combined_query, conversation_history_context, k=8)
+        logger.info(f"Retrieved {len(results)} results")
         
         if not results:
             logger.warning("No relevant documents found")
-            no_info_response = "I couldn't find any relevant information in the available legal documents to answer your question. The documents may not contain information about this specific topic."
+            no_info_response = "I couldn't find any relevant information in the documents to answer your question. Please try rephrasing your question or check if the documents contain information about this topic."
             add_to_conversation(session_id, "assistant", no_info_response)
             return QueryResponse(
                 response=no_info_response,
@@ -1917,24 +2012,36 @@ def process_query_improved(question: str, session_id: str, response_style: str =
                 expand_available=False
             )
         
+        # Create Context
         context_text, source_info = create_enhanced_context(results, search_result, questions)
+        logger.info(f"Created context with {len(source_info)} sources")
         
+        # Calculate confidence before generating response (keeping this feature from first backend)
         confidence_score = calculate_confidence_score(results, search_result, len(context_text))
         
-        formatted_questions = "\n".join(f"{i+1}. {q}" for i, q in enumerate(questions)) if len(questions) > 1 else questions[0]
+        # Format Prompt
+        if len(questions) > 1:
+            formatted_questions = "\n".join(f"{i+1}. {q}" for i, q in enumerate(questions))
+        else:
+            formatted_questions = questions[0]
         
         formatted_prompt = IMPROVED_PROMPT_TEMPLATE.format(
             response_style=response_style.capitalize(),
-            conversation_history=conversation_history_context if conversation_history_context else "No previous conversation.",
+            conversation_history=conversation_history_context if conversation_history_context else "No previous conversation in this session.",
             context=context_text,
             questions=formatted_questions
         )
+        logger.info(f"Prompt length: {len(formatted_prompt)} characters")
+        logger.info(f"Conversation history length: {len(conversation_history_context)} characters")
         
+        # Call LLM
         api_key = os.environ.get("OPENAI_API_KEY")
         api_base = os.environ.get("OPENAI_API_BASE", "https://openrouter.ai/api/v1")
         
         if not api_key:
             error_msg = "OPENAI_API_KEY environment variable not set."
+            logger.error(error_msg)
+            add_to_conversation(session_id, "assistant", f"Configuration Error: {error_msg}")
             return QueryResponse(
                 response=None,
                 error=f"Configuration Error: {error_msg}",
@@ -1945,32 +2052,43 @@ def process_query_improved(question: str, session_id: str, response_style: str =
                 expand_available=False
             )
         
-        raw_response = call_openrouter_api(formatted_prompt, api_key, api_base)
+        response_text = call_openrouter_api(formatted_prompt, api_key, api_base)
+        if not response_text:
+            response_text = "I received an empty response. Please try again."
         
-        formatted_response, expand_available = format_response_by_style(raw_response, source_info, response_style)
+        # Post-process Response (Add Sources) - matching second backend exactly
+        MIN_RELEVANCE_SCORE_FOR_SOURCE_DISPLAY = 0.25
+        relevant_source_info = [source for source in source_info if source['relevance'] >= MIN_RELEVANCE_SCORE_FOR_SOURCE_DISPLAY]
         
-        if source_info:
-            formatted_response += f"\n\n**SOURCES** (Confidence: {confidence_score:.1%}):\n"
-            for source in source_info:
+        # Add sources section only if there are relevant sources
+        if relevant_source_info:
+            response_text += "\n\n**SOURCES:**\n"
+            for source in relevant_source_info:
                 page_info = f", Page {source['page']}" if source['page'] is not None else ""
-                formatted_response += f"- {source['file_name']}{page_info} (Relevance: {source['relevance']:.2f})\n"
+                response_text += f"- {source['file_name']}{page_info} (Relevance: {source['relevance']:.2f})\n"
         
-        add_to_conversation(session_id, "user", question)
-        add_to_conversation(session_id, "assistant", formatted_response, source_info)
+        # Keep the style formatting from first backend (it's a nice feature)
+        formatted_response, expand_available = format_response_by_style(response_text, source_info, response_style)
+        
+        # Update Conversation History
+        add_to_conversation(session_id, "user", question)  # Add original question
+        add_to_conversation(session_id, "assistant", formatted_response, source_info)  # Add full source info to history
+        logger.info(f"Successfully generated response of length {len(formatted_response)}")
         
         return QueryResponse(
             response=formatted_response,
             error=None,
             context_found=True,
-            sources=source_info,
+            sources=relevant_source_info,  # Return the filtered list for the API response
             session_id=session_id,
             confidence_score=confidence_score,
             expand_available=expand_available
         )
         
     except Exception as e:
-        logger.error(f"Query processing failed: {e}", exc_info=True)
+        logger.error(f"Failed to load database or process query: {e}", exc_info=True)
         error_msg = f"Failed to process your request: {str(e)}"
+        add_to_conversation(session_id, "assistant", error_msg)
         return QueryResponse(
             response=None,
             error=error_msg,
