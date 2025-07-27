@@ -1,4 +1,4 @@
-# Hallucination-Free Document Analysis System
+## Hallucination-Free Document Analysis System
 # Only extracts verifiable information - says "Failed to extract" when uncertain
 
 from fastapi import FastAPI, Request, HTTPException, File, UploadFile, Form
@@ -22,57 +22,38 @@ import os
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Enhanced document processing imports
+# Lightweight document processing - PyMuPDF first approach
 try:
     import PyPDF2
     import docx
-    from pdfplumber import PDF
     
-    # Try to import Unstructured for better PDF processing (compatible with v0.11.8)
+    # PyMuPDF (best for legal documents, lightweight ~50MB)
     try:
-        # Check for required dependencies first
-        missing_deps = []
-        
-        try:
-            import pdf2image
-        except ImportError:
-            missing_deps.append("pdf2image")
-            
-        try:
-            import PIL
-        except ImportError:
-            missing_deps.append("Pillow")
-        
-        if missing_deps:
-            print(f"⚠️ Missing dependencies for Unstructured: {', '.join(missing_deps)}")
-            print("Install with: pip install pdf2image Pillow")
-            raise ImportError(f"Missing dependencies: {missing_deps}")
-        
-        # Try newer import paths first
-        try:
-            from unstructured.partition.auto import partition
-            from unstructured.partition.pdf import partition_pdf
-            UNSTRUCTURED_VERSION = "new"
-        except ImportError:
-            # Try older import paths for v0.11.8
-            from unstructured.partition.pdf import partition_pdf
-            from unstructured.documents.elements import Text, Title
-            UNSTRUCTURED_VERSION = "old"
-        
-        UNSTRUCTURED_AVAILABLE = True
-        print(f"✅ Unstructured library available (version: {UNSTRUCTURED_VERSION}) - using enhanced PDF processing")
-        
-    except ImportError as e:
-        UNSTRUCTURED_AVAILABLE = False
-        print("⚠️ Unstructured library not available - using basic PDF processing")
-        print(f"Import error: {e}")
-        print("For better PDF processing, install:")
-        print("  pip install pdf2image Pillow")
-        print("  pip install 'unstructured[pdf]'")
-        print("Or for full support: pip install 'unstructured[all-docs]'")
+        import fitz  # PyMuPDF
+        PYMUPDF_AVAILABLE = True
+        print("✅ PyMuPDF available - using high-quality PDF processing (lightweight)")
+    except ImportError:
+        PYMUPDF_AVAILABLE = False
+        print("⚠️ PyMuPDF not available")
+    
+    # pdfplumber (good secondary option ~20MB)
+    try:
+        import pdfplumber
+        PDFPLUMBER_AVAILABLE = True
+        print("✅ pdfplumber available - using enhanced PDF extraction")
+    except ImportError:
+        PDFPLUMBER_AVAILABLE = False
+        print("⚠️ pdfplumber not available")
+    
+    # Skip heavy Unstructured to save 3-4GB of space
+    UNSTRUCTURED_AVAILABLE = False
+    print("ℹ️ Using lightweight PDF processing - skipping heavy ML dependencies")
         
 except ImportError:
-    print("Document processing libraries not installed. Run: pip install PyPDF2 python-docx pdfplumber unstructured[all-docs]")
+    print("Document processing libraries not installed. Run: pip install PyMuPDF python-docx pdfplumber")
+    PYMUPDF_AVAILABLE = False
+    PDFPLUMBER_AVAILABLE = False
+    UNSTRUCTURED_AVAILABLE = Falsestructured[all-docs]")
     UNSTRUCTURED_AVAILABLE = False
 
 class VerifiableExtractor:
@@ -456,7 +437,7 @@ class SafeDocumentProcessor:
     
     @staticmethod
     def _extract_pdf_safe(file: UploadFile) -> Tuple[str, List[str]]:
-        """Extract PDF text with enhanced processing using Unstructured if available"""
+        """Extract PDF text with PyMuPDF first (better than Unstructured for legal docs)"""
         
         warnings = []
         pdf_content = file.file.read()
@@ -464,159 +445,146 @@ class SafeDocumentProcessor:
         if len(pdf_content) == 0:
             raise ValueError("PDF file is empty")
         
-        # Try Unstructured library first (best quality) - only if dependencies available
-        if UNSTRUCTURED_AVAILABLE:
+        # Try PyMuPDF first (excellent for legal documents, lightweight)
+        if PYMUPDF_AVAILABLE:
             try:
-                # Write to temporary file for Unstructured
-                with tempfile.NamedTemporaryFile(suffix='.pdf', delete=False) as temp_file:
-                    temp_file.write(pdf_content)
-                    temp_file_path = temp_file.name
+                import fitz  # PyMuPDF
                 
-                try:
-                    # Use Unstructured to partition the PDF (compatible with v0.11.8)
-                    if UNSTRUCTURED_VERSION == "new":
-                        elements = partition_pdf(
-                            filename=temp_file_path,
-                            strategy="fast",
-                            extract_images_in_pdf=False,
-                            infer_table_structure=True,
-                            chunking_strategy="by_title",
-                            max_characters=4000,
-                            combine_text_under_n_chars=100
-                        )
-                    else:
-                        # Older version - simpler parameters
-                        elements = partition_pdf(
-                            filename=temp_file_path,
-                            strategy="fast"
-                        )
-                    
-                    # Convert elements to structured text (works for both versions)
-                    text = ""
-                    page_num = 1
-                    elements_found = 0
-                    
-                    for element in elements:
-                        element_type = type(element).__name__
-                        element_text = str(element).strip()
-                        
-                        if element_text:
-                            # Add element type context for better extraction
-                            if "title" in element_type.lower():
-                                text += f"\n## {element_text}\n"
-                            elif "header" in element_type.lower():
-                                text += f"\n### {element_text}\n"
-                            elif "table" in element_type.lower():
-                                text += f"\n[TABLE]\n{element_text}\n[/TABLE]\n"
-                            elif "list" in element_type.lower():
-                                text += f"• {element_text}\n"
-                            else:
-                                text += f"{element_text}\n"
-                            
-                            elements_found += 1
-                    
-                    # Clean up temp file
-                    try:
-                        os.unlink(temp_file_path)
-                    except:
-                        pass  # Don't fail if cleanup fails
-                    
-                    if elements_found == 0:
-                        raise ValueError("Unstructured found no elements in PDF")
-                    
-                    warnings.append(f"Used Unstructured library v{UNSTRUCTURED_VERSION} - extracted {elements_found} document elements")
-                    return text, warnings
-                    
-                except Exception as e:
-                    warnings.append(f"Unstructured processing failed: {str(e)}, falling back to basic extraction")
-                    # Clean up temp file on error
-                    try:
-                        os.unlink(temp_file_path)
-                    except:
-                        pass
-                    
-            except Exception as e:
-                warnings.append(f"Unstructured setup failed: {str(e)}, using fallback methods")
-        else:
-            warnings.append("Unstructured not available, using pdfplumber for enhanced extraction")
-        
-        # Fallback to pdfplumber (medium quality)
-        pdf_file = io.BytesIO(pdf_content)
-        
-        try:
-            import pdfplumber
-            with pdfplumber.open(pdf_file) as pdf:
-                if len(pdf.pages) == 0:
+                # Create document from bytes
+                pdf_doc = fitz.open(stream=pdf_content, filetype="pdf")
+                
+                if pdf_doc.page_count == 0:
                     raise ValueError("PDF contains no pages")
                 
                 text = ""
                 pages_with_text = 0
                 tables_found = 0
                 
-                for page_num, page in enumerate(pdf.pages):
-                    # Extract text
-                    page_text = page.extract_text()
+                for page_num in range(pdf_doc.page_count):
+                    page = pdf_doc[page_num]
+                    
+                    # Extract text with better formatting
+                    page_text = page.get_text()
                     if page_text and page_text.strip():
                         text += f"[Page {page_num + 1}]\n{page_text}\n"
                         pages_with_text += 1
                     else:
                         warnings.append(f"Page {page_num + 1} contains no extractable text")
                     
-                    # Extract tables separately for better structure
+                    # Extract tables (PyMuPDF can detect table-like structures)
                     try:
-                        tables = page.extract_tables()
-                        if tables:
-                            for table_num, table in enumerate(tables):
+                        tables = page.find_tables()
+                        for table_num, table in enumerate(tables):
+                            table_data = table.extract()
+                            if table_data:
                                 text += f"\n[TABLE {table_num + 1} FROM PAGE {page_num + 1}]\n"
-                                for row in table:
+                                for row in table_data:
                                     if row:
                                         clean_row = [str(cell) if cell else "" for cell in row]
                                         text += " | ".join(clean_row) + "\n"
                                 text += "[/TABLE]\n\n"
                                 tables_found += 1
                     except Exception as e:
-                        warnings.append(f"Could not extract tables from page {page_num + 1}: {str(e)}")
+                        # Table extraction is optional
+                        pass
+                
+                pdf_doc.close()
                 
                 if pages_with_text == 0:
                     raise ValueError("No readable text found in any PDF pages")
                 
-                if pages_with_text < len(pdf.pages):
-                    warnings.append(f"Only {pages_with_text} of {len(pdf.pages)} pages contained extractable text")
+                if pages_with_text < pdf_doc.page_count:
+                    warnings.append(f"Only {pages_with_text} of {pdf_doc.page_count} pages contained extractable text")
                 
                 if tables_found > 0:
-                    warnings.append(f"Extracted {tables_found} tables with preserved structure")
+                    warnings.append(f"PyMuPDF extracted {tables_found} tables with preserved structure")
+                else:
+                    warnings.append("PyMuPDF processed PDF successfully - excellent for legal documents")
                 
                 return text, warnings
                 
-        except ImportError:
-            warnings.append("pdfplumber not available, using basic PyPDF2 extraction")
+            except Exception as e:
+                warnings.append(f"PyMuPDF processing failed: {str(e)}, falling back to pdfplumber")
+        
+        # Fallback to pdfplumber (good quality)
+        if PDFPLUMBER_AVAILABLE:
+            pdf_file = io.BytesIO(pdf_content)
             
-            # Final fallback to PyPDF2 (basic quality)
-            pdf_file.seek(0)
-            reader = PyPDF2.PdfReader(pdf_file)
-            
-            if len(reader.pages) == 0:
-                raise ValueError("PDF contains no pages")
-            
-            text = ""
-            pages_with_text = 0
-            
-            for page_num, page in enumerate(reader.pages):
-                try:
-                    page_text = page.extract_text()
-                    if page_text and page_text.strip():
-                        text += f"[Page {page_num + 1}]\n{page_text}\n\n"
-                        pages_with_text += 1
-                    else:
-                        warnings.append(f"Page {page_num + 1} contains no extractable text")
-                except Exception as e:
-                    warnings.append(f"Error extracting text from page {page_num + 1}: {str(e)}")
-            
-            if pages_with_text == 0:
-                raise ValueError("No readable text found in any PDF pages")
-            
-            warnings.append("Used basic PDF extraction - complex layouts may not be preserved")
-            return text, warnings
+            try:
+                import pdfplumber
+                with pdfplumber.open(pdf_file) as pdf:
+                    if len(pdf.pages) == 0:
+                        raise ValueError("PDF contains no pages")
+                    
+                    text = ""
+                    pages_with_text = 0
+                    tables_found = 0
+                    
+                    for page_num, page in enumerate(pdf.pages):
+                        # Extract text
+                        page_text = page.extract_text()
+                        if page_text and page_text.strip():
+                            text += f"[Page {page_num + 1}]\n{page_text}\n"
+                            pages_with_text += 1
+                        else:
+                            warnings.append(f"Page {page_num + 1} contains no extractable text")
+                        
+                        # Extract tables separately for better structure
+                        try:
+                            tables = page.extract_tables()
+                            if tables:
+                                for table_num, table in enumerate(tables):
+                                    text += f"\n[TABLE {table_num + 1} FROM PAGE {page_num + 1}]\n"
+                                    for row in table:
+                                        if row:
+                                            clean_row = [str(cell) if cell else "" for cell in row]
+                                            text += " | ".join(clean_row) + "\n"
+                                    text += "[/TABLE]\n\n"
+                                    tables_found += 1
+                        except Exception as e:
+                            warnings.append(f"Could not extract tables from page {page_num + 1}: {str(e)}")
+                    
+                    if pages_with_text == 0:
+                        raise ValueError("No readable text found in any PDF pages")
+                    
+                    if pages_with_text < len(pdf.pages):
+                        warnings.append(f"Only {pages_with_text} of {len(pdf.pages)} pages contained extractable text")
+                    
+                    if tables_found > 0:
+                        warnings.append(f"pdfplumber extracted {tables_found} tables with preserved structure")
+                    
+                    return text, warnings
+                    
+            except ImportError:
+                warnings.append("pdfplumber not available, using basic PyPDF2 extraction")
+        
+        # Final fallback to PyPDF2 (basic quality)
+        pdf_file = io.BytesIO(pdf_content)
+        pdf_file.seek(0)
+        reader = PyPDF2.PdfReader(pdf_file)
+        
+        if len(reader.pages) == 0:
+            raise ValueError("PDF contains no pages")
+        
+        text = ""
+        pages_with_text = 0
+        
+        for page_num, page in enumerate(reader.pages):
+            try:
+                page_text = page.extract_text()
+                if page_text and page_text.strip():
+                    text += f"[Page {page_num + 1}]\n{page_text}\n\n"
+                    pages_with_text += 1
+                else:
+                    warnings.append(f"Page {page_num + 1} contains no extractable text")
+            except Exception as e:
+                warnings.append(f"Error extracting text from page {page_num + 1}: {str(e)}")
+        
+        if pages_with_text == 0:
+            raise ValueError("No readable text found in any PDF pages")
+        
+        warnings.append("Used basic PDF extraction - complex layouts may not be preserved")
+        return text, warnings
     
     @staticmethod
     def _extract_docx_safe(file: UploadFile) -> Tuple[str, List[str]]:
