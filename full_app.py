@@ -181,6 +181,8 @@ class ConversationHistory(BaseModel):
 
 # Document Analysis Models
 class EnhancedAnalysisResponse(BaseModel):
+    model_config = {"protected_namespaces": ()}  # Fix for Pydantic warning
+    
     response: Optional[str] = None
     summary: Optional[str] = None
     factual_summary: Optional[str] = None
@@ -1539,7 +1541,273 @@ class SafeDocumentProcessor:
         except Exception as e:
             raise ValueError(f"Failed to process Word document: {str(e)}")
 
-# Open-Source NLP Legal Analyzer
+# Lightweight Open-Source Legal Analyzer - Single Model Version
+class LightweightLegalAnalyzer:
+    """Legal document analyzer using only one model at a time to save memory"""
+    
+    def __init__(self, model_choice="classifier"):
+        """
+        Initialize with only one model
+        model_choice: "summarizer", "classifier", "ner", "qa", or "zero_shot"
+        """
+        self.device = 0 if torch.cuda.is_available() else -1
+        self.models = {}
+        self.models_loaded = False
+        self.model_choice = model_choice
+        
+        if OPEN_SOURCE_NLP_AVAILABLE:
+            self.load_single_model()
+    
+    def load_single_model(self):
+        """Load only one model based on choice"""
+        
+        print(f"Loading single model: {self.model_choice}...")
+        
+        try:
+            if self.model_choice == "summarizer":
+                # Summarization - Uses ~1.2GB RAM
+                self.models['summarizer'] = pipeline(
+                    "summarization",
+                    model="facebook/bart-large-cnn",
+                    device=self.device
+                )
+                print("✅ BART summarizer loaded")
+                
+            elif self.model_choice == "classifier":
+                # Document Classification - Uses ~400MB RAM
+                self.models['classifier'] = pipeline(
+                    "text-classification",
+                    model="nlpaueb/legal-bert-base-uncased",
+                    device=self.device
+                )
+                print("✅ Legal BERT classifier loaded")
+                
+            elif self.model_choice == "ner":
+                # Named Entity Recognition - Uses ~400MB RAM
+                self.models['ner'] = pipeline(
+                    "ner",
+                    model="dslim/bert-base-NER",
+                    aggregation_strategy="simple",
+                    device=self.device
+                )
+                print("✅ BERT NER loaded")
+                
+            elif self.model_choice == "qa":
+                # Question Answering - Uses ~400MB RAM
+                self.models['qa'] = pipeline(
+                    "question-answering",
+                    model="deepset/roberta-base-squad2",
+                    device=self.device
+                )
+                print("✅ RoBERTa QA loaded")
+                
+            elif self.model_choice == "zero_shot":
+                # Zero-shot Classification - Uses ~1.2GB RAM
+                self.models['zero_shot'] = pipeline(
+                    "zero-shot-classification",
+                    model="facebook/bart-large-mnli",
+                    device=self.device
+                )
+                print("✅ BART zero-shot loaded")
+            
+            self.models_loaded = True
+            
+        except Exception as e:
+            print(f"❌ Error loading model: {e}")
+            self.models_loaded = False
+    
+    async def analyze_document(self, document_text: str, analysis_type: str) -> Tuple[str, float]:
+        """Perform analysis using the loaded model"""
+        
+        if not self.models_loaded:
+            return f"Model {self.model_choice} not loaded. Please check memory availability.", 0.0
+        
+        # Route to appropriate analysis based on loaded model
+        if self.model_choice == "summarizer" and analysis_type == "summarize":
+            return self._summarize_document(document_text)
+        
+        elif self.model_choice == "classifier":
+            return self._classify_document(document_text)
+            
+        elif self.model_choice == "ner":
+            return self._extract_entities(document_text)
+            
+        elif self.model_choice == "qa" and analysis_type in ["obligations", "timeline-extraction"]:
+            return self._qa_extraction(document_text, analysis_type)
+            
+        elif self.model_choice == "zero_shot" and analysis_type == "extract-clauses":
+            return self._extract_clauses(document_text)
+        
+        else:
+            return f"Analysis type '{analysis_type}' not supported with loaded model '{self.model_choice}'", 0.0
+    
+    def _summarize_document(self, text: str) -> Tuple[str, float]:
+        """Generate summary using BART"""
+        
+        # Split into chunks if too long
+        max_chunk_length = 1024
+        chunks = self._split_into_chunks(text, max_chunk_length)
+        
+        summaries = []
+        for i, chunk in enumerate(chunks[:3]):  # Process max 3 chunks to save memory
+            try:
+                print(f"Summarizing chunk {i+1}...")
+                summary = self.models['summarizer'](
+                    chunk,
+                    max_length=150,
+                    min_length=50,
+                    do_sample=False
+                )[0]['summary_text']
+                summaries.append(summary)
+            except Exception as e:
+                print(f"Error summarizing chunk: {e}")
+                continue
+        
+        if summaries:
+            result = "## Document Summary (BART Model)\n\n" + "\n\n".join(summaries)
+            return result, 0.7
+        else:
+            return "Failed to generate summary", 0.0
+    
+    def _classify_document(self, text: str) -> Tuple[str, float]:
+        """Classify document type"""
+        
+        try:
+            # Use first 512 tokens
+            result = self.models['classifier'](text[:1000])
+            
+            classification = f"""## Document Classification (Legal-BERT)
+            
+**Type**: {result[0]['label']}
+**Confidence**: {result[0]['score']:.1%}
+
+Note: This is a basic classification. For detailed analysis, use the AI-powered analysis.
+"""
+            return classification, result[0]['score']
+            
+        except Exception as e:
+            return f"Classification failed: {e}", 0.0
+    
+    def _extract_entities(self, text: str) -> Tuple[str, float]:
+        """Extract named entities"""
+        
+        try:
+            # Process first 2000 chars to save memory
+            entities = self.models['ner'](text[:2000])
+            
+            # Group entities by type
+            entity_groups = {}
+            for ent in entities:
+                ent_type = ent['entity_group']
+                if ent_type not in entity_groups:
+                    entity_groups[ent_type] = []
+                entity_groups[ent_type].append(ent['word'])
+            
+            result = "## Named Entity Recognition (BERT-NER)\n\n"
+            for ent_type, words in entity_groups.items():
+                result += f"**{ent_type}**: {', '.join(set(words))}\n"
+            
+            return result, 0.6
+            
+        except Exception as e:
+            return f"NER failed: {e}", 0.0
+    
+    def _qa_extraction(self, text: str, analysis_type: str) -> Tuple[str, float]:
+        """Extract information using QA model"""
+        
+        questions = {
+            "obligations": [
+                "What must the parties do?",
+                "What are the obligations?",
+                "What are the requirements?"
+            ],
+            "timeline-extraction": [
+                "When does this start?",
+                "When does this end?",
+                "What are the deadlines?"
+            ]
+        }
+        
+        if analysis_type not in questions:
+            return "QA extraction not configured for this analysis type", 0.0
+        
+        answers = []
+        try:
+            for q in questions[analysis_type]:
+                result = self.models['qa'](question=q, context=text[:1000])
+                if result['score'] > 0.3:
+                    answers.append(f"Q: {q}\nA: {result['answer']} (confidence: {result['score']:.1%})")
+            
+            if answers:
+                return f"## QA Extraction Results\n\n" + "\n\n".join(answers), 0.5
+            else:
+                return "No confident answers found", 0.3
+                
+        except Exception as e:
+            return f"QA extraction failed: {e}", 0.0
+    
+    def _extract_clauses(self, text: str) -> Tuple[str, float]:
+        """Extract clauses using zero-shot classification"""
+        
+        clause_types = [
+            "termination clause",
+            "payment terms",
+            "confidentiality clause",
+            "liability limitation"
+        ]
+        
+        # Split into paragraphs
+        paragraphs = [p.strip() for p in text.split('\n\n') if len(p.strip()) > 50][:10]
+        
+        found_clauses = []
+        
+        try:
+            for i, para in enumerate(paragraphs):
+                print(f"Analyzing paragraph {i+1}...")
+                result = self.models['zero_shot'](
+                    para[:500],  # Limit length
+                    candidate_labels=clause_types,
+                    multi_label=False  # Single label to save memory
+                )
+                
+                if result['scores'][0] > 0.7:
+                    found_clauses.append({
+                        'type': result['labels'][0],
+                        'text': para[:200] + '...',
+                        'score': result['scores'][0]
+                    })
+            
+            if found_clauses:
+                result = "## Extracted Clauses (BART Zero-shot)\n\n"
+                for clause in found_clauses:
+                    result += f"**{clause['type']}** (confidence: {clause['score']:.1%})\n{clause['text']}\n\n"
+                return result, 0.6
+            else:
+                return "No clauses found with high confidence", 0.3
+                
+        except Exception as e:
+            return f"Clause extraction failed: {e}", 0.0
+    
+    def _split_into_chunks(self, text: str, max_length: int) -> List[str]:
+        """Split text into chunks for processing"""
+        sentences = text.split('. ')
+        chunks = []
+        current_chunk = ""
+        
+        for sentence in sentences:
+            if len(current_chunk) + len(sentence) < max_length:
+                current_chunk += sentence + ". "
+            else:
+                if current_chunk:
+                    chunks.append(current_chunk)
+                current_chunk = sentence + ". "
+        
+        if current_chunk:
+            chunks.append(current_chunk)
+        
+        return chunks
+
+# Open-Source NLP Legal Analyzer (Original - kept for reference but not used)
 class OpenSourceLegalAnalyzer:
     """Legal document analyzer using open-source models"""
     
@@ -2019,12 +2287,43 @@ class OpenSourceLegalAnalyzer:
 # Initialize analyzers
 safe_analyzer = NoHallucinationAnalyzer()
 open_source_analyzer = None
-if OPEN_SOURCE_NLP_AVAILABLE:
+
+# Choose which BERT model to test (for low-memory systems)
+# Options: "classifier" (400MB), "ner" (400MB), "qa" (400MB), 
+#          "summarizer" (1.2GB), "zero_shot" (1.2GB)
+# If you have 2GB RAM + 2GB swap:
+BERT_MODEL_TO_TEST = "qa"  # Best balance of usefulness and memory
+
+# If you have 2GB RAM + 4GB swap:
+BERT_MODEL_TO_TEST = "zero_shot"  # Best for contract analysis
+
+# If zero_shot is too big:
+BERT_MODEL_TO_TEST = "summarizer"  # Second best option
+# Set to True to use lightweight single-model loader, False to disable BERT entirely
+USE_LIGHTWEIGHT_BERT = True
+
+if OPEN_SOURCE_NLP_AVAILABLE and USE_LIGHTWEIGHT_BERT:
     try:
-        open_source_analyzer = OpenSourceLegalAnalyzer()
+        print(f"\n🔧 Loading lightweight BERT analyzer with model: {BERT_MODEL_TO_TEST}")
+        print("This uses less memory by loading only one model at a time.")
+        
+        open_source_analyzer = LightweightLegalAnalyzer(model_choice=BERT_MODEL_TO_TEST)
+        
+        if open_source_analyzer.models_loaded:
+            print(f"✅ Successfully loaded {BERT_MODEL_TO_TEST} model")
+            print(f"💡 To test a different model, change BERT_MODEL_TO_TEST in the code")
+        else:
+            print(f"❌ Failed to load {BERT_MODEL_TO_TEST} model - insufficient memory")
+            print("💡 Try adding swap memory or using a smaller model")
+            open_source_analyzer = None
+            
     except Exception as e:
-        logger.error(f"Failed to initialize open-source analyzer: {e}")
+        logger.error(f"Failed to initialize lightweight analyzer: {e}")
+        print(f"❌ Error: {e}")
+        print("💡 Continuing without BERT models - DeepSeek AI is still available")
         open_source_analyzer = None
+else:
+    print("ℹ️ BERT models disabled or not available")
 
 # --- API Endpoints ---
 
