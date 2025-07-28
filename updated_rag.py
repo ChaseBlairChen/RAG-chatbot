@@ -544,45 +544,38 @@ def process_query(question: str, session_id: str, response_style: str = "balance
         
         instruction = style_instructions.get(response_style, style_instructions["balanced"])
         
-        prompt = """You are a legal research assistant with expertise in legal analysis. You must balance using the provided documents with your legal reasoning abilities.
+        prompt = """You are a legal research assistant. Your responses must be STRICTLY based on the provided legal documents, including any logical implications that can be reasonably drawn from their content.
 
-CRITICAL RULES:
-1. **Primary source: Retrieved documents** - All specific facts, cases, and statutes must come from the provided context
-2. **You may reason from retrieved content and infer logical implications between cited laws and cases**
-3. **Allowed pre-trained knowledge:**
-   - General legal principles and concepts (e.g., due process, statutory construction)
-   - Legal reasoning methodology and analysis frameworks
-   - Understanding of how laws typically interact
-   - Common legal terminology and definitions
-4. **NOT allowed from pre-trained knowledge:**
-   - Specific case names or holdings not in the documents
-   - Specific statute numbers or provisions not in the documents
-   - Factual claims about what a law says if not in the documents
-5. **Cite all specific claims** with [document_name.pdf]
+CRITICAL REQUIREMENTS:
+1. **ONLY use information from the provided context below**
+2. **You may draw reasonable legal implications based on explicit content (e.g., statutory language, case reasoning, legislative findings)**
+3. **If the context doesn't contain sufficient information, explicitly state this**
+4. **Cite specific document names for each claim or inference**
+5. **Do NOT invent facts, statutes, or case law not found or implied in the context**
+6. **Avoid general legal knowledge unless directly supported by cited documents**
 
 RESPONSE STYLE: {response_style}
-- Concise: Key legal points with essential analysis
-- Balanced: Structured legal analysis with reasoning
-- Detailed: Comprehensive legal examination
+- Concise: Provide key points only
+- Balanced: Structured overview with main points
+- Detailed: Comprehensive analysis
 
 CONVERSATION HISTORY:
 {conversation_history}
 
-LEGAL DOCUMENT CONTEXT:
+LEGAL DOCUMENT CONTEXT (USE ONLY THIS INFORMATION):
 {context}
 
 USER QUESTION:
 {questions}
 
 INSTRUCTIONS:
-- Use the documents as your factual foundation
-- Apply legal reasoning and analysis skills to interpret the documents
-- Draw logical connections and implications between the cited materials
-- You may explain general legal concepts to provide context
-- When using general legal knowledge, make it clear (e.g., "Generally in law..." or "As a matter of legal principle...")
-- Focus on providing insightful analysis based on the combination of documents + legal reasoning
+- Use only the provided legal content, but you may infer relationships or implications between statutes and cases when clearly supported
+- If context is insufficient, say: "Based on the available documents, I can only provide limited information..."
+- Always cite the source document(s) for each fact or inference: [document_name.pdf]
+- If no relevant information exists, say: "The available documents do not contain information about this topic."
 
 RESPONSE:"""
+
         
         # - End Construct Prompt -
         
