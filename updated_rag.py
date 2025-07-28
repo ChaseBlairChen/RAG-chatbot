@@ -30,7 +30,6 @@ from langchain_huggingface import HuggingFaceEmbeddings
 import spacy
 from sentence_transformers import SentenceTransformer
 import numpy as np
-from chromadb.config import Settings
 
 # AI imports
 try:
@@ -99,7 +98,10 @@ app.add_middleware(
 )
 
 # - Configuration -
-CHROMA_PATH = os.environ.get("CHROMA_PATH", "./chroma_db")
+# FIXED: Use absolute path matching the working app
+CHROMA_PATH = os.path.abspath(os.path.join(os.getcwd(), "chromadb-database"))
+logger.info(f"Using CHROMA_PATH: {CHROMA_PATH}")
+
 OPENROUTER_API_KEY = os.environ.get("OPENAI_API_KEY")  # Reuse OPENAI_API_KEY env var
 OPENAI_API_BASE = os.environ.get("OPENAI_API_BASE", "https://openrouter.ai/api/v1")
 AI_ENABLED = bool(OPENROUTER_API_KEY) and AIOHTTP_AVAILABLE
@@ -184,17 +186,25 @@ except Exception as e:
     embeddings = None
 
 # - Utility Functions -
+# FIXED: Updated load_database function to match working app
 def load_database():
     """Load the Chroma database"""
     try:
         if not os.path.exists(CHROMA_PATH):
             logger.warning(f"Chroma database path does not exist: {CHROMA_PATH}")
             return None
-        db = Chroma(persist_directory=CHROMA_PATH, embedding_function=embeddings)
+        
+        embedding_function = HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2")
+        db = Chroma(
+            collection_name="default",
+            embedding_function=embedding_function,
+            persist_directory=CHROMA_PATH
+        )
+        logger.debug("Database loaded successfully")
         return db
     except Exception as e:
-        logger.error(f"Error loading database: {e}")
-        return None
+        logger.error(f"Failed to load database: {e}")
+        raise
 
 def add_to_conversation(session_id: str, role: str, content: str, sources: Optional[List] = None):
     """Add message to conversation"""
@@ -1527,77 +1537,3 @@ def get_unified_interface():
             .endpoint {{ background: #f8f9fa; padding: 10px; margin: 5px 0; border-left: 4px solid #6c757d; font-family: monospace; }}
             .system-card {{ background: #fff; border: 1px solid #dee2e6; border-radius: 8px; padding: 20px; margin: 15px 0; }}
             .system-title {{ font-size: 20px; font-weight: bold; color: #495057; margin-bottom: 10px; }}
-        </style>
-    </head>
-    <body>
-        <div class="container">
-            <h1>⚖️ Unified Legal Assistant System</h1>
-            <p style="text-align: center; color: #6c757d;">Enhanced RAG Q&A and Document Analysis Platform</p>
-            
-            <div class="status-grid">
-                <div style="text-align: center;">
-                    <span class="status-badge {'ai-enabled' if AI_ENABLED else 'ai-disabled'}">{ai_status}</span>
-                </div>
-                <div style="text-align: center;">
-                    <span class="status-badge {'db-connected' if os.path.exists(CHROMA_PATH) else 'db-disconnected'}">ChromaDB: {db_status}</span>
-                </div>
-            </div>
-            
-            {ai_instructions}
-            
-            <div class="system-card">
-                <div class="system-title">📚 Enhanced RAG Q&A System</div>
-                <p>Ask complex legal questions and get creative, well-researched answers with source citations.</p>
-                
-                <div class="endpoint">POST /ask - Ask a legal question</div>
-                <div class="endpoint">GET /conversation/{{session_id}} - Get conversation history</div>
-            </div>
-            
-            <div class="system-card">
-                <div class="system-title">📄 Document Analysis System</div>
-                <p>Upload legal documents for automated analysis, fact extraction, and risk assessment.</p>
-                
-                <div class="endpoint">POST /upload - Upload a legal document</div>
-                <div class="endpoint">POST /analyze-document - Analyze an uploaded document</div>
-                <div class="endpoint">POST /verify-extraction - Verify a specific claim</div>
-            </div>
-            
-            <div class="system-card">
-                <div class="system-title">⚙️ System Health & Configuration</div>
-                <div class="endpoint">GET /health - System health check</div>
-                <div class="endpoint">GET /capabilities - System capabilities</div>
-            </div>
-            
-            <div style="text-align: center; margin-top: 40px; color: #6c757d;">
-                <p>Unified Legal Assistant v7.0.0-Enhanced</p>
-            </div>
-        </div>
-    </body>
-    </html>
-    """
-
-# Startup event
-@app.on_event("startup")
-async def startup_event():
-    """Initialize resources on startup"""
-    logger.info("Initializing Unified Legal Assistant...")
-    logger.info(f"AI Status: {'ENABLED with DeepSeek' if AI_ENABLED else 'DISABLED - Set OPENAI_API_KEY to enable'}")
-    logger.info(f"PDF processing: PyMuPDF={PYMUPDF_AVAILABLE}, pdfplumber={PDFPLUMBER_AVAILABLE}")
-    logger.info(f"Enhanced RAG features: confidence scoring, response styles, multi-query strategies")
-    
-    # Test database connection
-    try:
-        db = load_database()
-        if db:
-            test_results = db.similarity_search("test", k=1)
-            logger.info(f"✅ Database connected with {len(test_results)} test results")
-        else:
-            logger.warning("⚠️ Database not found - RAG features will be limited")
-    except Exception as e:
-        logger.error(f"❌ Database connection failed: {e}")
-
-if __name__ == "__main__":
-    import uvicorn
-    port = int(os.environ.get("PORT", 8000))
-    logger.info(f"Starting server on port {port}")
-    uvicorn.run(app, host="0.0.0.0", port=port)
