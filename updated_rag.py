@@ -1517,7 +1517,7 @@ def get_unified_interface():
     </div>
     """
     
-    return f"""
+    html_template = f"""
     <!DOCTYPE html>
     <html>
     <head>
@@ -1537,3 +1537,53 @@ def get_unified_interface():
             .endpoint {{ background: #f8f9fa; padding: 10px; margin: 5px 0; border-left: 4px solid #6c757d; font-family: monospace; }}
             .system-card {{ background: #fff; border: 1px solid #dee2e6; border-radius: 8px; padding: 20px; margin: 15px 0; }}
             .system-title {{ font-size: 20px; font-weight: bold; color: #495057; margin-bottom: 10px; }}
+        </style>
+    </head>
+    <body>
+        <div class="container">
+            <h1>⚖️ Unified Legal Assistant System</h1>
+            <p style="text-align: center; color: #6c757d;">Enhanced RAG Q&A and Document Analysis Platform</p>
+            
+            <div class="status-grid">
+                <div style="text-align: center;">
+                    <span class="status-badge {'ai-enabled' if AI_ENABLED else 'ai-disabled'}">{ai_status}</span>
+                </div>
+                <div style="text-align: center;">
+                    <span class="status-badge {'db-connected' if os.path.exists(CHROMA_PATH) else 'db-disconnected'}">ChromaDB: {db_status}</span>
+                </div>
+            </div>
+            
+            {ai_instructions}
+            
+            <div class="system-card">
+                <div class="system-title">📚 Enhanced RAG Q&A System</div>
+                <p>Ask complex legal questions and get creative, well-researched answers with source citations.</p>
+                
+                <div class="endpoint">POST /ask - Ask a legal question</div>
+                <div class="endpoint">GET /conversation/{{session_id}} - Get conversation history</div>
+            </div>
+            
+            <div class="system-card">
+                <div class="system-title">📄 Document Analysis System</div>
+                <p>Upload legal documents for automated analysis, fact extraction, and risk assessment.</p>
+                
+                <div class="endpoint">POST /upload - Upload a legal document</div>
+                <div class="endpoint">POST /analyze-document - Analyze an uploaded document</div>
+                <div class="endpoint">POST /verify-extraction - Verify a specific claim</div>
+            </div>
+            
+            <div class="system-card">
+                <div class="system-title">⚙️ System Health & Configuration</div>
+                <div class="endpoint">GET /health - System health check</div>
+                <div class="endpoint">GET /capabilities - System capabilities</div>
+            </div>
+            
+            <div style="text-align: center; margin-top: 40px; color: #6c757d;">
+                <p>Unified Legal Assistant v7.0.0-Enhanced</p>
+            </div>
+        </div>
+    </body>
+    </html>
+    """
+    
+    return html_template
