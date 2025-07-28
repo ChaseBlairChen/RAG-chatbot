@@ -544,7 +544,7 @@ def process_query(question: str, session_id: str, response_style: str = "balance
         
         instruction = style_instructions.get(response_style, style_instructions["balanced"])
         
-        prompt = f"""You are a legal research assistant with expertise in legal analysis. You must balance using the provided documents with your legal reasoning abilities.
+        prompt = """You are a legal research assistant with expertise in legal analysis. You must balance using the provided documents with your legal reasoning abilities.
 
 CRITICAL RULES:
 1. **Primary source: Retrieved documents** - All specific facts, cases, and statutes must come from the provided context
