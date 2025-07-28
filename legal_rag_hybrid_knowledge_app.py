@@ -499,181 +499,48 @@ def create_enhanced_context(results: List, search_result: Dict, questions: List[
     return context_text, source_info
 
 # --- Updated API Endpoint ---
-@app.post("/ask", response_model=QueryResponse)
-async def ask_question_improved(query: Query):
-    """
-    Improved question endpoint with enhanced accuracy and user experience
-    """
-    cleanup_expired_conversations()
-    
-    # Session management
-    session_id = query.session_id or str(uuid.uuid4())
-    if session_id not in conversations:
-        conversations[session_id] = {
-            "messages": [],
-            "created_at": datetime.utcnow(),
-            "last_accessed": datetime.utcnow()
-        }
-    else:
-        conversations[session_id]["last_accessed"] = datetime.utcnow()
-    
-    # Validate input
-    user_question = query.question.strip()
-    if not user_question:
-        return QueryResponse(
-            response=None,
-            error="Question cannot be empty.",
-            context_found=False,
-            sources=[],
-            session_id=session_id,
-            confidence_score=0.0,
-            expand_available=False
-        )
-    
-    # Process with improvements
-    response = process_query_improved(user_question, session_id, query.response_style)
-    return response
-
-# ... [Include all the utility functions from the original code] ...
-def cleanup_expired_conversations():
-    """Remove conversations older than 1 hour"""
-    now = datetime.utcnow()
-    expired_sessions = [
-        session_id for session_id, data in conversations.items()
-        if now - data['last_accessed'] > timedelta(hours=1)
-    ]
-    for session_id in expired_sessions:
-        del conversations[session_id]
-
-def load_database():
-    """Load the Chroma database"""
-    try:
-        embedding_function = HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2")
-        db = Chroma(
-            collection_name="default",
-            embedding_function=embedding_function,
-            persist_directory=CHROMA_PATH,
-            client_settings=CHROMA_CLIENT_SETTINGS
-        )
-        return db
-    except Exception as e:
-        logger.error(f"Failed to load database: {e}")
-        raise
-
-def get_conversation_context(session_id: str, max_messages: int = 8) -> str:
-    """Get conversation context (shortened for better performance)"""
-    if session_id not in conversations:
-        return ""
-    messages = conversations[session_id]['messages'][-max_messages:]
-    context_parts = []
-    for msg in messages:
-        role = msg['role'].upper()
-        content = msg['content'][:400] + "..." if len(msg['content']) > 400 else msg['content']
-        context_parts.append(f"{role}: {content}")
-    return "\n".join(context_parts) if context_parts else ""
-
-def add_to_conversation(session_id: str, role: str, content: str, sources: Optional[List] = None):
-    """Add message to conversation"""
-    if session_id not in conversations:
-        conversations[session_id] = {
-            'messages': [],
-            'created_at': datetime.utcnow(),
-            'last_accessed': datetime.utcnow()
-        }
-    message = {
-        'role': role,
-        'content': content,
-        'timestamp': datetime.utcnow().isoformat(),
-        'sources': sources or []
-    }
-    conversations[session_id]['messages'].append(message)
-    conversations[session_id]['last_accessed'] = datetime.utcnow()
-    if len(conversations[session_id]['messages']) > 20:
-        conversations[session_id]['messages'] = conversations[session_id]['messages'][-20:]
-
-def parse_multiple_questions(query_text: str) -> List[str]:
-    """Parse multiple questions from input"""
-    questions = []
-    query_text = query_text.strip()
-    
-    if '?' in query_text and not query_text.endswith('?'):
-        parts = query_text.split('?')
-        for part in parts:
-            part = part.strip()
-            if part:
-                questions.append(part + '?')
-    else:
-        final_question = query_text
-        if not final_question.endswith('?') and '?' not in final_question:
-            final_question += '?'
-        questions = [final_question]
-    
-    return questions
-
-def call_openrouter_api(prompt: str, api_key: str, api_base: str = "https://openrouter.ai/api/v1") -> str:
-    """Call OpenRouter API with fallback models"""
-    headers = {
-        "Authorization": f"Bearer {api_key}",
-        "Content-Type": "application/json",
-        "HTTP-Referer": "http://localhost:8000",
-        "X-Title": "Legal Assistant"
-    }
-    
-    models_to_try = [
-        "deepseek/deepseek-chat-v3-0324:free",
-        "microsoft/phi-3-mini-128k-instruct:free",
-        "meta-llama/llama-3.2-3b-instruct:free"
-    ]
-    
-    for model in models_to_try:
-        try:
-            payload = {
-                "model": model,
-                "messages": [{"role": "user", "content": prompt}],
-                "temperature": 0.5,  # Lower temperature for more consistent responses
-                "max_tokens": 2000,
-                "top_p": 0.9
-            }
-            
-            response = requests.post(f"{api_base}/chat/completions", headers=headers, json=payload, timeout=60)
-            
-            if response.status_code == 200:
-                result = response.json()
-                if 'choices' in result and result['choices']:
-                    content = result['choices'][0]['message']['content']
-                    if content and content.strip():
-                        return content.strip()
-        except Exception as e:
-            logger.error(f"Error with model {model}: {e}")
-            continue
-    
-    return "I apologize, but I'm experiencing technical difficulties. Please try again."
-
-# Additional endpoints...
+# Find this line in your code:
 @app.get("/health")
 def health_check():
     """Health check endpoint"""
     return {"status": "healthy", "version": "3.0.0", "improvements": ["enhanced_retrieval", "confidence_scoring", "response_styles"]}
 
-if __name__ == "__main__":
-    import uvicorn
-    port = int(os.environ.get("PORT", 8000))
-    uvicorn.run(app, host="0.0.0.0", port=port)
-# --- Load NLP Models ---
-# Load models once at startup for efficiency
-try:
-    nlp = spacy.load("en_core_web_sm")
-    logger.info("spaCy model loaded successfully")
-except Exception as e:
-    logger.error(f"Failed to load spaCy model: {e}")
-    nlp = None
-
-try:
-    sentence_model = SentenceTransformer('all-MiniLM-L6-v2')
-    logger.info("Sentence transformer loaded successfully")
-except Exception as e:
-    logger.error(f"Failed to load Sentence Transformer model: {e}")
-    sentence_model = None
+# REPLACE IT WITH THIS:
+@app.get("/health")
+def health_check():
+    """Health check endpoint"""
+    api_key = os.environ.get("OPENAI_API_KEY")
+    api_base = os.environ.get("OPENAI_API_BASE")
+    
+    db_exists = os.path.exists(CHROMA_PATH)
+    db_contents = []
+    if db_exists:
+        try:
+            db_contents = os.listdir(CHROMA_PATH)
+        except Exception as e:
+            db_contents = [f"Error reading directory: {e}"]
+    
+    return {
+        "status": "healthy" if db_exists and bool(api_key) else "unhealthy",
+        "version": "3.0.0",
+        "improvements": ["enhanced_retrieval", "confidence_scoring", "response_styles"],
+        "database_exists": db_exists,
+        "database_path": CHROMA_PATH,
+        "database_contents": db_contents,
+        "api_key_configured": bool(api_key),
+        "api_base_configured": bool(api_base),
+        "active_conversations": len(conversations),
+        "ai_agent_status": {
+            "loaded": True,
+            "nlp_model_available": nlp is not None,
+            "sentence_model_available": sentence_model is not None
+        },
+        # THESE ARE THE CRITICAL FIELDS THE FRONTEND NEEDS:
+        "unified_mode": False,  # This backend doesn't have document analysis
+        "ai_enabled": True,     # It has AI chat capabilities
+        "has_chat": True,       # Explicitly indicate chat support
+        "has_document_analysis": False  # No document analysis support
+    }
 # --- End Load NLP Models ---
 
 app = FastAPI(title="Legal Assistant API", description="Retrieval-Augmented Generation API for Legal Documents", version="2.1.1")
