@@ -146,94 +146,9 @@ export default function UnifiedLegalAssistant() {
       .replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>');
   };
 
-  // Enhanced error handling for backend connection
+  // Enhanced error handling for backend connection - UPDATED VERSION
   const checkBackendCapabilities = async () => {
-    if (!backendUrl) {
-      setConnectionError("Backend URL not configured");
-      setIsBackendConfigured(false);
-      return;
-    }
-
-    try {
-      setConnectionError(""); // Clear previous errors
-      
-      // Add timeout and better error handling
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 10000); // 10 second timeout
-
-      const healthResponse = await fetch(`${backendUrl}/health`, {
-        method: 'GET',
-        signal: controller.signal,
-        headers: {
-          'Content-Type': 'application/json',
-        }
-      });
-      
-      clearTimeout(timeoutId);
-
-      if (!healthResponse.ok) {
-        throw new Error(`Backend returned ${healthResponse.status}: ${healthResponse.statusText}`);
-      }
-
-      const healthData = await healthResponse.json();
-      
-      // Check if it's the unified backend
-      if (healthData.version && healthData.version.includes("SmartRAG")) {
-        setBackendCapabilities({
-          hasChat: true,
-          hasDocumentAnalysis: true,
-          enhancedRag: healthData.components?.enhanced_rag?.enabled || false,
-          userContainers: healthData.components?.user_containers?.enabled || false,
-          version: healthData.version,
-          subscriptionTier: "free"
-        });
-        setIsBackendConfigured(true);
-        setConnectionError("");
-        
-        // Get subscription status if token is available
-        if (apiToken && apiToken !== "demo-user-token") {
-          try {
-            const subController = new AbortController();
-            const subTimeoutId = setTimeout(() => subController.abort(), 5000);
-            
-            const subResponse = await fetch(`${backendUrl}/subscription/status`, {
-              signal: subController.signal,
-              headers: {
-                'Authorization': `Bearer ${apiToken}`,
-                'Content-Type': 'application/json'
-              }
-            });
-            
-            clearTimeout(subTimeoutId);
-            
-            if (subResponse.ok) {
-              const subData = await subResponse.json();
-              setBackendCapabilities(prev => ({
-                ...prev,
-                subscriptionTier: subData.subscription_tier
-              }));
-            }
-          } catch (e) {
-            console.log("Could not fetch subscription status:", e);
-            // Don't set as error, subscription check is optional
-          }
-        }
-      } else {
-        throw new Error("Backend doesn't support Smart RAG features");
-      }
-    } catch (error) {
-      console.error("Failed to check backend capabilities:", error);
-      setIsBackendConfigured(false);
-      
-      // Provide specific error messages
-      if (error.name === 'AbortError') {
-        setConnectionError("Connection timeout - backend may be down or slow");
-      } else if (error.message.includes('fetch')) {
-        setConnectionError("Cannot connect to backend - check if server is running and URL is correct");
-      } else {
-        setConnectionError(`Backend error: ${error.message}`);
-      }
-    }
+    await testConnectionWithUrl(backendUrl);
   };
 
   // Better error handling for document loading
@@ -300,7 +215,7 @@ export default function UnifiedLegalAssistant() {
 
     try {
       const requestBody = {
-        query: expandRequest ? `Please provide more detailed information about: ${currentInput}` : currentInput, // Changed from 'question' to 'query'
+        question: expandRequest ? `Please provide more detailed information about: ${currentInput}` : currentInput, // ✅ FIXED: Changed from 'query' to 'question'
         session_id: sessionId || undefined,
         response_style: responseStyle,
         search_scope: searchScope,
@@ -463,7 +378,7 @@ export default function UnifiedLegalAssistant() {
     }
   };
 
-  // FIXED: Updated runAnalysis function with 'query' instead of 'question'
+  // FIXED: Updated runAnalysis function with 'question' instead of 'query'
   const runAnalysis = async (toolId: string) => {
     if (!apiToken || apiToken === "demo-user-token") {
       alert('Please set a proper API token in settings to run analysis.');
@@ -490,7 +405,7 @@ export default function UnifiedLegalAssistant() {
 
     try {
       const requestBody = {
-        query: tool.prompt, // Changed from 'question' to 'query'
+        question: tool.prompt, // ✅ FIXED: Changed from 'query' to 'question'
         session_id: sessionId || undefined,
         response_style: "detailed",
         search_scope: "user_only",
@@ -639,18 +554,18 @@ This analysis is for informational purposes only and does not constitute legal a
     }
   };
 
-  // Enhanced settings dialog with better UX
+  // Enhanced settings dialog with better UX - FIXED VERSION
   const openSettings = () => {
-    const newUrl = prompt('Enter backend URL (e.g., http://localhost:8000):', backendUrl || 'http://localhost:8000');
+    const newUrl = prompt('Enter backend URL (e.g., http://18.232.139.244:8000):', backendUrl || 'http://localhost:8000');
     if (newUrl !== null) {
       const trimmedUrl = newUrl.trim();
       setBackendUrl(trimmedUrl);
       setIsBackendConfigured(false);
       setConnectionError("");
       
-      // Test connection immediately after setting URL
+      // Test connection with the new URL directly, don't wait for state update
       if (trimmedUrl) {
-        checkBackendCapabilities();
+        testConnectionWithUrl(trimmedUrl);  // Use new function
       }
     }
     
@@ -660,15 +575,95 @@ This analysis is for informational purposes only and does not constitute legal a
     }
   };
 
-  // Add manual connection test button
-  const testConnection = async () => {
-    if (!backendUrl) {
+  // New function to test connection with specific URL
+  const testConnectionWithUrl = async (url) => {
+    if (!url) {
       alert('Please set a backend URL first');
       return;
     }
     
     setConnectionError("Testing connection...");
-    await checkBackendCapabilities();
+    
+    try {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 10000);
+
+      const healthResponse = await fetch(`${url}/health`, {
+        method: 'GET',
+        signal: controller.signal,
+        headers: {
+          'Content-Type': 'application/json',
+        }
+      });
+      
+      clearTimeout(timeoutId);
+
+      if (!healthResponse.ok) {
+        throw new Error(`Backend returned ${healthResponse.status}: ${healthResponse.statusText}`);
+      }
+
+      const healthData = await healthResponse.json();
+      
+      // Check if it's the unified backend
+      if (healthData.version && healthData.version.includes("SmartRAG")) {
+        setBackendCapabilities({
+          hasChat: true,
+          hasDocumentAnalysis: true,
+          enhancedRag: healthData.components?.enhanced_rag?.enabled || false,
+          userContainers: healthData.components?.user_containers?.enabled || false,
+          version: healthData.version,
+          subscriptionTier: "free"
+        });
+        setIsBackendConfigured(true);
+        setConnectionError("");
+        
+        // Get subscription status if token is available
+        if (apiToken && apiToken !== "demo-user-token") {
+          try {
+            const subController = new AbortController();
+            const subTimeoutId = setTimeout(() => subController.abort(), 5000);
+            
+            const subResponse = await fetch(`${url}/subscription/status`, {
+              signal: subController.signal,
+              headers: {
+                'Authorization': `Bearer ${apiToken}`,
+                'Content-Type': 'application/json'
+              }
+            });
+            
+            clearTimeout(subTimeoutId);
+            
+            if (subResponse.ok) {
+              const subData = await subResponse.json();
+              setBackendCapabilities(prev => ({
+                ...prev,
+                subscriptionTier: subData.subscription_tier
+              }));
+            }
+          } catch (e) {
+            console.log("Could not fetch subscription status:", e);
+          }
+        }
+      } else {
+        throw new Error("Backend doesn't support Smart RAG features");
+      }
+    } catch (error) {
+      console.error("Failed to check backend capabilities:", error);
+      setIsBackendConfigured(false);
+      
+      if (error.name === 'AbortError') {
+        setConnectionError("Connection timeout - backend may be down or slow");
+      } else if (error.message.includes('fetch') || error.name === 'TypeError') {
+        setConnectionError("Cannot connect to backend - check if server is running at " + url);
+      } else {
+        setConnectionError(`Backend error: ${error.message}`);
+      }
+    }
+  };
+
+  // Updated manual connection test button
+  const testConnection = async () => {
+    await testConnectionWithUrl(backendUrl);
   };
 
   const getSubscriptionBadge = () => {
