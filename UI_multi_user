@@ -153,7 +153,8 @@ export default function UnifiedLegalAssistant() {
 
   // Better error handling for document loading
   const loadUserDocuments = async () => {
-    if (!isBackendConfigured || !apiToken || apiToken === "demo-user-token") return;
+    // FIXED: Allow demo-user-token for loading documents
+    if (!isBackendConfigured || !apiToken) return;
 
     try {
       const controller = new AbortController();
@@ -321,8 +322,9 @@ export default function UnifiedLegalAssistant() {
   const uploadDocument = async () => {
     if (!uploadedFile) return;
 
-    if (!apiToken || apiToken === "demo-user-token") {
-      alert('Please set a proper API token in settings to upload documents.');
+    // FIXED: Allow demo-user-token for uploads
+    if (!apiToken) {
+      alert('Please set an API token in settings to upload documents.');
       return;
     }
 
@@ -380,8 +382,9 @@ export default function UnifiedLegalAssistant() {
 
   // FIXED: Updated runAnalysis function with 'question' instead of 'query'
   const runAnalysis = async (toolId: string) => {
-    if (!apiToken || apiToken === "demo-user-token") {
-      alert('Please set a proper API token in settings to run analysis.');
+    // FIXED: Allow demo-user-token for analysis
+    if (!apiToken) {
+      alert('Please set an API token in settings to run analysis.');
       return;
     }
 
@@ -513,7 +516,8 @@ This analysis is for informational purposes only and does not constitute legal a
   };
 
   const deleteUserDocument = async (fileId: string) => {
-    if (!apiToken || apiToken === "demo-user-token") {
+    // FIXED: Allow demo-user-token for document deletion
+    if (!apiToken) {
       alert('Authentication required to delete documents.');
       return;
     }
