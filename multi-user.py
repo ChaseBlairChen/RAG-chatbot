@@ -995,7 +995,7 @@ async def upload_user_document(
             raise HTTPException(status_code=400, detail=f"Unsupported file type. Supported: {LEGAL_EXTENSIONS}")
         
         # Process document
-        from paste import SafeDocumentProcessor
+        from document_processor import SafeDocumentProcessor
         content, pages_processed, warnings = SafeDocumentProcessor.process_document_safe(file)
         
         # Create metadata
