@@ -13,6 +13,7 @@ type AnalysisResult = {
   toolId: string;
   toolTitle: string;
   document: string;
+  documentId: string;
   analysis: string;
   confidence?: number;
   timestamp: string;
@@ -20,9 +21,38 @@ type AnalysisResult = {
   status: 'completed' | 'failed' | 'processing';
   extractedData?: any;
   warnings?: string[];
+  analysisType: string;
+};
+
+type DocumentAnalysis = {
+  id: string;
+  filename: string;
+  uploadedAt: string;
+  pagesProcessed: number;
+  analysisResults: {
+    summary?: string;
+    clauses?: string;
+    risks?: string;
+    timeline?: string;
+    obligations?: string;
+    missingClauses?: string;
+  };
+  lastAnalyzed?: string;
+  confidence?: number;
 };
 
 const analysisTools = [
+  {
+    id: 'comprehensive',
+    title: 'Complete Document Analysis',
+    description: 'Run all analysis tools at once for comprehensive insights',
+    prompt: 'Provide a comprehensive legal analysis including: summary, key clauses, risks, timeline, obligations, and missing clauses.',
+    icon: '🔍',
+    category: 'Complete',
+    idealFor: ['Any legal document'],
+    riskLevel: 'low',
+    isComprehensive: true
+  },
   {
     id: 'summarize',
     title: 'Legal Document Summarization',
@@ -85,7 +115,7 @@ const analysisTools = [
   }
 ];
 
-export default function UnifiedLegalAssistant() {
+export default function EnhancedLegalAssistant() {
   // Chat state
   const [messages, setMessages] = useState<Message[]>([
     { from: "bot", text: "Hello! I'm your AI Legal Assistant with Smart RAG capabilities. I can help you understand legal documents, analyze your uploaded files, and answer questions about law. How can I assist you today?" }
@@ -96,14 +126,16 @@ export default function UnifiedLegalAssistant() {
   const [sessionId, setSessionId] = useState("");
   const messagesEndRef = useRef<null | HTMLDivElement>(null);
 
-  // Document analysis state
+  // Document analysis state - ENHANCED
   const [activeTab, setActiveTab] = useState("chat");
   const [uploadedFile, setUploadedFile] = useState<File | null>(null);
   const [analysisResults, setAnalysisResults] = useState<AnalysisResult[]>([]);
+  const [documentAnalyses, setDocumentAnalyses] = useState<DocumentAnalysis[]>([]);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [uploadProgress, setUploadProgress] = useState(0);
+  const [selectedDocumentForAnalysis, setSelectedDocumentForAnalysis] = useState<string | null>(null);
 
-  // ENHANCED: Multi-document upload support
+  // Multi-document upload support
   const [uploadQueue, setUploadQueue] = useState<File[]>([]);
   const [currentlyUploading, setCurrentlyUploading] = useState<File | null>(null);
   const [uploadResults, setUploadResults] = useState<any[]>([]);
@@ -122,12 +154,12 @@ export default function UnifiedLegalAssistant() {
     subscriptionTier: "free"
   });
 
-  // New unified backend settings
+  // Unified backend settings
   const [searchScope, setSearchScope] = useState("all");
   const [useEnhancedRag, setUseEnhancedRag] = useState(true);
   const [userDocuments, setUserDocuments] = useState([]);
 
-  // Simple markdown-like renderer without external dependencies
+  // Simple markdown renderer
   const renderMarkdown = (text: string) => {
     return text
       .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
@@ -139,26 +171,21 @@ export default function UnifiedLegalAssistant() {
       .replace(/\n/g, '<br/>')
       .replace(/^/, '<p>')
       .replace(/$/, '</p>')
-      // Handle lists
       .replace(/^\* (.*$)/gm, '<li>$1</li>')
       .replace(/(<li>.*<\/li>)/s, '<ul>$1</ul>')
-      // Handle numbered lists
       .replace(/^\d+\. (.*$)/gm, '<li>$1</li>')
       .replace(/(<li>.*<\/li>)/s, '<ol>$1</ol>')
-      // Handle code blocks
       .replace(/`([^`]+)`/g, '<code>$1</code>')
-      // Handle links
       .replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>');
   };
 
-  // Enhanced error handling for backend connection - UPDATED VERSION
+  // Enhanced error handling for backend connection
   const checkBackendCapabilities = async () => {
     await testConnectionWithUrl(backendUrl);
   };
 
-  // Better error handling for document loading
+  // Load user documents
   const loadUserDocuments = async () => {
-    // FIXED: Allow demo-user-token for loading documents
     if (!isBackendConfigured || !apiToken) return;
 
     try {
@@ -178,18 +205,25 @@ export default function UnifiedLegalAssistant() {
       if (response.ok) {
         const data = await response.json();
         setUserDocuments(data.documents || []);
+        
+        // Convert to DocumentAnalysis format for enhanced tracking
+        const docAnalyses = (data.documents || []).map(doc => ({
+          id: doc.file_id,
+          filename: doc.filename,
+          uploadedAt: doc.uploaded_at,
+          pagesProcessed: doc.pages_processed,
+          analysisResults: {},
+          lastAnalyzed: null,
+          confidence: null
+        }));
+        setDocumentAnalyses(docAnalyses);
       } else {
         console.error("Failed to load user documents:", response.status, response.statusText);
       }
     } catch (error) {
       console.error("Failed to load user documents:", error);
-      // Don't show error to user, just log it
     }
   };
-
-  useEffect(() => {
-    // Don't auto-check on component mount, wait for user configuration
-  }, []);
 
   useEffect(() => {
     if (isBackendConfigured) {
@@ -201,7 +235,7 @@ export default function UnifiedLegalAssistant() {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
 
-  // FIXED: Enhanced error handling for chat with updated request body
+  // Enhanced chat function
   async function sendMessage(expandRequest = false) {
     if (!input.trim() || isLoading) return;
 
@@ -221,7 +255,7 @@ export default function UnifiedLegalAssistant() {
 
     try {
       const requestBody = {
-        question: expandRequest ? `Please provide more detailed information about: ${currentInput}` : currentInput, // ✅ FIXED: Changed from 'query' to 'question'
+        question: expandRequest ? `Please provide more detailed information about: ${currentInput}` : currentInput,
         session_id: sessionId || undefined,
         response_style: responseStyle,
         search_scope: searchScope,
@@ -232,13 +266,12 @@ export default function UnifiedLegalAssistant() {
         "Content-Type": "application/json"
       };
 
-      // Always add auth header if we have a token
       if (apiToken) {
         headers["Authorization"] = `Bearer ${apiToken}`;
       }
 
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 30000); // 30 second timeout
+      const timeoutId = setTimeout(() => controller.abort(), 30000);
 
       const res = await fetch(`${backendUrl}/ask`, {
         method: "POST",
@@ -306,13 +339,11 @@ export default function UnifiedLegalAssistant() {
     const errors: string[] = [];
 
     files.forEach(file => {
-      // Check file size
       if (file.size > 10 * 1024 * 1024) {
         errors.push(`${file.name}: File too large (max 10MB)`);
         return;
       }
 
-      // Check file type
       const allowedTypes = [
         'application/pdf',
         'application/msword',
@@ -334,16 +365,13 @@ export default function UnifiedLegalAssistant() {
     }
 
     if (validFiles.length > 0) {
-      // Add to upload queue
       setUploadQueue(prev => [...prev, ...validFiles]);
-      
-      // Reset file input
       event.target.value = '';
     }
   };
 
-  // ENHANCED: Upload all documents in queue
-  const uploadAllDocuments = async () => {
+  // Enhanced upload with auto-analysis option
+  const uploadAllDocuments = async (runAnalysisAfter = false) => {
     if (uploadQueue.length === 0) return;
 
     if (!apiToken) {
@@ -355,6 +383,7 @@ export default function UnifiedLegalAssistant() {
     setUploadResults([]);
 
     const results: any[] = [];
+    const uploadedDocIds: string[] = [];
 
     for (let i = 0; i < uploadQueue.length; i++) {
       const file = uploadQueue[i];
@@ -395,6 +424,8 @@ export default function UnifiedLegalAssistant() {
           warnings: data.warnings || []
         });
 
+        uploadedDocIds.push(data.file_id);
+
       } catch (error) {
         console.error(`Upload failed for ${file.name}:`, error);
         
@@ -413,16 +444,14 @@ export default function UnifiedLegalAssistant() {
       }
     }
 
-    // Complete upload process
     setUploadProgress(100);
     setUploadResults(results);
     setCurrentlyUploading(null);
     setUploadQueue([]);
     
     // Reload user documents
-    loadUserDocuments();
+    await loadUserDocuments();
     
-    // Show summary
     const successful = results.filter(r => r.success).length;
     const failed = results.filter(r => !r.success).length;
     
@@ -431,36 +460,188 @@ export default function UnifiedLegalAssistant() {
       message += `\n❌ ${failed} documents failed`;
     }
     
-    alert(message);
-    
-    // Switch to documents tab to see results
-    if (successful > 0) {
+    // Auto-run comprehensive analysis if requested
+    if (runAnalysisAfter && successful > 0) {
+      message += `\n🔍 Running comprehensive analysis...`;
+      
+      // Run comprehensive analysis on all newly uploaded documents
+      for (const docId of uploadedDocIds) {
+        await runComprehensiveDocumentAnalysis(docId);
+      }
+      
+      setActiveTab('results');
+    } else if (successful > 0) {
       setActiveTab('documents');
     }
-
+    
+    alert(message);
     setIsAnalyzing(false);
     
-    // Clear progress after a delay
     setTimeout(() => {
       setUploadProgress(0);
       setUploadResults([]);
     }, 5000);
   };
 
-  // Remove a file from upload queue
-  const removeFromQueue = (index: number) => {
-    setUploadQueue(prev => prev.filter((_, i) => i !== index));
+  // NEW: Comprehensive document analysis function
+  const runComprehensiveDocumentAnalysis = async (documentId: string) => {
+    if (!apiToken) {
+      alert('Please set an API token in settings to run analysis.');
+      return;
+    }
+
+    const document = documentAnalyses.find(d => d.id === documentId);
+    if (!document) return;
+
+    setIsAnalyzing(true);
+
+    // Create processing result
+    const processingResult: AnalysisResult = {
+      id: Date.now() + Math.random(),
+      toolId: 'comprehensive',
+      toolTitle: 'Complete Document Analysis',
+      document: document.filename,
+      documentId: documentId,
+      analysis: 'Running comprehensive analysis including summary, clauses, risks, timeline, obligations, and missing clauses...',
+      timestamp: new Date().toLocaleString(),
+      status: 'processing',
+      sources: [],
+      analysisType: 'comprehensive'
+    };
+    
+    setAnalysisResults(prev => [processingResult, ...prev]);
+    setActiveTab('results');
+
+    try {
+      // Create comprehensive prompt that asks for all analyses at once
+      const comprehensivePrompt = `Please provide a comprehensive legal analysis of this document. Structure your response with the following sections:
+
+## DOCUMENT SUMMARY
+Provide a clear summary of the document's purpose, parties involved, and key terms.
+
+## KEY CLAUSES ANALYSIS
+Extract and analyze important clauses including:
+- Termination clauses
+- Indemnification provisions
+- Liability limitations
+- Governing law and jurisdiction
+- Confidentiality provisions
+- Payment terms
+- Dispute resolution mechanisms
+
+## RISK ASSESSMENT
+Identify potential legal risks including:
+- Unilateral termination rights
+- Broad indemnification requirements
+- Unlimited liability exposure
+- Vague or ambiguous obligations
+- Unfavorable terms
+
+## TIMELINE & DEADLINES
+Extract all important dates, deadlines, renewal periods, and notice requirements.
+
+## PARTY OBLIGATIONS
+List all obligations and requirements for each party with associated deadlines.
+
+## MISSING CLAUSES
+Identify commonly expected clauses that may be missing, such as:
+- Force majeure provisions
+- Limitation of liability
+- Assignment restrictions
+- Severability clauses
+
+Please be thorough and provide specific examples from the document text.`;
+
+      const requestBody = {
+        question: comprehensivePrompt,
+        session_id: sessionId || undefined,
+        response_style: "detailed",
+        search_scope: "user_only",
+        use_enhanced_rag: useEnhancedRag
+      };
+
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 60000); // 60 second timeout for comprehensive analysis
+
+      const response = await fetch(`${backendUrl}/ask`, {
+        method: 'POST',
+        signal: controller.signal,
+        headers: {
+          'Authorization': `Bearer ${apiToken}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify(requestBody)
+      });
+
+      clearTimeout(timeoutId);
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        throw new Error(`Analysis failed (${response.status}): ${errorText || response.statusText}`);
+      }
+
+      const data = await response.json();
+      
+      if (data.session_id && !sessionId) {
+        setSessionId(data.session_id);
+      }
+
+      const analysisText = data.response || 'Comprehensive analysis could not be completed.';
+      const status = data.error ? 'failed' : 'completed';
+      
+      // Update the result
+      setAnalysisResults(prev => prev.map(r => 
+        r.id === processingResult.id 
+          ? {
+              ...r,
+              analysis: analysisText,
+              confidence: data.confidence_score || 0.8,
+              status: status,
+              sources: data.sources || [],
+              warnings: data.error ? [data.error] : []
+            }
+          : r
+      ));
+
+      // Update document analysis cache
+      setDocumentAnalyses(prev => prev.map(d => 
+        d.id === documentId 
+          ? {
+              ...d,
+              analysisResults: { comprehensive: analysisText },
+              lastAnalyzed: new Date().toISOString(),
+              confidence: data.confidence_score || 0.8
+            }
+          : d
+      ));
+
+    } catch (error) {
+      console.error('Comprehensive analysis failed:', error);
+      
+      let errorMessage = 'Comprehensive analysis failed';
+      if (error.name === 'AbortError') {
+        errorMessage = 'Analysis timed out - the analysis was too complex';
+      } else {
+        errorMessage = `Analysis failed: ${error.message}`;
+      }
+      
+      setAnalysisResults(prev => prev.map(r => 
+        r.id === processingResult.id 
+          ? {
+              ...r,
+              analysis: errorMessage,
+              status: 'failed',
+              warnings: ['Make sure the document was uploaded successfully and you have a valid API token.']
+            }
+          : r
+      ));
+    } finally {
+      setIsAnalyzing(false);
+    }
   };
 
-  // Clear all files from queue
-  const clearQueue = () => {
-    setUploadQueue([]);
-    setUploadResults([]);
-  };
-
-  // FIXED: Updated runAnalysis function with 'question' instead of 'query'
-  const runAnalysis = async (toolId: string) => {
-    // FIXED: Allow demo-user-token for analysis
+  // Enhanced analysis function for individual tools
+  const runAnalysis = async (toolId: string, documentId?: string) => {
     if (!apiToken) {
       alert('Please set an API token in settings to run analysis.');
       return;
@@ -469,32 +650,52 @@ export default function UnifiedLegalAssistant() {
     const tool = analysisTools.find(t => t.id === toolId);
     if (!tool) return;
 
+    // Handle comprehensive analysis
+    if (tool.isComprehensive) {
+      if (documentId) {
+        await runComprehensiveDocumentAnalysis(documentId);
+      } else {
+        // Run on all documents if no specific document selected
+        for (const doc of documentAnalyses) {
+          await runComprehensiveDocumentAnalysis(doc.id);
+        }
+      }
+      return;
+    }
+
+    // Handle individual tool analysis (existing logic)
     setIsAnalyzing(true);
 
+    const targetDoc = documentId ? documentAnalyses.find(d => d.id === documentId) : null;
+    const docName = targetDoc ? targetDoc.filename : "User Documents";
+
     const processingResult: AnalysisResult = {
-      id: Date.now(),
+      id: Date.now() + Math.random(),
       toolId: toolId,
       toolTitle: tool.title,
-      document: "User Documents",
-      analysis: 'Running analysis on your uploaded documents...',
+      document: docName,
+      documentId: documentId || 'all',
+      analysis: `Running ${tool.title.toLowerCase()} on ${docName}...`,
       timestamp: new Date().toLocaleString(),
       status: 'processing',
-      sources: []
+      sources: [],
+      analysisType: toolId
     };
+    
     setAnalysisResults(prev => [processingResult, ...prev]);
     setActiveTab('results');
 
     try {
       const requestBody = {
-        question: tool.prompt, // ✅ FIXED: Changed from 'query' to 'question'
+        question: tool.prompt,
         session_id: sessionId || undefined,
         response_style: "detailed",
-        search_scope: "user_only",
+        search_scope: documentId ? "user_only" : "user_only", // Focus on user documents
         use_enhanced_rag: useEnhancedRag
       };
 
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 45000); // 45 second timeout
+      const timeoutId = setTimeout(() => controller.abort(), 45000);
 
       const response = await fetch(`${backendUrl}/ask`, {
         method: 'POST',
@@ -560,6 +761,15 @@ export default function UnifiedLegalAssistant() {
     }
   };
 
+  const removeFromQueue = (index: number) => {
+    setUploadQueue(prev => prev.filter((_, i) => i !== index));
+  };
+
+  const clearQueue = () => {
+    setUploadQueue([]);
+    setUploadResults([]);
+  };
+
   const downloadResult = (resultId: number) => {
     const result = analysisResults.find(r => r.id === resultId);
     if (!result) return;
@@ -594,7 +804,6 @@ This analysis is for informational purposes only and does not constitute legal a
   };
 
   const deleteUserDocument = async (fileId: string) => {
-    // FIXED: Allow demo-user-token for document deletion
     if (!apiToken) {
       alert('Authentication required to delete documents.');
       return;
@@ -615,7 +824,7 @@ This analysis is for informational purposes only and does not constitute legal a
       clearTimeout(timeoutId);
 
       if (response.ok) {
-        loadUserDocuments(); // Refresh the list
+        loadUserDocuments();
         alert('Document deleted successfully');
       } else {
         const errorText = await response.text();
@@ -636,7 +845,7 @@ This analysis is for informational purposes only and does not constitute legal a
     }
   };
 
-  // Enhanced settings dialog with better UX - FIXED VERSION
+  // Settings and connection functions
   const openSettings = () => {
     const newUrl = prompt('Enter backend URL (e.g., http://18.232.139.244:8000):', backendUrl || 'http://localhost:8000');
     if (newUrl !== null) {
@@ -645,9 +854,8 @@ This analysis is for informational purposes only and does not constitute legal a
       setIsBackendConfigured(false);
       setConnectionError("");
       
-      // Test connection with the new URL directly, don't wait for state update
       if (trimmedUrl) {
-        testConnectionWithUrl(trimmedUrl);  // Use new function
+        testConnectionWithUrl(trimmedUrl);
       }
     }
     
@@ -657,7 +865,6 @@ This analysis is for informational purposes only and does not constitute legal a
     }
   };
 
-  // New function to test connection with specific URL
   const testConnectionWithUrl = async (url) => {
     if (!url) {
       alert('Please set a backend URL first');
@@ -686,7 +893,6 @@ This analysis is for informational purposes only and does not constitute legal a
 
       const healthData = await healthResponse.json();
       
-      // Check if it's the unified backend
       if (healthData.version && healthData.version.includes("SmartRAG")) {
         setBackendCapabilities({
           hasChat: true,
@@ -699,7 +905,6 @@ This analysis is for informational purposes only and does not constitute legal a
         setIsBackendConfigured(true);
         setConnectionError("");
         
-        // Get subscription status if token is available
         if (apiToken && apiToken !== "demo-user-token") {
           try {
             const subController = new AbortController();
@@ -743,7 +948,6 @@ This analysis is for informational purposes only and does not constitute legal a
     }
   };
 
-  // Updated manual connection test button
   const testConnection = async () => {
     await testConnectionWithUrl(backendUrl);
   };
@@ -772,13 +976,12 @@ This analysis is for informational purposes only and does not constitute legal a
               </div>
               <div>
                 <h1 className="text-xl font-semibold text-gray-900">
-                  Smart Legal Assistant
+                  Enhanced Legal Assistant
                 </h1>
-                <p className="text-xs text-gray-500">Multi-User AI Platform with Enhanced RAG</p>
+                <p className="text-xs text-gray-500">Multi-Analysis AI Platform with Smart RAG</p>
               </div>
             </div>
             <div className="flex items-center gap-3">
-              {/* Backend Status */}
               <div className={`flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-medium ${
                 isBackendConfigured 
                   ? 'bg-emerald-50 text-emerald-700 border border-emerald-200' 
@@ -793,7 +996,6 @@ This analysis is for informational purposes only and does not constitute legal a
                 </span>
               </div>
 
-              {/* Test Connection Button */}
               {!isBackendConfigured && backendUrl && (
                 <button
                   onClick={testConnection}
@@ -803,14 +1005,12 @@ This analysis is for informational purposes only and does not constitute legal a
                 </button>
               )}
 
-              {/* Subscription Tier */}
               {isBackendConfigured && (
                 <div className={`px-3 py-1.5 rounded-full text-xs font-medium ${getSubscriptionBadge()}`}>
                   {backendCapabilities.subscriptionTier.toUpperCase()}
                 </div>
               )}
 
-              {/* Enhanced RAG Status */}
               {isBackendConfigured && backendCapabilities.enhancedRag && (
                 <div className="flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-medium bg-blue-50 text-blue-700 border border-blue-200">
                   <span>🧠</span>
@@ -818,7 +1018,6 @@ This analysis is for informational purposes only and does not constitute legal a
                 </div>
               )}
               
-              {/* Settings Button */}
               <button
                 onClick={openSettings}
                 className="p-2 bg-gray-50 hover:bg-gray-100 rounded-lg transition-all hover:shadow-sm"
@@ -870,7 +1069,7 @@ This analysis is for informational purposes only and does not constitute legal a
           <div className="flex space-x-8">
             {[
               { id: 'chat', label: 'Smart Chat', icon: '💬', available: true },
-              { id: 'upload', label: 'Upload Documents', icon: '📤', available: true },
+              { id: 'upload', label: 'Upload & Analyze', icon: '📤', available: true },
               { id: 'documents', label: 'My Documents', icon: '📁', badge: userDocuments.length > 0 ? userDocuments.length : null, available: true },
               { id: 'analysis', label: 'Analysis Tools', icon: '🔍', available: true },
               { id: 'results', label: 'Results', icon: '📊', badge: analysisResults.length > 0 ? analysisResults.length : null, available: true }
@@ -915,7 +1114,7 @@ This analysis is for informational purposes only and does not constitute legal a
                 </div>
                 <h3 className="text-2xl font-semibold text-gray-900 mb-3">Backend Connection Required</h3>
                 <p className="text-gray-600 mb-6">
-                  Connect to the Smart Legal Assistant backend to unlock AI-powered legal analysis and enhanced RAG capabilities.
+                  Connect to the Enhanced Legal Assistant backend to unlock AI-powered legal analysis and multi-analysis capabilities.
                 </p>
                 {connectionError && (
                   <div className="bg-red-50 border border-red-200 rounded-lg p-4 mb-6">
@@ -942,7 +1141,7 @@ This analysis is for informational purposes only and does not constitute legal a
             </div>
           )}
           
-          {/* Chat Tab */}
+          {/* Chat Tab - Same as before */}
           {activeTab === 'chat' && isBackendConfigured && (
             <div className="bg-white rounded-2xl shadow-sm border border-gray-100 h-[calc(100vh-200px)] flex flex-col overflow-hidden">
               <div className="flex-grow overflow-y-auto p-6 space-y-4">
@@ -958,7 +1157,6 @@ This analysis is for informational purposes only and does not constitute legal a
                         dangerouslySetInnerHTML={{ __html: renderMarkdown(msg.text) }}
                       />
                       
-                      {/* Show confidence and sources for bot messages */}
                       {msg.from === "bot" && (msg.confidence || msg.sources?.length > 0) && (
                         <div className="mt-3 pt-3 border-t border-gray-200 text-xs text-gray-500">
                           {msg.confidence && (
@@ -988,7 +1186,6 @@ This analysis is for informational purposes only and does not constitute legal a
                         </div>
                       )}
                       
-                      {/* Expand button for bot messages */}
                       {msg.from === "bot" && msg.expandAvailable && (
                         <button
                           onClick={() => requestExpansion(msg.text)}
@@ -1017,9 +1214,7 @@ This analysis is for informational purposes only and does not constitute legal a
                 <div ref={messagesEndRef} />
               </div>
               
-              {/* Chat Input */}
               <div className="p-6 border-t border-gray-100 bg-gray-50">
-                {/* Settings Row */}
                 <div className="flex items-center gap-4 mb-4 text-sm">
                   <div className="flex items-center gap-2">
                     <label className="text-gray-600">Style:</label>
@@ -1060,7 +1255,6 @@ This analysis is for informational purposes only and does not constitute legal a
                   </div>
                 </div>
                 
-                {/* Input Row */}
                 <div className="flex gap-3">
                   <input
                     type="text"
@@ -1083,11 +1277,11 @@ This analysis is for informational purposes only and does not constitute legal a
             </div>
           )}
           
-          {/* Upload Tab */}
+          {/* Enhanced Upload Tab */}
           {activeTab === 'upload' && isBackendConfigured && (
             <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-8">
               <div className="flex items-center justify-between mb-6">
-                <h2 className="text-2xl font-semibold text-gray-900">Upload Legal Documents</h2>
+                <h2 className="text-2xl font-semibold text-gray-900">Upload & Analyze Documents</h2>
                 <div className="text-sm text-gray-500">
                   {uploadQueue.length > 0 && `${uploadQueue.length} file${uploadQueue.length !== 1 ? 's' : ''} queued`}
                 </div>
@@ -1106,7 +1300,7 @@ This analysis is for informational purposes only and does not constitute legal a
                   <p className="text-gray-600 mb-4">
                     Support for PDF, DOC, DOCX, RTF, and TXT files (max 10MB each)
                     <br />
-                    <strong>Select multiple files to upload them all at once</strong>
+                    <strong>Select multiple files and choose to auto-analyze after upload</strong>
                   </p>
                   
                   <input
@@ -1125,7 +1319,7 @@ This analysis is for informational purposes only and does not constitute legal a
                   </label>
                 </div>
 
-                {/* Upload Queue */}
+                {/* Upload Queue with Enhanced Options */}
                 {uploadQueue.length > 0 && (
                   <div className="mt-6 p-4 bg-blue-50 rounded-lg border border-blue-200">
                     <div className="flex items-center justify-between mb-4">
@@ -1138,11 +1332,18 @@ This analysis is for informational purposes only and does not constitute legal a
                           Clear All
                         </button>
                         <button
-                          onClick={uploadAllDocuments}
+                          onClick={() => uploadAllDocuments(false)}
                           disabled={isAnalyzing}
                           className="bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 disabled:bg-gray-300 transition-all font-medium text-sm"
                         >
-                          {isAnalyzing ? 'Uploading...' : `Upload All (${uploadQueue.length})`}
+                          {isAnalyzing ? 'Uploading...' : 'Upload Only'}
+                        </button>
+                        <button
+                          onClick={() => uploadAllDocuments(true)}
+                          disabled={isAnalyzing}
+                          className="bg-green-600 text-white px-4 py-2 rounded-lg hover:bg-green-700 disabled:bg-gray-300 transition-all font-medium text-sm"
+                        >
+                          {isAnalyzing ? 'Processing...' : 'Upload & Analyze All'}
                         </button>
                       </div>
                     </div>
@@ -1185,7 +1386,7 @@ This analysis is for informational purposes only and does not constitute legal a
                     {isAnalyzing && (
                       <div className="mt-4">
                         <div className="flex items-center justify-between text-sm text-blue-700 mb-2">
-                          <span>Uploading documents...</span>
+                          <span>Processing documents...</span>
                           <span>{Math.round(uploadProgress)}%</span>
                         </div>
                         <div className="bg-blue-200 rounded-full h-2">
@@ -1249,7 +1450,7 @@ This analysis is for informational purposes only and does not constitute legal a
                   </div>
                 )}
                 
-                {/* Instructions */}
+                {/* Enhanced Instructions */}
                 <div className="mt-8 grid grid-cols-1 md:grid-cols-2 gap-6">
                   <div className="p-4 bg-gray-50 rounded-lg">
                     <h4 className="font-medium text-gray-900 mb-2">Supported File Types:</h4>
@@ -1261,13 +1462,13 @@ This analysis is for informational purposes only and does not constitute legal a
                     </ul>
                   </div>
                   
-                  <div className="p-4 bg-blue-50 rounded-lg">
-                    <h4 className="font-medium text-gray-900 mb-2">Multi-Upload Tips:</h4>
+                  <div className="p-4 bg-green-50 rounded-lg">
+                    <h4 className="font-medium text-gray-900 mb-2">🚀 New: Multi-Analysis Upload:</h4>
                     <ul className="text-sm text-gray-600 space-y-1">
-                      <li>• Select multiple files at once (Ctrl/Cmd + click)</li>
-                      <li>• Each file must be under 10MB</li>
-                      <li>• Files are processed sequentially</li>
-                      <li>• You can remove files from queue before uploading</li>
+                      <li>• <strong>Upload & Analyze All:</strong> Automatically runs comprehensive analysis</li>
+                      <li>• <strong>Upload Only:</strong> Upload files for later analysis</li>
+                      <li>• Comprehensive analysis includes: summary, clauses, risks, timeline, obligations</li>
+                      <li>• Results appear instantly in the Results tab</li>
                     </ul>
                   </div>
                 </div>
@@ -1275,7 +1476,7 @@ This analysis is for informational purposes only and does not constitute legal a
             </div>
           )}
           
-          {/* Documents Tab */}
+          {/* Enhanced Documents Tab */}
           {activeTab === 'documents' && isBackendConfigured && (
             <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-8">
               <div className="flex items-center justify-between mb-6">
@@ -1303,8 +1504,8 @@ This analysis is for informational purposes only and does not constitute legal a
                 </div>
               ) : (
                 <div className="space-y-4">
-                  {userDocuments.map((doc: any) => (
-                    <div key={doc.file_id} className="border border-gray-200 rounded-lg p-4 hover:shadow-sm transition-all">
+                  {documentAnalyses.map((doc: DocumentAnalysis) => (
+                    <div key={doc.id} className="border border-gray-200 rounded-lg p-4 hover:shadow-sm transition-all">
                       <div className="flex items-center justify-between">
                         <div className="flex items-center gap-3">
                           <div className="w-10 h-10 bg-blue-100 rounded-lg flex items-center justify-center">
@@ -1315,20 +1516,56 @@ This analysis is for informational purposes only and does not constitute legal a
                           <div>
                             <h4 className="font-medium text-gray-900">{doc.filename}</h4>
                             <p className="text-sm text-gray-600">
-                              Uploaded {new Date(doc.uploaded_at).toLocaleDateString()} • {doc.pages_processed} pages
+                              Uploaded {new Date(doc.uploadedAt).toLocaleDateString()} • {doc.pagesProcessed} pages
+                              {doc.lastAnalyzed && (
+                                <span className="ml-2 text-green-600">
+                                  • Analyzed {new Date(doc.lastAnalyzed).toLocaleDateString()}
+                                </span>
+                              )}
                             </p>
                           </div>
                         </div>
-                        <button
-                          onClick={() => deleteUserDocument(doc.file_id)}
-                          className="text-red-600 hover:text-red-700 p-2 hover:bg-red-50 rounded-lg transition-all"
-                          title="Delete document"
-                        >
-                          <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
-                          </svg>
-                        </button>
+                        <div className="flex items-center gap-2">
+                          {/* Quick Analysis Button */}
+                          <button
+                            onClick={() => runComprehensiveDocumentAnalysis(doc.id)}
+                            disabled={isAnalyzing}
+                            className="bg-green-600 text-white px-3 py-2 rounded-lg hover:bg-green-700 disabled:bg-gray-300 transition-all font-medium text-sm"
+                            title="Run comprehensive analysis"
+                          >
+                            {isAnalyzing ? 'Analyzing...' : '🔍 Analyze'}
+                          </button>
+                          
+                          {/* Delete Button */}
+                          <button
+                            onClick={() => deleteUserDocument(doc.id)}
+                            className="text-red-600 hover:text-red-700 p-2 hover:bg-red-50 rounded-lg transition-all"
+                            title="Delete document"
+                          >
+                            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                            </svg>
+                          </button>
+                        </div>
                       </div>
+                      
+                      {/* Analysis Status */}
+                      {doc.confidence && (
+                        <div className="mt-3 pt-3 border-t border-gray-200">
+                          <div className="flex items-center justify-between text-sm text-gray-600">
+                            <span>Last Analysis Confidence:</span>
+                            <div className="flex items-center gap-2">
+                              <div className="w-16 bg-gray-200 rounded-full h-2">
+                                <div 
+                                  className="bg-green-500 h-2 rounded-full transition-all" 
+                                  style={{ width: `${(doc.confidence * 100)}%` }}
+                                />
+                              </div>
+                              <span className="text-xs font-medium">{Math.round(doc.confidence * 100)}%</span>
+                            </div>
+                          </div>
+                        </div>
+                      )}
                     </div>
                   ))}
                 </div>
@@ -1336,10 +1573,15 @@ This analysis is for informational purposes only and does not constitute legal a
             </div>
           )}
           
-          {/* Analysis Tab */}
+          {/* Enhanced Analysis Tab */}
           {activeTab === 'analysis' && isBackendConfigured && (
             <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-8">
-              <h2 className="text-2xl font-semibold text-gray-900 mb-6">Analysis Tools</h2>
+              <div className="flex items-center justify-between mb-6">
+                <h2 className="text-2xl font-semibold text-gray-900">Analysis Tools</h2>
+                <div className="text-sm text-gray-500">
+                  {userDocuments.length > 0 && `${userDocuments.length} document${userDocuments.length !== 1 ? 's' : ''} available`}
+                </div>
+              </div>
               
               {userDocuments.length === 0 ? (
                 <div className="text-center py-12">
@@ -1358,55 +1600,127 @@ This analysis is for informational purposes only and does not constitute legal a
                   </button>
                 </div>
               ) : (
-                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-                  {analysisTools.map((tool) => (
-                    <div key={tool.id} className="border border-gray-200 rounded-xl p-6 hover:shadow-sm transition-all">
-                      <div className="flex items-start gap-4 mb-4">
-                        <div className="text-2xl">{tool.icon}</div>
-                        <div className="flex-1">
-                          <h3 className="font-semibold text-gray-900 mb-1">{tool.title}</h3>
-                          <p className="text-sm text-gray-600 mb-3">{tool.description}</p>
-                          
-                          <div className="flex items-center gap-2 mb-3">
-                            <span className="text-xs bg-gray-100 text-gray-700 px-2 py-1 rounded-full">
-                              {tool.category}
-                            </span>
-                            <span className={`text-xs px-2 py-1 rounded-full ${
-                              tool.riskLevel === 'low' ? 'bg-green-100 text-green-700' :
-                              tool.riskLevel === 'medium' ? 'bg-yellow-100 text-yellow-700' :
-                              'bg-red-100 text-red-700'
-                            }`}>
-                              {tool.riskLevel} risk
-                            </span>
-                          </div>
-                          
-                          <div className="text-xs text-gray-500 mb-4">
-                            <strong>Ideal for:</strong> {tool.idealFor.join(', ')}
+                <>
+                  {/* Document Selector */}
+                  <div className="mb-6 p-4 bg-blue-50 rounded-lg border border-blue-200">
+                    <h4 className="font-medium text-blue-900 mb-3">Select Target Documents:</h4>
+                    <div className="flex items-center gap-4">
+                      <label className="flex items-center gap-2">
+                        <input
+                          type="radio"
+                          name="analysisScope"
+                          value="all"
+                          checked={selectedDocumentForAnalysis === null}
+                          onChange={() => setSelectedDocumentForAnalysis(null)}
+                          className="w-4 h-4"
+                        />
+                        <span className="text-sm text-blue-800">All Documents ({userDocuments.length})</span>
+                      </label>
+                      
+                      <select
+                        value={selectedDocumentForAnalysis || ''}
+                        onChange={(e) => setSelectedDocumentForAnalysis(e.target.value || null)}
+                        className="bg-white border border-blue-300 rounded px-3 py-1 text-sm"
+                      >
+                        <option value="">Select Specific Document...</option>
+                        {documentAnalyses.map(doc => (
+                          <option key={doc.id} value={doc.id}>{doc.filename}</option>
+                        ))}
+                      </select>
+                    </div>
+                  </div>
+
+                  {/* Analysis Tools Grid */}
+                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                    {analysisTools.map((tool) => (
+                      <div key={tool.id} className={`border border-gray-200 rounded-xl p-6 hover:shadow-sm transition-all ${
+                        tool.isComprehensive ? 'ring-2 ring-green-200 bg-green-50' : ''
+                      }`}>
+                        <div className="flex items-start gap-4 mb-4">
+                          <div className="text-2xl">{tool.icon}</div>
+                          <div className="flex-1">
+                            <h3 className="font-semibold text-gray-900 mb-1">
+                              {tool.title}
+                              {tool.isComprehensive && (
+                                <span className="ml-2 text-xs bg-green-100 text-green-700 px-2 py-1 rounded-full">
+                                  RECOMMENDED
+                                </span>
+                              )}
+                            </h3>
+                            <p className="text-sm text-gray-600 mb-3">{tool.description}</p>
+                            
+                            <div className="flex items-center gap-2 mb-3">
+                              <span className="text-xs bg-gray-100 text-gray-700 px-2 py-1 rounded-full">
+                                {tool.category}
+                              </span>
+                              <span className={`text-xs px-2 py-1 rounded-full ${
+                                tool.riskLevel === 'low' ? 'bg-green-100 text-green-700' :
+                                tool.riskLevel === 'medium' ? 'bg-yellow-100 text-yellow-700' :
+                                'bg-red-100 text-red-700'
+                              }`}>
+                                {tool.riskLevel} risk
+                              </span>
+                            </div>
+                            
+                            <div className="text-xs text-gray-500 mb-4">
+                              <strong>Ideal for:</strong> {tool.idealFor.join(', ')}
+                            </div>
                           </div>
                         </div>
+                        
+                        <button
+                          onClick={() => runAnalysis(tool.id, selectedDocumentForAnalysis)}
+                          disabled={isAnalyzing}
+                          className={`w-full py-2 px-4 rounded-lg transition-all font-medium text-sm ${
+                            tool.isComprehensive 
+                              ? 'bg-green-600 text-white hover:bg-green-700 disabled:bg-gray-300'
+                              : 'bg-slate-900 text-white hover:bg-slate-800 disabled:bg-gray-300'
+                          } disabled:cursor-not-allowed`}
+                        >
+                          {isAnalyzing ? 'Running Analysis...' : 
+                           tool.isComprehensive ? 'Run Complete Analysis' : 'Run Analysis'}
+                        </button>
+                        
+                        {tool.isComprehensive && (
+                          <p className="text-xs text-green-700 mt-2 text-center">
+                            🚀 Runs all analyses at once - most efficient option!
+                          </p>
+                        )}
                       </div>
-                      
-                      <button
-                        onClick={() => runAnalysis(tool.id)}
-                        disabled={isAnalyzing}
-                        className="w-full bg-slate-900 text-white py-2 px-4 rounded-lg hover:bg-slate-800 disabled:bg-gray-300 disabled:cursor-not-allowed transition-all font-medium text-sm"
-                      >
-                        {isAnalyzing ? 'Running Analysis...' : 'Run Analysis'}
-                      </button>
-                    </div>
-                  ))}
-                </div>
+                    ))}
+                  </div>
+
+                  {/* Analysis Tips */}
+                  <div className="mt-8 p-4 bg-yellow-50 rounded-lg border border-yellow-200">
+                    <h4 className="font-medium text-yellow-900 mb-2">💡 Analysis Tips:</h4>
+                    <ul className="text-sm text-yellow-800 space-y-1">
+                      <li>• <strong>Complete Document Analysis</strong> is recommended - it runs all tools at once for comprehensive insights</li>
+                      <li>• Select "All Documents" to analyze your entire document collection</li>
+                      <li>• Choose specific documents for targeted analysis</li>
+                      <li>• Results include confidence scores and source citations</li>
+                      <li>• All analyses can be downloaded as text reports</li>
+                    </ul>
+                  </div>
+                </>
               )}
             </div>
           )}
           
-          {/* Results Tab */}
+          {/* Enhanced Results Tab */}
           {activeTab === 'results' && isBackendConfigured && (
             <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-8">
               <div className="flex items-center justify-between mb-6">
                 <h2 className="text-2xl font-semibold text-gray-900">Analysis Results</h2>
-                <div className="text-sm text-gray-500">
-                  {analysisResults.length} result{analysisResults.length !== 1 ? 's' : ''}
+                <div className="flex items-center gap-4 text-sm text-gray-500">
+                  <span>{analysisResults.length} result{analysisResults.length !== 1 ? 's' : ''}</span>
+                  {analysisResults.length > 0 && (
+                    <button
+                      onClick={() => setAnalysisResults([])}
+                      className="text-red-600 hover:text-red-700 font-medium"
+                    >
+                      Clear All Results
+                    </button>
+                  )}
                 </div>
               </div>
               
@@ -1418,7 +1732,7 @@ This analysis is for informational purposes only and does not constitute legal a
                     </svg>
                   </div>
                   <h3 className="text-lg font-medium text-gray-900 mb-2">No analysis results</h3>
-                  <p className="text-gray-600 mb-4">Run analysis tools to see results here</p>
+                  <p className="text-gray-600 mb-4">Run analysis tools to see comprehensive results here</p>
                   <button
                     onClick={() => setActiveTab('analysis')}
                     className="bg-slate-900 text-white px-6 py-3 rounded-lg hover:bg-slate-800 transition-all font-medium"
@@ -1442,20 +1756,45 @@ This analysis is for informational purposes only and does not constitute legal a
                                 {Math.round(result.confidence * 100)}% confidence
                               </span>
                             )}
+                            {result.analysisType === 'comprehensive' && (
+                              <span className="text-xs bg-green-100 text-green-700 px-2 py-1 rounded-full">
+                                COMPLETE ANALYSIS
+                              </span>
+                            )}
                           </div>
                           <p className="text-sm text-gray-600">
                             {result.timestamp} • {result.document}
+                            {result.documentId && result.documentId !== 'all' && (
+                              <span className="ml-2 text-blue-600">• Specific Document</span>
+                            )}
                           </p>
                         </div>
-                        <button
-                          onClick={() => downloadResult(result.id)}
-                          className="text-gray-600 hover:text-gray-700 p-2 hover:bg-gray-50 rounded-lg transition-all"
-                          title="Download result"
-                        >
-                          <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
-                          </svg>
-                        </button>
+                        <div className="flex items-center gap-2">
+                          {/* Rerun Analysis Button */}
+                          {result.documentId && result.documentId !== 'all' && (
+                            <button
+                              onClick={() => runComprehensiveDocumentAnalysis(result.documentId)}
+                              disabled={isAnalyzing}
+                              className="text-blue-600 hover:text-blue-700 p-2 hover:bg-blue-50 rounded-lg transition-all"
+                              title="Rerun analysis"
+                            >
+                              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                              </svg>
+                            </button>
+                          )}
+                          
+                          {/* Download Button */}
+                          <button
+                            onClick={() => downloadResult(result.id)}
+                            className="text-gray-600 hover:text-gray-700 p-2 hover:bg-gray-50 rounded-lg transition-all"
+                            title="Download result"
+                          >
+                            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                            </svg>
+                          </button>
+                        </div>
                       </div>
                       
                       <div className="bg-gray-50 rounded-lg p-4 mb-4">
@@ -1466,7 +1805,7 @@ This analysis is for informational purposes only and does not constitute legal a
                       </div>
                       
                       {result.warnings && result.warnings.length > 0 && (
-                        <div className="bg-amber-50 border border-amber-200 rounded-lg p-3">
+                        <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 mb-4">
                           <div className="flex items-start gap-2">
                             <svg className="w-5 h-5 text-amber-600 flex-shrink-0 mt-0.5" fill="currentColor" viewBox="0 0 20 20">
                               <path fillRule="evenodd" d="M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 11-2 0 1 1 0 012 0zm-1-8a1 1 0 00-1 1v3a1 1 0 002 0V6a1 1 0 00-1-1z" clipRule="evenodd" />
@@ -1487,15 +1826,15 @@ This analysis is for informational purposes only and does not constitute legal a
                         <div className="border-t border-gray-200 pt-4">
                           <p className="text-sm font-medium text-gray-900 mb-2">Sources:</p>
                           <div className="space-y-1">
-                            {result.sources.slice(0, 3).map((source: any, i: number) => (
+                            {result.sources.slice(0, 5).map((source: any, i: number) => (
                               <p key={i} className="text-xs text-gray-600">
                                 • {source.file_name} {source.page && `(Page ${source.page})`}
                                 {source.relevance && ` - ${Math.round(source.relevance * 100)}% relevant`}
                               </p>
                             ))}
-                            {result.sources.length > 3 && (
+                            {result.sources.length > 5 && (
                               <p className="text-xs text-gray-500">
-                                +{result.sources.length - 3} more sources
+                                +{result.sources.length - 5} more sources
                               </p>
                             )}
                           </div>
