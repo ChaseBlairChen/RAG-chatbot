@@ -1,5 +1,5 @@
 # Unified Legal Assistant Backend - Multi-User with Enhanced RAG
-# This version combines user containers from App 1 with smart RAG from App 2
+
 
 from fastapi import FastAPI, Request, HTTPException, File, UploadFile, Form, Depends, Header
 from fastapi.middleware.cors import CORSMiddleware
