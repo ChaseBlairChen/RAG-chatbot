@@ -1313,7 +1313,7 @@ def get_interface():
     return html_template
 
 # Initialize document processor from App 2
-from paste import SafeDocumentProcessor
+from document_processor import SafeDocumentProcessor
 
 if __name__ == "__main__":
     import uvicorn
