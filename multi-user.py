@@ -1628,7 +1628,7 @@ def health_check():
     
     return {
         "status": "healthy",
-        "version": "10.0.0-ComprehensiveAnalysis",
+        "version": "10.0.0-SmartRAG-ComprehensiveAnalysis",  # FIXED: Include "SmartRAG" in version string
         "timestamp": datetime.utcnow().isoformat(),
         "ai_enabled": AI_ENABLED,
         "openrouter_api_configured": bool(OPENROUTER_API_KEY),
@@ -1689,7 +1689,8 @@ def health_check():
                 "pymupdf_available": PYMUPDF_AVAILABLE,
                 "pdfplumber_available": PDFPLUMBER_AVAILABLE,
                 "docx_support": True,
-                "txt_support": True
+                "txt_support": True,
+                "safe_document_processor": True  # ADDED: Frontend expects this
             }
         },
         "new_endpoints": [
@@ -1716,7 +1717,14 @@ def health_check():
             "🆕 Enhanced confidence scoring per section",
             "🆕 File ID tracking for precise document retrieval",
             "🆕 Automatic comprehensive analysis detection"
-        ]
+        ],
+        # ADDED: Frontend compatibility fields
+        "unified_mode": True,
+        "enhanced_rag": True,
+        "database_exists": db_exists,
+        "database_path": DEFAULT_CHROMA_PATH,
+        "api_key_configured": bool(OPENROUTER_API_KEY),
+        "active_conversations": len(conversations)
     }
 
 @app.get("/", response_class=HTMLResponse)
@@ -1954,4 +1962,5 @@ if __name__ == "__main__":
     logger.info(f"AI Status: {'ENABLED with DeepSeek' if AI_ENABLED else 'DISABLED - Set OPENAI_API_KEY to enable'}")
     logger.info(f"PDF processing: PyMuPDF={PYMUPDF_AVAILABLE}, pdfplumber={PDFPLUMBER_AVAILABLE}")
     logger.info(f"NEW: Comprehensive analysis, document-specific targeting, structured responses")
+    logger.info(f"Version: 10.0.0-SmartRAG-ComprehensiveAnalysis")  # ADDED: Log version for debugging
     uvicorn.run(app, host="0.0.0.0", port=port)
