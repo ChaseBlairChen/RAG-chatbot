@@ -1,5 +1,5 @@
 # Unified Legal Assistant Backend - Multi-User with Enhanced RAG + Comprehensive Analysis
-# Merged version with comprehensive analysis capabilities
+# Fixed version with syntax error resolved
 
 from fastapi import FastAPI, Request, HTTPException, File, UploadFile, Form, Depends, Header
 from fastapi.middleware.cors import CORSMiddleware
@@ -86,7 +86,7 @@ except ImportError as e:
 
 print(f"PDF processing status: PyMuPDF={PYMUPDF_AVAILABLE}, pdfplumber={PDFPLUMBER_AVAILABLE}")
 
-# ADD THE SAFEDOCUMENTPROCESSOR CLASS HERE - BEFORE FastAPI app creation
+# SafeDocumentProcessor class
 class SafeDocumentProcessor:
     """Safe document processor for various file types"""
     
@@ -101,27 +101,18 @@ class SafeDocumentProcessor:
         pages_processed = 0
         
         try:
-            # Get file extension
             filename = getattr(file, 'filename', 'unknown')
             file_ext = os.path.splitext(filename)[1].lower()
-            
-            # Read file content
             file_content = file.file.read()
             
             if file_ext == '.txt':
                 content = file_content.decode('utf-8', errors='ignore')
                 pages_processed = 1
-                
             elif file_ext == '.pdf':
-                # Try to process PDF
                 content, pages_processed = SafeDocumentProcessor._process_pdf(file_content, warnings)
-                
             elif file_ext == '.docx':
-                # Try to process DOCX
                 content, pages_processed = SafeDocumentProcessor._process_docx(file_content, warnings)
-                
             else:
-                # For other formats, try to read as text
                 try:
                     content = file_content.decode('utf-8', errors='ignore')
                     pages_processed = 1
@@ -131,7 +122,6 @@ class SafeDocumentProcessor:
                     content = "Unable to process this file type"
                     pages_processed = 0
             
-            # Reset file pointer
             file.file.seek(0)
             
         except Exception as e:
@@ -145,7 +135,6 @@ class SafeDocumentProcessor:
     def _process_pdf(file_content: bytes, warnings: List[str]) -> Tuple[str, int]:
         """Process PDF content"""
         try:
-            # Try PyMuPDF first
             if PYMUPDF_AVAILABLE:
                 try:
                     import fitz
@@ -160,7 +149,6 @@ class SafeDocumentProcessor:
                 except Exception as e:
                     warnings.append(f"PyMuPDF error: {str(e)}")
             
-            # Try pdfplumber as fallback
             if PDFPLUMBER_AVAILABLE:
                 try:
                     import pdfplumber
@@ -173,8 +161,7 @@ class SafeDocumentProcessor:
                 except Exception as e:
                     warnings.append(f"pdfplumber error: {str(e)}")
             
-            # If no PDF libraries available or both failed
-            warnings.append("No PDF processing libraries available or both failed. Install PyMuPDF or pdfplumber.")
+            warnings.append("No PDF processing libraries available. Install PyMuPDF or pdfplumber.")
             return "PDF processing not available", 0
             
         except Exception as e:
@@ -185,14 +172,13 @@ class SafeDocumentProcessor:
     def _process_docx(file_content: bytes, warnings: List[str]) -> Tuple[str, int]:
         """Process DOCX content"""
         try:
-            # Try to import python-docx
             try:
                 from docx import Document
                 doc = Document(io.BytesIO(file_content))
                 text_content = ""
                 for paragraph in doc.paragraphs:
                     text_content += paragraph.text + "\n"
-                return text_content, 1  # DOCX doesn't have clear "pages"
+                return text_content, 1
             except ImportError:
                 warnings.append("python-docx not available. Install with: pip install python-docx")
                 return "DOCX processing not available", 0
@@ -219,14 +205,12 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# - Configuration -
-# Database paths
+# Configuration
 DEFAULT_CHROMA_PATH = os.path.abspath(os.path.join(os.getcwd(), "chromadb-database"))
 USER_CONTAINERS_PATH = os.path.abspath(os.path.join(os.getcwd(), "user-containers"))
 logger.info(f"Using DEFAULT_CHROMA_PATH: {DEFAULT_CHROMA_PATH}")
 logger.info(f"Using USER_CONTAINERS_PATH: {USER_CONTAINERS_PATH}")
 
-# Create directories if they don't exist
 os.makedirs(USER_CONTAINERS_PATH, exist_ok=True)
 
 OPENROUTER_API_KEY = os.environ.get("OPENAI_API_KEY")
@@ -235,10 +219,9 @@ AI_ENABLED = bool(OPENROUTER_API_KEY) and AIOHTTP_AVAILABLE
 MAX_FILE_SIZE = 10 * 1024 * 1024  # 10MB
 LEGAL_EXTENSIONS = {'.pdf', '.txt', '.docx', '.rtf'}
 
-# FIXED: Security - Made authentication optional for debugging
 security = HTTPBearer(auto_error=False)
 
-# NEW: Analysis Types Enum for Comprehensive Analysis
+# Analysis Types Enum
 class AnalysisType(str, Enum):
     COMPREHENSIVE = "comprehensive"
     SUMMARY = "summarize"
@@ -248,94 +231,75 @@ class AnalysisType(str, Enum):
     OBLIGATIONS = "obligations"
     MISSING_CLAUSES = "missing-clauses"
 
-# - External Legal Database Interface (EXISTING) -
+# External Legal Database Interface
 class LegalDatabaseInterface(ABC):
     """Abstract interface for external legal databases"""
     
     @abstractmethod
     def search(self, query: str, filters: Optional[Dict] = None) -> List[Dict]:
-        """Search the legal database"""
         pass
     
     @abstractmethod
     def get_document(self, document_id: str) -> Dict:
-        """Retrieve a specific document"""
         pass
     
     @abstractmethod
     def authenticate(self, credentials: Dict) -> bool:
-        """Authenticate with the legal database"""
         pass
 
 class LexisNexisInterface(LegalDatabaseInterface):
-    """Interface for LexisNexis integration (placeholder for future implementation)"""
-    
     def __init__(self, api_key: str = None, api_endpoint: str = None):
         self.api_key = api_key or os.environ.get("LEXISNEXIS_API_KEY")
         self.api_endpoint = api_endpoint or os.environ.get("LEXISNEXIS_API_ENDPOINT")
         self.authenticated = False
     
     def authenticate(self, credentials: Dict) -> bool:
-        """Authenticate with LexisNexis"""
-        # Placeholder for actual authentication
         logger.info("LexisNexis authentication placeholder")
         return False
     
     def search(self, query: str, filters: Optional[Dict] = None) -> List[Dict]:
-        """Search LexisNexis database"""
-        # Placeholder for actual search implementation
         logger.info(f"LexisNexis search placeholder for query: {query}")
         return []
     
     def get_document(self, document_id: str) -> Dict:
-        """Get document from LexisNexis"""
-        # Placeholder for actual document retrieval
         logger.info(f"LexisNexis document retrieval placeholder for ID: {document_id}")
         return {}
 
 class WestlawInterface(LegalDatabaseInterface):
-    """Interface for Westlaw integration (placeholder for future implementation)"""
-    
     def __init__(self, api_key: str = None, api_endpoint: str = None):
         self.api_key = api_key or os.environ.get("WESTLAW_API_KEY")
         self.api_endpoint = api_endpoint or os.environ.get("WESTLAW_API_ENDPOINT")
         self.authenticated = False
     
     def authenticate(self, credentials: Dict) -> bool:
-        """Authenticate with Westlaw"""
-        # Placeholder for actual authentication
         logger.info("Westlaw authentication placeholder")
         return False
     
     def search(self, query: str, filters: Optional[Dict] = None) -> List[Dict]:
-        """Search Westlaw database"""
-        # Placeholder for actual search implementation
         logger.info(f"Westlaw search placeholder for query: {query}")
         return []
     
     def get_document(self, document_id: str) -> Dict:
-        """Get document from Westlaw"""
-        # Placeholder for actual document retrieval
         logger.info(f"Westlaw document retrieval placeholder for ID: {document_id}")
         return {}
 
-# - Pydantic Models (EXISTING + NEW) -
+# Pydantic Models
 class User(BaseModel):
     user_id: str
     email: Optional[str] = None
     container_id: Optional[str] = None
-    subscription_tier: str = "free"  # free, premium, enterprise
-    external_db_access: List[str] = []  # ["lexisnexis", "westlaw"]
+    subscription_tier: str = "free"
+    external_db_access: List[str] = []
 
 class Query(BaseModel):
     question: str
     session_id: Optional[str] = None
     response_style: Optional[str] = "balanced"
     user_id: Optional[str] = None
-    search_scope: Optional[str] = "all"  # "all", "user_only", "default_only", "external_only"
-    external_databases: Optional[List[str]] = []  # ["lexisnexis", "westlaw"]
-    use_enhanced_rag: Optional[bool] = True  # Toggle enhanced RAG
-    document_id: Optional[str] = None  # NEW: For document-specific queries
+    search_scope: Optional[str] = "all"
+    external_databases: Optional[List[str]] = []
+    use_enhanced_rag: Optional[bool] = True
+    document_id: Optional[str] = None
 
 class QueryResponse(BaseModel):
     response: Optional[str] = None
@@ -345,12 +309,11 @@ class QueryResponse(BaseModel):
     session_id: str
     confidence_score: float = 0.0
     expand_available: bool = False
-    sources_searched: List[str] = []  # ["default_db", "user_container", "lexisnexis"]
-    retrieval_method: Optional[str] = None  # Track which retrieval method was used
+    sources_searched: List[str] = []
+    retrieval_method: Optional[str] = None
 
-# NEW: Comprehensive Analysis Models
 class ComprehensiveAnalysisRequest(BaseModel):
-    document_id: Optional[str] = None  # Specific document or None for all
+    document_id: Optional[str] = None
     analysis_types: List[AnalysisType] = [AnalysisType.COMPREHENSIVE]
     user_id: str
     session_id: Optional[str] = None
@@ -370,7 +333,6 @@ class StructuredAnalysisResponse(BaseModel):
     warnings: List[str] = []
     retrieval_method: str = "comprehensive_analysis"
 
-# EXISTING Models
 class UserDocumentUpload(BaseModel):
     user_id: str
     file_id: str
@@ -393,21 +355,17 @@ class ConversationHistory(BaseModel):
     session_id: str
     messages: List[Dict[str, Any]]
 
-# - User Management (EXISTING) -
+# User Management
 class UserContainerManager:
-    """Manages user-specific document containers"""
-    
     def __init__(self, base_path: str):
         self.base_path = base_path
         self.embeddings = HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2")
     
     def create_user_container(self, user_id: str) -> str:
-        """Create a new container for a user"""
         container_id = hashlib.sha256(user_id.encode()).hexdigest()[:16]
         container_path = os.path.join(self.base_path, container_id)
         os.makedirs(container_path, exist_ok=True)
         
-        # Initialize user's ChromaDB
         user_db = Chroma(
             collection_name=f"user_{container_id}",
             embedding_function=self.embeddings,
@@ -418,7 +376,6 @@ class UserContainerManager:
         return container_id
     
     def get_user_database(self, user_id: str) -> Optional[Chroma]:
-        """Get the ChromaDB instance for a user"""
         container_id = self.get_container_id(user_id)
         container_path = os.path.join(self.base_path, container_id)
         
@@ -433,29 +390,24 @@ class UserContainerManager:
         )
     
     def get_container_id(self, user_id: str) -> str:
-        """Get container ID for a user"""
         return hashlib.sha256(user_id.encode()).hexdigest()[:16]
     
-    # ENHANCED: Add document with file_id tracking
     def add_document_to_container(self, user_id: str, document_text: str, metadata: Dict, file_id: str = None) -> bool:
-        """Add a document to user's container with enhanced metadata"""
         try:
             user_db = self.get_user_database(user_id)
             if not user_db:
                 container_id = self.create_user_container(user_id)
                 user_db = self.get_user_database(user_id)
             
-            # Enhanced text splitting for better analysis
             text_splitter = RecursiveCharacterTextSplitter(
-                chunk_size=1500,  # Larger chunks for better context
-                chunk_overlap=300,  # More overlap for comprehensive analysis
+                chunk_size=1500,
+                chunk_overlap=300,
                 length_function=len,
             )
             
             chunks = text_splitter.split_text(document_text)
-            
-            # Create documents with enhanced metadata
             documents = []
+            
             for i, chunk in enumerate(chunks):
                 doc_metadata = metadata.copy()
                 doc_metadata['chunk_index'] = i
@@ -464,7 +416,6 @@ class UserContainerManager:
                 doc_metadata['upload_timestamp'] = datetime.utcnow().isoformat()
                 doc_metadata['chunk_size'] = len(chunk)
                 
-                # CRITICAL: Store file_id for document-specific retrieval
                 if file_id:
                     doc_metadata['file_id'] = file_id
                 
@@ -473,7 +424,6 @@ class UserContainerManager:
                     metadata=doc_metadata
                 ))
             
-            # Add to user's database
             user_db.add_documents(documents)
             logger.info(f"Added {len(documents)} chunks for document {file_id or 'unknown'} to user {user_id}'s container")
             return True
@@ -483,13 +433,11 @@ class UserContainerManager:
             return False
     
     def search_user_container(self, user_id: str, query: str, k: int = 5, document_id: str = None) -> List[Tuple]:
-        """Search within a user's container with optional document filtering"""
         user_db = self.get_user_database(user_id)
         if not user_db:
             return []
         
         try:
-            # Apply document filter if specified
             filter_dict = None
             if document_id:
                 filter_dict = {"file_id": document_id}
@@ -501,25 +449,19 @@ class UserContainerManager:
             return []
     
     def enhanced_search_user_container(self, user_id: str, query: str, conversation_context: str, k: int = 12, document_id: str = None) -> List[Tuple]:
-        """Enhanced search within user's container using App 2's strategies with optional document filtering"""
         user_db = self.get_user_database(user_id)
         if not user_db:
             return []
         
         try:
-            # Apply document filter if specified
             filter_dict = None
             if document_id:
                 filter_dict = {"file_id": document_id}
             
-            # Strategy 1: Direct query
             direct_results = user_db.similarity_search_with_score(query, k=k, filter=filter_dict)
-            
-            # Strategy 2: Expanded query
             expanded_query = f"{query} {conversation_context}"
             expanded_results = user_db.similarity_search_with_score(expanded_query, k=k, filter=filter_dict)
             
-            # Strategy 3: Sub-queries (if NLP available)
             sub_query_results = []
             if nlp:
                 doc = nlp(query)
@@ -528,7 +470,6 @@ class UserContainerManager:
                         sub_results = user_db.similarity_search_with_score(f"What is {ent.text}?", k=3, filter=filter_dict)
                         sub_query_results.extend(sub_results)
             
-            # Combine and deduplicate
             all_results = direct_results + expanded_results + sub_query_results
             return remove_duplicate_documents(all_results)[:k]
             
@@ -536,17 +477,17 @@ class UserContainerManager:
             logger.error(f"Error in enhanced user container search: {e}")
             return []
 
-# - Global State -
+# Global State
 conversations: Dict[str, Dict] = {}
 uploaded_files: Dict[str, Dict] = {}
-user_sessions: Dict[str, User] = {}  # Map session_id to user
+user_sessions: Dict[str, User] = {}
 container_manager = UserContainerManager(USER_CONTAINERS_PATH)
 external_databases = {
     "lexisnexis": LexisNexisInterface(),
     "westlaw": WestlawInterface()
 }
 
-# - Load NLP Models (EXISTING) -
+# Load NLP Models
 nlp = None
 sentence_model = None
 embeddings = None
@@ -572,11 +513,9 @@ except Exception as e:
     logger.error(f"Failed to load HuggingFace embeddings: {e}")
     embeddings = None
 
-# FIXED: Authentication - Made authentication optional for debugging
+# Authentication
 def get_current_user(credentials: Optional[HTTPAuthorizationCredentials] = Depends(security)) -> User:
-    """Get current user from token (simplified for demo)"""
     if credentials is None:
-        # For debugging - create a default user when no auth provided
         default_user_id = "debug_user"
         if default_user_id not in user_sessions:
             user_sessions[default_user_id] = User(
@@ -586,10 +525,7 @@ def get_current_user(credentials: Optional[HTTPAuthorizationCredentials] = Depen
             )
         return user_sessions[default_user_id]
     
-    # In production, validate JWT token and get user from database
     token = credentials.credentials
-    
-    # For demo, create user from token
     user_id = f"user_{token[:8]}"
     
     if user_id not in user_sessions:
@@ -601,12 +537,10 @@ def get_current_user(credentials: Optional[HTTPAuthorizationCredentials] = Depen
     
     return user_sessions[user_id]
 
-# - Enhanced RAG Functions from App 2 (EXISTING) -
+# Enhanced RAG Functions
 def parse_multiple_questions(query_text: str) -> List[str]:
-    """Parse multiple questions from a single query"""
     questions = []
     
-    # Strategy 1: Split by common separators
     if ';' in query_text:
         parts = query_text.split(';')
         for part in parts:
@@ -614,7 +548,6 @@ def parse_multiple_questions(query_text: str) -> List[str]:
             if part:
                 questions.append(part)
     elif '?' in query_text and query_text.count('?') > 1:
-        # Handle multiple question marks
         parts = query_text.split('?')
         for part in parts:
             part = part.strip()
@@ -629,7 +562,6 @@ def parse_multiple_questions(query_text: str) -> List[str]:
     return questions
 
 def remove_duplicate_documents(results_with_scores: List[Tuple]) -> List[Tuple]:
-    """Remove duplicate documents based on content similarity"""
     if not results_with_scores:
         return []
     
@@ -637,40 +569,32 @@ def remove_duplicate_documents(results_with_scores: List[Tuple]) -> List[Tuple]:
     seen_content = set()
     
     for doc, score in results_with_scores:
-        # Create a hash of the first 100 characters for deduplication
         content_hash = hash(doc.page_content[:100])
         if content_hash not in seen_content:
             seen_content.add(content_hash)
             unique_results.append((doc, score))
     
-    # Sort by relevance score (descending)
     unique_results.sort(key=lambda x: x[1], reverse=True)
     return unique_results
 
 def enhanced_retrieval_v2(db, query_text: str, conversation_history_context: str, k: int = 12, document_filter: Dict = None) -> Tuple[List, str]:
-    """Enhanced retrieval from App 2 with multi-query approach and document filtering"""
     logger.info(f"[ENHANCED_RETRIEVAL] Original query: '{query_text}'")
     
     try:
-        # Strategy 1: Direct query
         direct_results = db.similarity_search_with_score(query_text, k=k, filter=document_filter)
         logger.info(f"[ENHANCED_RETRIEVAL] Direct search returned {len(direct_results)} results")
         
-        # Strategy 2: Expanded query using conversation context
         expanded_query = f"{query_text} {conversation_history_context}"
         expanded_results = db.similarity_search_with_score(expanded_query, k=k, filter=document_filter)
         logger.info(f"[ENHANCED_RETRIEVAL] Expanded search returned {len(expanded_results)} results")
         
-        # Strategy 3: Sub-query decomposition
         sub_queries = []
-        # Extract potential legal terms or entities
         if nlp:
             doc = nlp(query_text)
             for ent in doc.ents:
                 if ent.label_ in ["ORG", "PERSON", "LAW", "DATE"]:
                     sub_queries.append(f"What is {ent.text}?")
         
-        # Add generic question words if no entities found
         if not sub_queries:
             question_words = ["what", "who", "when", "where", "why", "how"]
             for word in question_words:
@@ -678,19 +602,14 @@ def enhanced_retrieval_v2(db, query_text: str, conversation_history_context: str
                     sub_queries.append(f"{word.capitalize()} {query_text.lower().replace(word, '').strip()}?")
         
         sub_query_results = []
-        for sq in sub_queries[:3]:  # Limit sub-queries
+        for sq in sub_queries[:3]:
             sq_results = db.similarity_search_with_score(sq, k=3, filter=document_filter)
             sub_query_results.extend(sq_results)
         
         logger.info(f"[ENHANCED_RETRIEVAL] Sub-query search returned {len(sub_query_results)} results")
         
-        # Combine all results
         all_results = direct_results + expanded_results + sub_query_results
-        
-        # Remove duplicates and sort by score
         unique_results = remove_duplicate_documents(all_results)
-        
-        # Take top k results
         top_results = unique_results[:k]
         
         logger.info(f"[ENHANCED_RETRIEVAL] Final results after deduplication: {len(top_results)}")
@@ -698,35 +617,26 @@ def enhanced_retrieval_v2(db, query_text: str, conversation_history_context: str
         
     except Exception as e:
         logger.error(f"[ENHANCED_RETRIEVAL] Error in enhanced retrieval: {e}")
-        # Fallback to basic retrieval
         basic_results = db.similarity_search_with_score(query_text, k=k, filter=document_filter)
         return basic_results, "basic_fallback"
 
 def calculate_confidence_score(results_with_scores: List[Tuple], response_length: int) -> float:
-    """Calculate confidence score based on retrieval results and response"""
     try:
         if not results_with_scores:
             return 0.2
         
         scores = [score for _, score in results_with_scores]
-        
-        # Factor 1: Average relevance score
         avg_relevance = np.mean(scores)
-        
-        # Factor 2: Number of supporting documents
         doc_factor = min(1.0, len(results_with_scores) / 5.0)
         
-        # Factor 3: Score distribution (consistency)
         if len(scores) > 1:
             score_std = np.std(scores)
             consistency_factor = max(0.5, 1.0 - score_std)
         else:
             consistency_factor = 0.7
             
-        # Factor 4: Response completeness
         completeness_factor = min(1.0, response_length / 500.0)
         
-        # Weighted combination
         confidence = (
             avg_relevance * 0.4 +
             doc_factor * 0.3 +
@@ -734,7 +644,6 @@ def calculate_confidence_score(results_with_scores: List[Tuple], response_length
             completeness_factor * 0.1
         )
         
-        # Ensure confidence is between 0 and 1
         confidence = max(0.0, min(1.0, confidence))
         return confidence
     
@@ -742,90 +651,27 @@ def calculate_confidence_score(results_with_scores: List[Tuple], response_length
         logger.error(f"Error calculating confidence score: {e}")
         return 0.5
 
-# NEW: Comprehensive Analysis Processor
+# Comprehensive Analysis Processor
 class ComprehensiveAnalysisProcessor:
-    """Processes comprehensive document analysis requests"""
-    
     def __init__(self):
         self.analysis_prompts = {
-            "document_summary": """Analyze this document and provide a comprehensive summary including:
-- Document type and purpose
-- Main parties involved and their roles
-- Key terms and conditions
-- Important dates and deadlines
-- Financial obligations or amounts
-- Overall document structure and organization""",
-            
-            "key_clauses": """Extract and analyze key legal clauses from this document:
-- Termination clauses and conditions
-- Indemnification provisions
-- Liability limitations and caps
-- Governing law and jurisdiction
-- Confidentiality/NDA provisions
-- Payment terms and conditions
-- Dispute resolution mechanisms
-- Assignment and transfer rights
-For each clause, provide the specific text location and explain its implications.""",
-            
-            "risk_assessment": """Identify and assess legal risks in this document:
-- Unilateral termination rights that favor one party
-- Broad indemnification requirements
-- Unlimited liability exposure
-- Vague or ambiguous obligations
-- Unfavorable payment terms
-- Lack of protection clauses
-- Unusual warranty or representation provisions
-- Problematic intellectual property terms
-Rate each risk as High/Medium/Low and suggest mitigation strategies.""",
-            
-            "timeline_deadlines": """Extract all time-related information from this document:
-- Contract start and end dates
-- Payment deadlines and schedules
-- Notice periods and requirements
-- Renewal dates and terms
-- Termination notice requirements
-- Performance deadlines
-- Warranty periods
-- Compliance deadlines
-- Any other time-sensitive obligations
-Present as a chronological timeline with clear labels.""",
-            
-            "party_obligations": """List all obligations and requirements for each party:
-- What each party must do
-- When they must do it (deadlines)
-- Conditions or prerequisites
-- Performance standards or metrics
-- Reporting or notification requirements
-- Consequences of non-compliance
-Organize by party and priority level.""",
-            
-            "missing_clauses": """Analyze this contract for commonly expected clauses that may be missing:
-Standard clauses to consider:
-- Force majeure provisions
-- Limitation of liability
-- Indemnification clauses
-- Dispute resolution/arbitration
-- Confidentiality provisions
-- Termination provisions
-- Assignment restrictions
-- Severability clauses
-- Entire agreement clauses
-- Notice provisions
-- Governing law provisions
-For each missing clause, explain why it's important and the risks of its absence."""
+            "document_summary": "Analyze this document and provide a comprehensive summary including document type, purpose, main parties, key terms, important dates, and financial obligations.",
+            "key_clauses": "Extract and analyze key legal clauses including termination, indemnification, liability, governing law, confidentiality, payment terms, and dispute resolution. For each clause, provide specific text references and implications.",
+            "risk_assessment": "Identify and assess legal risks including unilateral rights, broad indemnification, unlimited liability, vague obligations, and unfavorable terms. Rate each risk (High/Medium/Low) and suggest mitigation strategies.",
+            "timeline_deadlines": "Extract all time-related information including start/end dates, payment deadlines, notice periods, renewal terms, performance deadlines, and warranty periods. Present chronologically.",
+            "party_obligations": "List all obligations for each party including what must be done, deadlines, conditions, performance standards, and consequences of non-compliance. Organize by party.",
+            "missing_clauses": "Identify commonly expected clauses that may be missing such as force majeure, limitation of liability, dispute resolution, severability, assignment restrictions, and notice provisions. Explain the importance and risks of each missing clause."
         }
     
     def process_comprehensive_analysis(self, request: ComprehensiveAnalysisRequest) -> StructuredAnalysisResponse:
-        """Process a comprehensive analysis request"""
         start_time = time.time()
         
         try:
-            # Get document-specific search results
             search_results, sources_searched, retrieval_method = self._enhanced_document_specific_search(
                 request.user_id, 
                 request.document_id, 
-                "comprehensive legal document analysis",  # Broad query for comprehensive analysis
-                k=20  # Get more results for comprehensive analysis
+                "comprehensive legal document analysis",
+                k=20
             )
             
             if not search_results:
@@ -835,23 +681,18 @@ For each missing clause, explain why it's important and the risks of its absence
                     retrieval_method="no_documents_found"
                 )
             
-            # Format context for analysis
-            context_text, source_info = format_context_for_llm(search_results, max_length=8000)  # Larger context for comprehensive analysis
+            context_text, source_info = format_context_for_llm(search_results, max_length=8000)
             
-            # Process comprehensive analysis
             response = StructuredAnalysisResponse()
             response.sources_by_section = {}
             response.confidence_scores = {}
             response.retrieval_method = retrieval_method
             
             if AnalysisType.COMPREHENSIVE in request.analysis_types:
-                # Single comprehensive prompt (recommended approach)
                 comprehensive_prompt = self._create_comprehensive_prompt(context_text)
                 
                 try:
                     analysis_result = call_openrouter_api(comprehensive_prompt, OPENROUTER_API_KEY, OPENAI_API_BASE)
-                    
-                    # Parse structured response
                     parsed_sections = self._parse_comprehensive_response(analysis_result)
                     
                     response.document_summary = parsed_sections.get("summary", "")
@@ -861,10 +702,8 @@ For each missing clause, explain why it's important and the risks of its absence
                     response.party_obligations = parsed_sections.get("obligations", "")
                     response.missing_clauses = parsed_sections.get("missing", "")
                     
-                    # Calculate confidence based on result quality
                     response.overall_confidence = self._calculate_comprehensive_confidence(parsed_sections, len(search_results))
                     
-                    # Set sources for all sections
                     for section in ["summary", "clauses", "risks", "timeline", "obligations", "missing"]:
                         response.sources_by_section[section] = source_info
                         response.confidence_scores[section] = response.overall_confidence
@@ -875,15 +714,9 @@ For each missing clause, explain why it's important and the risks of its absence
                     response.overall_confidence = 0.1
             
             else:
-                # Individual analysis types (fallback)
                 for analysis_type in request.analysis_types:
-                    section_result = self._process_individual_analysis(
-                        analysis_type, 
-                        context_text, 
-                        source_info
-                    )
+                    section_result = self._process_individual_analysis(analysis_type, context_text, source_info)
                     
-                    # Set appropriate field based on analysis type
                     if analysis_type == AnalysisType.SUMMARY:
                         response.document_summary = section_result["content"]
                     elif analysis_type == AnalysisType.CLAUSES:
@@ -900,12 +733,10 @@ For each missing clause, explain why it's important and the risks of its absence
                     response.confidence_scores[analysis_type.value] = section_result["confidence"]
                     response.sources_by_section[analysis_type.value] = source_info
                 
-                # Calculate overall confidence
                 confidences = list(response.confidence_scores.values())
                 response.overall_confidence = sum(confidences) / len(confidences) if confidences else 0.0
             
             response.processing_time = time.time() - start_time
-            
             logger.info(f"Comprehensive analysis completed in {response.processing_time:.2f}s with confidence {response.overall_confidence:.2f}")
             
             return response
@@ -920,22 +751,18 @@ For each missing clause, explain why it's important and the risks of its absence
             )
     
     def _enhanced_document_specific_search(self, user_id: str, document_id: Optional[str], query: str, k: int = 15) -> Tuple[List, List[str], str]:
-        """Enhanced search that can target specific documents or all user documents"""
         all_results = []
         sources_searched = []
         retrieval_method = "enhanced_document_specific"
         
         try:
-            # Search user documents with enhanced RAG and optional document filtering
             if document_id:
-                # Search specific document only
                 user_results = container_manager.enhanced_search_user_container(
                     user_id, query, "", k=k, document_id=document_id
                 )
                 sources_searched.append(f"document_{document_id}")
                 logger.info(f"Document-specific search for {document_id}: {len(user_results)} results")
             else:
-                # Search all user documents
                 user_results = container_manager.enhanced_search_user_container(
                     user_id, query, "", k=k
                 )
@@ -954,8 +781,7 @@ For each missing clause, explain why it's important and the risks of its absence
             return [], [], "error"
     
     def _create_comprehensive_prompt(self, context_text: str) -> str:
-        """Create a single comprehensive analysis prompt"""
-        return f"""You are a legal document analyst. Analyze the provided legal document and provide a comprehensive analysis with the following structured sections. Each section should be detailed and specific.
+        return f"""You are a legal document analyst. Analyze the provided legal document and provide a comprehensive analysis with the following structured sections.
 
 LEGAL DOCUMENT CONTEXT:
 {context_text}
@@ -966,34 +792,30 @@ Please provide your analysis in the following format with clear section headers:
 Provide a comprehensive summary including document type, purpose, main parties, key terms, important dates, and financial obligations.
 
 ## KEY CLAUSES ANALYSIS
-Extract and analyze important legal clauses including termination, indemnification, liability, governing law, confidentiality, payment terms, and dispute resolution. For each clause, provide specific text references and implications.
+Extract and analyze important legal clauses including termination, indemnification, liability, governing law, confidentiality, payment terms, and dispute resolution.
 
 ## RISK ASSESSMENT
-Identify potential legal risks including unilateral rights, broad indemnification, unlimited liability, vague obligations, and unfavorable terms. Rate each risk (High/Medium/Low) and suggest mitigation strategies.
+Identify potential legal risks including unilateral rights, broad indemnification, unlimited liability, vague obligations, and unfavorable terms. Rate each risk (High/Medium/Low).
 
 ## TIMELINE & DEADLINES
-Extract all time-related information including start/end dates, payment deadlines, notice periods, renewal terms, performance deadlines, and warranty periods. Present chronologically.
+Extract all time-related information including start/end dates, payment deadlines, notice periods, renewal terms, performance deadlines, and warranty periods.
 
 ## PARTY OBLIGATIONS
-List all obligations for each party including what must be done, deadlines, conditions, performance standards, and consequences of non-compliance. Organize by party.
+List all obligations for each party including what must be done, deadlines, conditions, performance standards, and consequences of non-compliance.
 
 ## MISSING CLAUSES ANALYSIS
-Identify commonly expected clauses that may be missing such as force majeure, limitation of liability, dispute resolution, severability, assignment restrictions, and notice provisions. Explain the importance and risks of each missing clause.
+Identify commonly expected clauses that may be missing such as force majeure, limitation of liability, dispute resolution, severability, assignment restrictions, and notice provisions.
 
 INSTRUCTIONS:
 - Base your analysis ONLY on the provided document context
 - Provide specific references to document text where possible
 - Use clear, professional language suitable for legal professionals
 - If information is insufficient for any section, state this clearly
-- Include relevant legal implications and practical considerations
 
 RESPONSE:"""
     
     def _parse_comprehensive_response(self, response_text: str) -> Dict[str, str]:
-        """Parse the comprehensive response into sections"""
         sections = {}
-        
-        # Define section markers
         section_markers = {
             "summary": ["## DOCUMENT SUMMARY", "# DOCUMENT SUMMARY"],
             "clauses": ["## KEY CLAUSES ANALYSIS", "# KEY CLAUSES ANALYSIS", "## KEY CLAUSES"],
@@ -1003,7 +825,6 @@ RESPONSE:"""
             "missing": ["## MISSING CLAUSES ANALYSIS", "# MISSING CLAUSES ANALYSIS", "## MISSING CLAUSES"]
         }
         
-        # Split response by sections
         lines = response_text.split('\n')
         current_section = None
         current_content = []
@@ -1011,7 +832,6 @@ RESPONSE:"""
         for line in lines:
             line_strip = line.strip()
             
-            # Check if this line starts a new section
             section_found = None
             for section_key, markers in section_markers.items():
                 if any(line_strip.startswith(marker) for marker in markers):
@@ -1019,23 +839,18 @@ RESPONSE:"""
                     break
             
             if section_found:
-                # Save previous section
                 if current_section and current_content:
                     sections[current_section] = '\n'.join(current_content).strip()
                 
-                # Start new section
                 current_section = section_found
                 current_content = []
             else:
-                # Add to current section
                 if current_section:
                     current_content.append(line)
         
-        # Save final section
         if current_section and current_content:
             sections[current_section] = '\n'.join(current_content).strip()
         
-        # Ensure all sections have content
         for section_key in section_markers.keys():
             if section_key not in sections or not sections[section_key]:
                 sections[section_key] = f"No {section_key.replace('_', ' ').title()} information found in the analysis."
@@ -1043,7 +858,6 @@ RESPONSE:"""
         return sections
     
     def _process_individual_analysis(self, analysis_type: AnalysisType, context_text: str, source_info: List[Dict]) -> Dict:
-        """Process individual analysis type"""
         try:
             prompt = self.analysis_prompts.get(analysis_type.value, "Analyze this legal document.")
             full_prompt = f"{prompt}\n\nLEGAL DOCUMENT CONTEXT:\n{context_text}\n\nPlease provide a detailed analysis based ONLY on the provided context."
@@ -1052,7 +866,7 @@ RESPONSE:"""
             
             return {
                 "content": result,
-                "confidence": 0.7,  # Base confidence for individual analysis
+                "confidence": 0.7,
                 "sources": source_info
             }
         except Exception as e:
@@ -1064,32 +878,25 @@ RESPONSE:"""
             }
     
     def _calculate_comprehensive_confidence(self, parsed_sections: Dict[str, str], num_sources: int) -> float:
-        """Calculate confidence score for comprehensive analysis"""
         try:
-            # Factor 1: Number of successful sections
             successful_sections = sum(1 for content in parsed_sections.values() 
                                     if content and not content.startswith("No ") and len(content) > 50)
             section_factor = successful_sections / len(parsed_sections)
             
-            # Factor 2: Content quality (average length as proxy)
             avg_length = sum(len(content) for content in parsed_sections.values()) / len(parsed_sections)
-            length_factor = min(1.0, avg_length / 200)  # 200 chars as baseline
+            length_factor = min(1.0, avg_length / 200)
             
-            # Factor 3: Source availability
-            source_factor = min(1.0, num_sources / 5)  # 5 sources as baseline
+            source_factor = min(1.0, num_sources / 5)
             
-            # Weighted combination
             confidence = (section_factor * 0.5 + length_factor * 0.3 + source_factor * 0.2)
-            
             return max(0.1, min(1.0, confidence))
             
         except Exception as e:
             logger.error(f"Error calculating confidence: {e}")
             return 0.5
 
-# - Utility Functions (EXISTING + ENHANCED) -
+# Utility Functions
 def load_database():
-    """Load the default Chroma database"""
     try:
         if not os.path.exists(DEFAULT_CHROMA_PATH):
             logger.warning(f"Default database path does not exist: {DEFAULT_CHROMA_PATH}")
@@ -1108,7 +915,6 @@ def load_database():
         raise
 
 def search_external_databases(query: str, databases: List[str], user: User) -> List[Dict]:
-    """Search external legal databases (placeholder for future implementation)"""
     results = []
     
     for db_name in databases:
@@ -1129,17 +935,14 @@ def search_external_databases(query: str, databases: List[str], user: User) -> L
     return results
 
 def combined_search(query: str, user_id: Optional[str], search_scope: str, conversation_context: str, use_enhanced: bool = True, k: int = 10, document_id: str = None) -> Tuple[List, List[str], str]:
-    """Enhanced combined search across all sources with App 2's smart RAG and document filtering"""
     all_results = []
     sources_searched = []
     retrieval_method = "basic"
     
-    # Search default database
     if search_scope in ["all", "default_only"]:
         try:
             default_db = load_database()
             if default_db:
-                # Note: Default database doesn't support document filtering
                 if use_enhanced:
                     default_results, method = enhanced_retrieval_v2(default_db, query, conversation_context, k=k)
                     retrieval_method = method
@@ -1154,7 +957,6 @@ def combined_search(query: str, user_id: Optional[str], search_scope: str, conve
         except Exception as e:
             logger.error(f"Error searching default database: {e}")
     
-    # Search user container
     if user_id and search_scope in ["all", "user_only"]:
         try:
             if use_enhanced:
@@ -1170,17 +972,14 @@ def combined_search(query: str, user_id: Optional[str], search_scope: str, conve
         except Exception as e:
             logger.error(f"Error searching user container: {e}")
     
-    # Remove duplicates and sort by relevance
     if use_enhanced:
         all_results = remove_duplicate_documents(all_results)
     else:
         all_results.sort(key=lambda x: x[1], reverse=True)
     
-    # Take top k results
     return all_results[:k], sources_searched, retrieval_method
 
 def add_to_conversation(session_id: str, role: str, content: str, sources: Optional[List] = None):
-    """Add message to conversation"""
     if session_id not in conversations:
         conversations[session_id] = {
             'messages': [],
@@ -1199,13 +998,11 @@ def add_to_conversation(session_id: str, role: str, content: str, sources: Optio
     conversations[session_id]['last_accessed'] = datetime.utcnow()
 
 def get_conversation_context(session_id: str, max_length: int = 2000) -> str:
-    """Get formatted conversation context"""
     if session_id not in conversations:
         return ""
     
     messages = conversations[session_id]['messages']
     context_parts = []
-    
     recent_messages = messages[-4:]
     
     for msg in recent_messages:
@@ -1220,7 +1017,6 @@ def get_conversation_context(session_id: str, max_length: int = 2000) -> str:
     return ""
 
 def cleanup_expired_conversations():
-    """Remove conversations older than 1 hour"""
     now = datetime.utcnow()
     expired_sessions = [
         session_id for session_id, data in conversations.items()
@@ -1232,7 +1028,6 @@ def cleanup_expired_conversations():
         logger.info(f"Cleaned up {len(expired_sessions)} expired conversations")
 
 def format_context_for_llm(results_with_scores: List[Tuple], max_length: int = 3000) -> Tuple[str, List]:
-    """Format retrieved context for the LLM with source information"""
     context_parts = []
     source_info = []
     
@@ -1249,7 +1044,6 @@ def format_context_for_llm(results_with_scores: List[Tuple], max_length: int = 3
         source_type = metadata.get('source_type', 'unknown')
         
         display_source = os.path.basename(source_path)
-        
         page_info = f" (Page {page})" if page is not None else ""
         source_prefix = f"[{source_type.upper()}]" if source_type != 'unknown' else ""
         
@@ -1274,7 +1068,6 @@ def format_context_for_llm(results_with_scores: List[Tuple], max_length: int = 3
     return context_text, source_info
 
 def call_openrouter_api(prompt: str, api_key: str, api_base: str = "https://openrouter.ai/api/v1") -> str:
-    """Call OpenRouter API with fallback models"""
     headers = {
         "Authorization": f"Bearer {api_key}",
         "Content-Type": "application/json",
@@ -1313,18 +1106,14 @@ def call_openrouter_api(prompt: str, api_key: str, api_base: str = "https://open
     
     return "I apologize, but I'm experiencing technical difficulties. Please try again."
 
-# - Main Query Processing (ENHANCED) -
+# Main Query Processing
 def process_query(question: str, session_id: str, user_id: Optional[str], search_scope: str, response_style: str = "balanced", use_enhanced_rag: bool = True, document_id: str = None) -> QueryResponse:
-    """Process query with optional enhanced RAG from App 2 and document filtering"""
     try:
-        # Log the incoming request for debugging
         logger.info(f"Processing query - Question: '{question}', User: {user_id}, Scope: {search_scope}, Enhanced: {use_enhanced_rag}, Document: {document_id}")
         
-        # Check if this is a comprehensive analysis request
         if any(phrase in question.lower() for phrase in ["comprehensive analysis", "complete analysis", "full analysis"]):
             logger.info("Detected comprehensive analysis request")
             
-            # Create comprehensive analysis request
             try:
                 comp_request = ComprehensiveAnalysisRequest(
                     document_id=document_id,
@@ -1334,11 +1123,9 @@ def process_query(question: str, session_id: str, user_id: Optional[str], search
                     response_style=response_style
                 )
                 
-                # Process comprehensive analysis
                 processor = ComprehensiveAnalysisProcessor()
                 comp_result = processor.process_comprehensive_analysis(comp_request)
                 
-                # Format as comprehensive response
                 formatted_response = f"""# Comprehensive Legal Document Analysis
 
 ## Document Summary
@@ -1366,7 +1153,6 @@ def process_query(question: str, session_id: str, user_id: Optional[str], search
 **Sources:** {len(comp_result.sources_by_section.get('summary', []))} document sections analyzed
 """
                 
-                # Update conversation
                 add_to_conversation(session_id, "user", question)
                 add_to_conversation(session_id, "assistant", formatted_response)
                 
@@ -1384,16 +1170,12 @@ def process_query(question: str, session_id: str, user_id: Optional[str], search
                 
             except Exception as e:
                 logger.error(f"Comprehensive analysis failed: {e}")
-                # Fall through to regular processing
         
-        # Parse multiple questions if present
         questions = parse_multiple_questions(question) if use_enhanced_rag else [question]
         combined_query = " ".join(questions)
         
-        # Get conversation context
         conversation_context = get_conversation_context(session_id)
         
-        # Perform combined search with enhanced RAG option and document filtering
         retrieved_results, sources_searched, retrieval_method = combined_search(
             combined_query, 
             user_id, 
@@ -1415,10 +1197,8 @@ def process_query(question: str, session_id: str, user_id: Optional[str], search
                 retrieval_method=retrieval_method
             )
         
-        # Format context for LLM
         context_text, source_info = format_context_for_llm(retrieved_results)
         
-        # Style instructions
         style_instructions = {
             "concise": "Please provide a concise answer (1-2 sentences) based on the context.",
             "balanced": "Please provide a balanced answer (2-3 paragraphs) based on the context.",
@@ -1427,8 +1207,7 @@ def process_query(question: str, session_id: str, user_id: Optional[str], search
         
         instruction = style_instructions.get(response_style, style_instructions["balanced"])
         
-        # Enhanced prompt with best features from both apps
-        prompt = f"""You are a legal research assistant. Your responses must be STRICTLY based on the provided legal documents, including any logical implications that can be reasonably drawn from their content.
+        prompt = f"""You are a legal research assistant. Your responses must be STRICTLY based on the provided legal documents.
 
 SOURCES SEARCHED: {', '.join(sources_searched)}
 RETRIEVAL METHOD: {retrieval_method}
@@ -1436,17 +1215,13 @@ RETRIEVAL METHOD: {retrieval_method}
 
 CRITICAL REQUIREMENTS:
 1. **ONLY use information from the provided context below**
-2. **You may draw reasonable legal implications based on explicit content (e.g., statutory language, case reasoning, legislative findings)**
+2. **You may draw reasonable legal implications based on explicit content**
 3. **Note which source type each piece of information comes from**
 4. **If the context doesn't contain sufficient information, explicitly state this**
 5. **Cite specific document names and source types for each claim**
 6. **Do NOT invent facts, statutes, or case law not found in the context**
-7. **Avoid general legal knowledge unless directly supported by cited documents**
 
 RESPONSE STYLE: {instruction}
-- Concise: Provide key points only
-- Balanced: Structured overview with main points
-- Detailed: Comprehensive analysis
 
 CONVERSATION HISTORY:
 {conversation_context}
@@ -1458,20 +1233,18 @@ USER QUESTION:
 {questions}
 
 INSTRUCTIONS:
-- Use only the provided legal content, but you may infer relationships or implications between statutes and cases when clearly supported
+- Use only the provided legal content
 - If context is insufficient, say: "Based on the available documents, I can only provide limited information..."
 - Always cite the source document(s) for each fact or inference: [document_name.pdf]
 - If no relevant information exists, say: "The available documents do not contain information about this topic."
 
 RESPONSE:"""
         
-        # Call LLM
         if AI_ENABLED and OPENROUTER_API_KEY:
             response_text = call_openrouter_api(prompt, OPENROUTER_API_KEY, OPENAI_API_BASE)
         else:
             response_text = f"Based on the retrieved documents:\n\n{context_text}\n\nPlease review this information to answer your question."
         
-        # Add sources section
         MIN_RELEVANCE_SCORE = 0.25
         relevant_sources = [s for s in source_info if s['relevance'] >= MIN_RELEVANCE_SCORE]
         
@@ -1482,10 +1255,8 @@ RESPONSE:"""
                 page_info = f", Page {source['page']}" if source['page'] is not None else ""
                 response_text += f"\n- [{source_type}] {source['file_name']}{page_info} (Relevance: {source['relevance']:.2f})"
         
-        # Calculate enhanced confidence score
         confidence_score = calculate_confidence_score(retrieved_results, len(response_text))
         
-        # Update conversation
         add_to_conversation(session_id, "user", question)
         add_to_conversation(session_id, "assistant", response_text, source_info)
         
@@ -1503,7 +1274,7 @@ RESPONSE:"""
         
     except Exception as e:
         logger.error(f"Error processing query: {e}")
-        traceback.print_exc()  # Add full traceback for debugging
+        traceback.print_exc()
         return QueryResponse(
             response=None,
             error=str(e),
@@ -1515,32 +1286,24 @@ RESPONSE:"""
             retrieval_method="error"
         )
 
-# - NEW API Endpoints for Comprehensive Analysis -
+# API Endpoints
 
 @app.post("/comprehensive-analysis", response_model=StructuredAnalysisResponse)
 async def comprehensive_document_analysis(
     request: ComprehensiveAnalysisRequest,
     current_user: User = Depends(get_current_user)
 ):
-    """
-    NEW: Comprehensive document analysis endpoint
-    Provides structured analysis of legal documents with multiple analysis types in one call
-    """
+    """Comprehensive document analysis endpoint"""
     logger.info(f"Comprehensive analysis request: user={request.user_id}, doc={request.document_id}, types={request.analysis_types}")
     
     try:
-        # Validate user access
         if request.user_id != current_user.user_id:
             raise HTTPException(status_code=403, detail="Cannot analyze documents for different user")
         
-        # Initialize processor
         processor = ComprehensiveAnalysisProcessor()
-        
-        # Process analysis
         result = processor.process_comprehensive_analysis(request)
         
         logger.info(f"Comprehensive analysis completed: confidence={result.overall_confidence:.2f}, time={result.processing_time:.2f}s")
-        
         return result
         
     except HTTPException:
@@ -1555,10 +1318,7 @@ async def quick_document_analysis(
     analysis_type: AnalysisType = AnalysisType.COMPREHENSIVE,
     current_user: User = Depends(get_current_user)
 ):
-    """
-    Quick analysis endpoint for single documents
-    Used by frontend "Analyze" buttons
-    """
+    """Quick analysis endpoint for single documents"""
     try:
         request = ComprehensiveAnalysisRequest(
             document_id=document_id,
@@ -1584,17 +1344,9 @@ async def quick_document_analysis(
             "message": "Analysis failed"
         }
 
-# - API Endpoints - EXISTING WITH ENHANCEMENTS -
 @app.post("/ask", response_model=QueryResponse)
 async def ask_question(query: Query, current_user: Optional[User] = Depends(get_current_user)):
-    """
-    Enhanced ask endpoint with smart RAG capabilities and comprehensive analysis detection
-    - all: Search default database and user's container
-    - user_only: Search only user's uploaded documents
-    - default_only: Search only the default legal database
-    - use_enhanced_rag: Enable/disable enhanced retrieval strategies
-    - document_id: Filter to specific document (NEW)
-    """
+    """Enhanced ask endpoint with comprehensive analysis detection"""
     logger.info(f"Received ask request: {query}")
     
     cleanup_expired_conversations()
@@ -1630,7 +1382,7 @@ async def ask_question(query: Query, current_user: Optional[User] = Depends(get_
         query.search_scope or "all",
         query.response_style or "balanced",
         query.use_enhanced_rag if query.use_enhanced_rag is not None else True,
-        query.document_id  # NEW: Pass document_id for filtering
+        query.document_id
     )
     return response
 
@@ -1650,11 +1402,10 @@ async def upload_user_document(
     file: UploadFile = File(...),
     current_user: User = Depends(get_current_user)
 ):
-    """Enhanced upload endpoint with file_id tracking for document-specific analysis"""
+    """Enhanced upload endpoint with file_id tracking"""
     start_time = datetime.utcnow()
     
     try:
-        # Check file size
         file.file.seek(0, 2)
         file_size = file.file.tell()
         file.file.seek(0)
@@ -1662,19 +1413,16 @@ async def upload_user_document(
         if file_size > MAX_FILE_SIZE:
             raise HTTPException(status_code=400, detail=f"File too large. Maximum size is {MAX_FILE_SIZE//1024//1024}MB")
         
-        # Check file extension
         file_ext = os.path.splitext(file.filename)[1].lower()
         if file_ext not in LEGAL_EXTENSIONS:
             raise HTTPException(status_code=400, detail=f"Unsupported file type. Supported: {LEGAL_EXTENSIONS}")
         
-        # Process document using SafeDocumentProcessor
         content, pages_processed, warnings = SafeDocumentProcessor.process_document_safe(file)
         
-        # Create metadata with file_id
         file_id = str(uuid.uuid4())
         metadata = {
             'source': file.filename,
-            'file_id': file_id,  # CRITICAL: Include file_id for document-specific retrieval
+            'file_id': file_id,
             'upload_date': datetime.utcnow().isoformat(),
             'user_id': current_user.user_id,
             'file_type': file_ext,
@@ -1682,18 +1430,16 @@ async def upload_user_document(
             'file_size': file_size
         }
         
-        # Add to user's container with file_id
         success = container_manager.add_document_to_container(
             current_user.user_id,
             content,
             metadata,
-            file_id  # NEW: Pass file_id for metadata storage
+            file_id
         )
         
         if not success:
             raise HTTPException(status_code=500, detail="Failed to add document to user container")
         
-        # Store file info
         session_id = str(uuid.uuid4())
         uploaded_files[file_id] = {
             'filename': file.filename,
@@ -1722,7 +1468,7 @@ async def upload_user_document(
         raise
     except Exception as e:
         logger.error(f"Error uploading user document: {e}")
-        traceback.print_exc()  # Add full traceback for debugging
+        traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/user/documents")
@@ -1759,9 +1505,7 @@ async def delete_user_document(
     if file_data.get('user_id') != current_user.user_id:
         raise HTTPException(status_code=403, detail="Unauthorized to delete this document")
     
-    # In production, would also remove from ChromaDB
     del uploaded_files[file_id]
-    
     return {"message": "Document deleted successfully", "file_id": file_id}
 
 @app.post("/external/search")
@@ -1798,7 +1542,7 @@ async def get_subscription_status(current_user: User = Depends(get_current_user)
             "ai_analysis": True,
             "api_calls_per_month": 100,
             "enhanced_rag": True,
-            "comprehensive_analysis": True  # NEW
+            "comprehensive_analysis": True
         },
         "premium": {
             "default_database_access": True,
@@ -1809,8 +1553,8 @@ async def get_subscription_status(current_user: User = Depends(get_current_user)
             "api_calls_per_month": 1000,
             "priority_support": True,
             "enhanced_rag": True,
-            "comprehensive_analysis": True,  # NEW
-            "document_specific_analysis": True  # NEW
+            "comprehensive_analysis": True,
+            "document_specific_analysis": True
         },
         "enterprise": {
             "default_database_access": True,
@@ -1822,9 +1566,9 @@ async def get_subscription_status(current_user: User = Depends(get_current_user)
             "priority_support": True,
             "custom_integrations": True,
             "enhanced_rag": True,
-            "comprehensive_analysis": True,  # NEW
-            "document_specific_analysis": True,  # NEW
-            "bulk_analysis": True  # NEW
+            "comprehensive_analysis": True,
+            "document_specific_analysis": True,
+            "bulk_analysis": True
         }
     }
     
@@ -1835,20 +1579,14 @@ async def get_subscription_status(current_user: User = Depends(get_current_user)
         "external_db_access": current_user.external_db_access
     }
 
-# ADDED: Debug endpoint to test without authentication
 @app.post("/ask-debug", response_model=QueryResponse)
 async def ask_question_debug(query: Query):
-    """
-    Debug version of ask endpoint without authentication
-    For testing frontend integration with comprehensive analysis support
-    """
+    """Debug version of ask endpoint without authentication"""
     logger.info(f"Debug ask request received: {query}")
     
     cleanup_expired_conversations()
     
     session_id = query.session_id or str(uuid.uuid4())
-    
-    # Create a debug user if none provided
     user_id = query.user_id or "debug_user"
     
     if session_id not in conversations:
@@ -1879,7 +1617,7 @@ async def ask_question_debug(query: Query):
         query.search_scope or "all",
         query.response_style or "balanced",
         query.use_enhanced_rag if query.use_enhanced_rag is not None else True,
-        query.document_id  # NEW: Pass document_id for filtering
+        query.document_id
     )
     return response
 
@@ -1903,8 +1641,8 @@ def health_check():
                 "enabled": True,
                 "base_path": USER_CONTAINERS_PATH,
                 "active_containers": len(os.listdir(USER_CONTAINERS_PATH)) if os.path.exists(USER_CONTAINERS_PATH) else 0,
-                "document_specific_retrieval": True,  # NEW
-                "file_id_tracking": True  # NEW
+                "document_specific_retrieval": True,
+                "file_id_tracking": True
             },
             "external_databases": {
                 "lexisnexis": {
@@ -1916,7 +1654,7 @@ def health_check():
                     "status": "ready" if bool(os.environ.get("WESTLAW_API_KEY")) else "not_configured"
                 }
             },
-            "comprehensive_analysis": {  # NEW SECTION
+            "comprehensive_analysis": {
                 "enabled": True,
                 "analysis_types": [
                     "comprehensive",
@@ -1941,7 +1679,7 @@ def health_check():
                     "sub_query_decomposition",
                     "confidence_scoring",
                     "duplicate_removal",
-                    "document_specific_filtering"  # NEW
+                    "document_specific_filtering"
                 ],
                 "nlp_model": nlp is not None,
                 "sentence_model": sentence_model is not None
@@ -1954,7 +1692,7 @@ def health_check():
                 "txt_support": True
             }
         },
-        "new_endpoints": [  # NEW
+        "new_endpoints": [
             "POST /comprehensive-analysis - Full structured analysis",
             "POST /quick-analysis/{document_id} - Quick single document analysis", 
             "Enhanced /ask - Detects comprehensive analysis requests",
@@ -1972,19 +1710,19 @@ def health_check():
             "✅ Query expansion and decomposition",
             "✅ SafeDocumentProcessor for file handling",
             "🔧 Optional authentication for debugging",
-            "🆕 Comprehensive multi-analysis in single API call",  # NEW
-            "🆕 Document-specific analysis targeting",  # NEW
-            "🆕 Structured analysis responses with sections",  # NEW
-            "🆕 Enhanced confidence scoring per section",  # NEW
-            "🆕 File ID tracking for precise document retrieval",  # NEW
-            "🆕 Automatic comprehensive analysis detection"  # NEW
+            "🆕 Comprehensive multi-analysis in single API call",
+            "🆕 Document-specific analysis targeting",
+            "🆕 Structured analysis responses with sections",
+            "🆕 Enhanced confidence scoring per section",
+            "🆕 File ID tracking for precise document retrieval",
+            "🆕 Automatic comprehensive analysis detection"
         ]
     }
 
 @app.get("/", response_class=HTMLResponse)
 def get_interface():
     """Web interface with updated documentation for comprehensive analysis"""
-    html_template = """
+    return """
     <!DOCTYPE html>
     <html>
     <head>
@@ -2189,29 +1927,6 @@ const chatResponse = await fetch('/ask', {
 }
             </div>
             
-            <h2>🎯 Usage Patterns</h2>
-            <div class="feature-grid">
-                <div class="feature-card">
-                    <h4>Upload & Auto-Analyze</h4>
-                    <p>Upload document → Immediately run comprehensive analysis → Show structured results</p>
-                </div>
-                
-                <div class="feature-card">
-                    <h4>Document Library Analysis</h4>
-                    <p>Browse documents → Click "Analyze" → Get instant comprehensive analysis</p>
-                </div>
-                
-                <div class="feature-card">
-                    <h4>Chat-Based Analysis</h4>
-                    <p>Type "comprehensive analysis" → Backend auto-detects → Returns structured analysis</p>
-                </div>
-                
-                <div class="feature-card">
-                    <h4>Bulk Analysis</h4>
-                    <p>Select multiple documents → Run comprehensive analysis on all → Compare results</p>
-                </div>
-            </div>
-            
             <h2>⚡ Performance Benefits</h2>
             <ul>
                 <li><strong>87% faster:</strong> 60s vs 270s for complete analysis</li>
@@ -2222,29 +1937,6 @@ const chatResponse = await fetch('/ask', {
                 <li><strong>Structured output:</strong> Easy to parse and display in UI</li>
             </ul>
             
-            <h2>🛠️ Migration Guide</h2>
-            <div class="feature-grid">
-                <div class="feature-card">
-                    <h4>For Existing Users</h4>
-                    <ul>
-                        <li>All existing endpoints still work</li>
-                        <li>Gradual migration to comprehensive analysis</li>
-                        <li>Better results with same effort</li>
-                        <li>Backwards compatible responses</li>
-                    </ul>
-                </div>
-                
-                <div class="feature-card">
-                    <h4>For New Integrations</h4>
-                    <ul>
-                        <li>Use /comprehensive-analysis for new features</li>
-                        <li>Implement quick-analysis for document lists</li>
-                        <li>Enable auto-detection in chat interfaces</li>
-                        <li>Utilize structured response format</li>
-                    </ul>
-                </div>
-            </div>
-            
             <p style="text-align: center; color: #7f8c8d; margin-top: 30px;">
                 Powered by DeepSeek AI via OpenRouter 🚀
                 <br>Version 10.0.0-ComprehensiveAnalysis with Multi-Analysis Support
@@ -2253,7 +1945,6 @@ const chatResponse = await fetch('/ask', {
     </body>
     </html>
     """
-    return html_template
 
 if __name__ == "__main__":
     import uvicorn
@@ -2263,4 +1954,4 @@ if __name__ == "__main__":
     logger.info(f"AI Status: {'ENABLED with DeepSeek' if AI_ENABLED else 'DISABLED - Set OPENAI_API_KEY to enable'}")
     logger.info(f"PDF processing: PyMuPDF={PYMUPDF_AVAILABLE}, pdfplumber={PDFPLUMBER_AVAILABLE}")
     logger.info(f"NEW: Comprehensive analysis, document-specific targeting, structured responses")
-    uvicorn.run(app, host="0.0.0.0", port=port) "
+    uvicorn.run(app, host="0.0.0.0", port=port)
