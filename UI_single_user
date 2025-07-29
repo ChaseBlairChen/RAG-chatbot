@@ -1,0 +1,1030 @@
+import { useState, useRef, useEffect } from "react";
+import { marked } from 'marked';
+import DOMPurify from 'dompurify';
+
+// Configure marked for better table rendering
+marked.setOptions({
+  breaks: true,
+  gfm: true, // GitHub Flavored Markdown for table support
+});
+
+type Message = {
+  from: "user" | "bot";
+  text: string;
+  confidence?: number;
+  expandAvailable?: boolean;
+  sources?: any[];
+};
+
+type AnalysisResult = {
+  id: number;
+  toolId: string;
+  toolTitle: string;
+  document: string;
+  analysis: string;
+  confidence?: number;
+  timestamp: string;
+  sources?: any[];
+  status: 'completed' | 'failed' | 'processing';
+  extractedData?: any;
+  warnings?: string[];
+};
+
+const analysisTools = [
+  {
+    id: 'summarize',
+    title: 'Legal Document Summarization',
+    description: 'Get plain English summaries while keeping legal tone intact',
+    prompt: 'Summarize this legal document in plain English, keeping the legal tone intact. Highlight purpose, parties involved, and key terms.',
+    icon: '📄',
+    category: 'Analysis',
+    idealFor: ['Contracts', 'Case briefs', 'Discovery documents'],
+    riskLevel: 'low'
+  },
+  {
+    id: 'extract-clauses',
+    title: 'Key Clause Extraction',
+    description: 'Extract termination, indemnification, liability clauses automatically',
+    prompt: 'Extract and list the clauses related to termination, indemnification, liability, governing law, and confidentiality.',
+    icon: '📋',
+    category: 'Extraction',
+    idealFor: ['NDAs', 'Employment agreements', 'Service contracts'],
+    riskLevel: 'low'
+  },
+  {
+    id: 'missing-clauses',
+    title: 'Missing Clause Detection',
+    description: 'Flag commonly expected clauses that might be missing',
+    prompt: 'Analyze this contract and flag any commonly expected legal clauses that are missing, such as limitation of liability or dispute resolution.',
+    icon: '⚠️',
+    category: 'Risk Assessment',
+    idealFor: ['Startup contracts', 'Vendor agreements'],
+    riskLevel: 'medium'
+  },
+  {
+    id: 'risk-flagging',
+    title: 'Legal Risk Flagging',
+    description: 'Identify clauses that may pose legal risks to signing party',
+    prompt: 'Identify any clauses that may pose legal risks to the signing party, such as unilateral termination, broad indemnity, or vague obligations.',
+    icon: '🚩',
+    category: 'Risk Assessment',
+    idealFor: ['Lease agreements', 'IP transfer agreements'],
+    riskLevel: 'high'
+  },
+  {
+    id: 'timeline-extraction',
+    title: 'Timeline & Deadline Extraction',
+    description: 'Extract all dates, deadlines, and renewal periods',
+    prompt: 'Extract and list all dates, deadlines, renewal periods, and notice periods mentioned in this document.',
+    icon: '📅',
+    category: 'Extraction',
+    idealFor: ['Leases', 'Licensing deals'],
+    riskLevel: 'low'
+  },
+  {
+    id: 'obligations',
+    title: 'Obligation Summary',
+    description: 'List all required actions and obligations with deadlines',
+    prompt: 'List all actions or obligations the signing party is required to perform, along with associated deadlines or conditions.',
+    icon: '✅',
+    category: 'Analysis',
+    idealFor: ['Service contracts', 'Compliance agreements'],
+    riskLevel: 'low'
+  }
+];
+
+export default function ElegantLegalAssistant() {
+  // Chat state
+  const [messages, setMessages] = useState<Message[]>([
+    { from: "bot", text: "Hello! I'm your AI Legal Assistant. I can help you understand legal documents, answer questions about contracts, and analyze documents for potential risks. How can I assist you today?" }
+  ]);
+  const [input, setInput] = useState("");
+  const [isLoading, setIsLoading] = useState(false);
+  const [responseStyle, setResponseStyle] = useState("balanced");
+  const [sessionId, setSessionId] = useState("");
+  const messagesEndRef = useRef<null | HTMLDivElement>(null);
+
+  // Document analysis state
+  const [activeTab, setActiveTab] = useState("chat");
+  const [uploadedFile, setUploadedFile] = useState<File | null>(null);
+  const [analysisResults, setAnalysisResults] = useState<AnalysisResult[]>([]);
+  const [isAnalyzing, setIsAnalyzing] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState(0);
+
+  // Backend configuration state
+  const [backendUrl, setBackendUrl] = useState("http://18.232.139.244:8000");
+  const [backendType, setBackendType] = useState<"rag" | "analysis" | "unified" | "auto">("auto");
+  const [isBackendConfigured, setIsBackendConfigured] = useState(false);
+  const [backendCapabilities, setBackendCapabilities] = useState({
+    hasChat: false,
+    hasDocumentAnalysis: false,
+    apiEndpoints: [] as string[]
+  });
+
+  // Markdown renderer with sanitization
+  const renderMarkdown = (text: string) => {
+    const html = marked(text);
+    return DOMPurify.sanitize(html);
+  };
+
+  // Check backend capabilities
+  const checkBackendCapabilities = async () => {
+    if (!backendUrl) return;
+
+    try {
+      const healthResponse = await fetch(`${backendUrl}/health`);
+      if (healthResponse.ok) {
+        const healthData = await healthResponse.json();
+        
+        if (healthData.unified_mode) {
+          setBackendCapabilities({
+            hasChat: true,
+            hasDocumentAnalysis: true,
+            apiEndpoints: ['/ask', '/document-analysis', '/verify-extraction']
+          });
+          setBackendType("unified");
+          setIsBackendConfigured(true);
+          return;
+        }
+        
+        if (healthData.ai_enabled !== undefined) {
+          setBackendCapabilities({
+            hasChat: false,
+            hasDocumentAnalysis: true,
+            apiEndpoints: ['/document-analysis', '/verify-extraction']
+          });
+          if (backendType === "auto") setBackendType("analysis");
+        } else if (healthData.database_exists !== undefined) {
+          setBackendCapabilities({
+            hasChat: true,
+            hasDocumentAnalysis: false,
+            apiEndpoints: ['/ask']
+          });
+          if (backendType === "auto") setBackendType("rag");
+        }
+        setIsBackendConfigured(true);
+      }
+    } catch (error) {
+      console.error("Failed to check backend capabilities:", error);
+      setIsBackendConfigured(false);
+    }
+  };
+
+  useEffect(() => {
+    checkBackendCapabilities();
+  }, [backendUrl]);
+
+  useEffect(() => {
+    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [messages]);
+
+  async function sendMessage(expandRequest = false) {
+    if (!input.trim() || isLoading) return;
+
+    if (!isBackendConfigured) {
+      setMessages(msgs => [...msgs, { 
+        from: "bot", 
+        text: "Please configure the backend URL in the settings first. Click the ⚙️ button in the header." 
+      }]);
+      return;
+    }
+
+    if (!backendCapabilities.hasChat) {
+      setMessages(msgs => [...msgs, { 
+        from: "bot", 
+        text: "The current backend doesn't support chat functionality. It only supports document analysis. Please upload a document in the Upload tab." 
+      }]);
+      return;
+    }
+
+    const userMessage: Message = { from: "user", text: input };
+    setMessages((msgs) => [...msgs, userMessage]);
+    const currentInput = input;
+    setInput("");
+    setIsLoading(true);
+
+    try {
+      const requestBody = {
+        question: expandRequest ? `Please provide more detailed information about: ${currentInput}` : currentInput,
+        session_id: sessionId || undefined,
+        response_style: responseStyle
+      };
+
+      const res = await fetch(`${backendUrl}/ask`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(requestBody),
+      });
+
+      if (!res.ok) {
+        throw new Error(`HTTP error! status: ${res.status}`);
+      }
+
+      const data = await res.json();
+      
+      if (data.session_id && !sessionId) {
+        setSessionId(data.session_id);
+      }
+
+      const botText = data.response || data.error || "No response received from server";
+      const botMessage: Message = { 
+        from: "bot", 
+        text: botText,
+        confidence: data.confidence_score,
+        expandAvailable: data.expand_available,
+        sources: data.sources || []
+      };
+      setMessages((msgs) => [...msgs, botMessage]);
+    } catch (error) {
+      console.error("Chat error:", error);
+      const errorMessage: Message = { 
+        from: "bot", 
+        text: `Failed to connect to server: ${error instanceof Error ? error.message : 'Unknown error'}` 
+      };
+      setMessages((msgs) => [...msgs, errorMessage]);
+    } finally {
+      setIsLoading(false);
+    }
+  }
+
+  function requestExpansion(messageText: string) {
+    setInput(`Please expand on: ${messageText.slice(0, 100)}...`);
+  }
+
+  const handleFileUpload = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (file) {
+      if (file.size > 10 * 1024 * 1024) {
+        alert('File size must be less than 10MB');
+        return;
+      }
+
+      const allowedTypes = [
+        'application/pdf',
+        'application/msword',
+        'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+        'text/plain'
+      ];
+      
+      if (!allowedTypes.includes(file.type)) {
+        alert('Please upload a PDF, DOC, DOCX, or TXT file');
+        return;
+      }
+
+      setUploadedFile(file);
+      setUploadProgress(100);
+      setTimeout(() => setUploadProgress(0), 3000);
+    }
+  };
+
+  const runAnalysis = async (toolId: string) => {
+    if (!uploadedFile) {
+      alert('Please upload a document first.');
+      setActiveTab('upload');
+      return;
+    }
+
+    if (!isBackendConfigured) {
+      alert('Please configure the backend URL first.');
+      return;
+    }
+
+    if (!backendCapabilities.hasDocumentAnalysis) {
+      alert('The current backend doesn\'t support document analysis. You need to use the document analysis backend for this feature.');
+      return;
+    }
+
+    const tool = analysisTools.find(t => t.id === toolId);
+    if (!tool) return;
+
+    setIsAnalyzing(true);
+
+    const processingResult: AnalysisResult = {
+      id: Date.now(),
+      toolId: toolId,
+      toolTitle: tool.title,
+      document: uploadedFile.name,
+      analysis: 'Processing document analysis...',
+      timestamp: new Date().toLocaleString(),
+      status: 'processing',
+      sources: []
+    };
+    setAnalysisResults(prev => [processingResult, ...prev]);
+    setActiveTab('results');
+
+    try {
+      const formData = new FormData();
+      formData.append('file', uploadedFile);
+      formData.append('analysis_type', toolId);
+      formData.append('session_id', sessionId || '');
+
+      const response = await fetch(`${backendUrl}/document-analysis`, {
+        method: 'POST',
+        body: formData
+      });
+
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
+      }
+
+      const data = await response.json();
+      
+      if (data.session_id && !sessionId) {
+        setSessionId(data.session_id);
+      }
+
+      const analysisText = data.response || data.summary || data.factual_summary || 'Analysis could not be completed.';
+      const status = data.success ? 'completed' : 'failed';
+      
+      setAnalysisResults(prev => prev.map(r => 
+        r.id === processingResult.id 
+          ? {
+              ...r,
+              analysis: analysisText,
+              confidence: data.confidence_score || 0.7,
+              status: status,
+              sources: data.sources || [],
+              warnings: data.warnings || []
+            }
+          : r
+      ));
+
+    } catch (error) {
+      console.error('Analysis failed:', error);
+      
+      setAnalysisResults(prev => prev.map(r => 
+        r.id === processingResult.id 
+          ? {
+              ...r,
+              analysis: `Analysis failed: ${error instanceof Error ? error.message : 'Unknown error'}`,
+              status: 'failed',
+              warnings: ['Make sure you are using the document analysis backend for this feature.']
+            }
+          : r
+      ));
+    } finally {
+      setIsAnalyzing(false);
+    }
+  };
+
+  const downloadResult = (resultId: number) => {
+    const result = analysisResults.find(r => r.id === resultId);
+    if (!result) return;
+
+    const content = `Legal Document Analysis Report
+Generated: ${result.timestamp}
+Analysis Type: ${result.toolTitle}
+Document: ${result.document}
+Status: ${result.status}
+Confidence Score: ${result.confidence ? Math.round(result.confidence * 100) + '%' : 'N/A'}
+
+ANALYSIS RESULTS:
+${result.analysis}
+
+${result.extractedData ? '\nEXTRACTED DATA:\n' + JSON.stringify(result.extractedData, null, 2) : ''}
+
+${result.warnings && result.warnings.length > 0 ? '\nWARNINGS:\n' + result.warnings.join('\n') : ''}
+
+---
+Generated by Legal Document Analysis Assistant
+This analysis is for informational purposes only and does not constitute legal advice.`;
+
+    const blob = new Blob([content], { type: 'text/plain' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `legal-analysis-${result.toolId}-${Date.now()}.txt`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  };
+
+  const getStatusColor = (status: string) => {
+    switch (status) {
+      case 'completed': return 'bg-emerald-100 text-emerald-800';
+      case 'failed': return 'bg-rose-100 text-rose-800';
+      case 'processing': return 'bg-sky-100 text-sky-800';
+      default: return 'bg-gray-100 text-gray-800';
+    }
+  };
+
+  return (
+    <div className="flex flex-col h-screen bg-gradient-to-br from-slate-50 via-gray-50 to-slate-100">
+      {/* Header */}
+      <header className="bg-white shadow-sm border-b border-gray-100">
+        <div className="px-6 py-4">
+          <div className="flex items-center justify-between max-w-7xl mx-auto">
+            <div className="flex items-center gap-4">
+              <div className="w-12 h-12 bg-gradient-to-br from-slate-900 to-slate-700 rounded-xl flex items-center justify-center shadow-md">
+                <svg className="w-7 h-7 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M3 6l3 1m0 0l-3 9a5.002 5.002 0 006.001 0M6 7l3 9M6 7l6-2m6 2l3-1m-3 1l-3 9a5.002 5.002 0 006.001 0M18 7l3 9m-3-9l-6-2m0-2v2m0 16V5m0 16H9m3 0h3" />
+                </svg>
+              </div>
+              <div>
+                <h1 className="text-xl font-semibold text-gray-900">
+                  Legal Intelligence Suite
+                </h1>
+                <p className="text-xs text-gray-500">AI-Powered Document Analysis</p>
+              </div>
+            </div>
+            <div className="flex items-center gap-3">
+              {/* Backend Status */}
+              <div className={`flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-medium ${
+                isBackendConfigured 
+                  ? 'bg-emerald-50 text-emerald-700 border border-emerald-200' 
+                  : 'bg-rose-50 text-rose-700 border border-rose-200'
+              }`}>
+                <div className={`w-2 h-2 rounded-full ${isBackendConfigured ? 'bg-emerald-500' : 'bg-rose-500'} animate-pulse`} />
+                <span>
+                  {isBackendConfigured 
+                    ? `Connected (${backendType === 'rag' ? 'RAG' : backendType === 'analysis' ? 'Analysis' : 'Unified'})` 
+                    : 'Disconnected'
+                  }
+                </span>
+              </div>
+              
+              {/* Settings Button */}
+              <button
+                onClick={() => {
+                  const newUrl = prompt('Enter backend URL:', backendUrl || 'http://localhost:8000');
+                  if (newUrl) {
+                    setBackendUrl(newUrl.trim());
+                    setIsBackendConfigured(false);
+                  }
+                }}
+                className="p-2 bg-gray-50 hover:bg-gray-100 rounded-lg transition-all hover:shadow-sm"
+                title="Configure Backend"
+              >
+                <svg className="w-5 h-5 text-gray-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+                </svg>
+              </button>
+              
+              {sessionId && (
+                <div className="text-xs text-gray-500 font-mono bg-gray-50 px-3 py-1.5 rounded-lg">
+                  Session: {sessionId.substr(0, 8)}
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      </header>
+
+      {/* Backend Warning */}
+      {!isBackendConfigured && (
+        <div className="bg-amber-50 border-b border-amber-100 px-6 py-3">
+          <div className="max-w-7xl mx-auto flex items-center gap-3">
+            <svg className="w-5 h-5 text-amber-600 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20">
+              <path fillRule="evenodd" d="M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 11-2 0 1 1 0 012 0zm-1-8a1 1 0 00-1 1v3a1 1 0 002 0V6a1 1 0 00-1-1z" clipRule="evenodd" />
+            </svg>
+            <p className="text-sm text-amber-800">
+              Configure your backend URL to enable AI features. Click the settings icon to get started.
+            </p>
+          </div>
+        </div>
+      )}
+
+      {/* Tab Navigation */}
+      <nav className="bg-white border-b border-gray-100">
+        <div className="max-w-7xl mx-auto px-6">
+          <div className="flex space-x-8">
+            {[
+              { id: 'chat', label: 'Chat Assistant', icon: '💬', available: backendCapabilities.hasChat },
+              { id: 'upload', label: 'Upload Document', icon: '📤', available: backendCapabilities.hasDocumentAnalysis },
+              { id: 'analysis', label: 'Analysis Tools', icon: '🔍', available: backendCapabilities.hasDocumentAnalysis },
+              { id: 'results', label: 'Results', icon: '📊', badge: analysisResults.length > 0 ? analysisResults.length : null, available: backendCapabilities.hasDocumentAnalysis }
+            ].map(tab => (
+              <button
+                key={tab.id}
+                onClick={() => {
+                  if (!tab.available && isBackendConfigured) {
+                    alert(`This feature is not available with the current backend (${backendType}).`);
+                    return;
+                  }
+                  setActiveTab(tab.id);
+                }}
+                disabled={!isBackendConfigured}
+                className={`relative py-4 px-1 text-sm font-medium transition-all border-b-2 ${
+                  activeTab === tab.id
+                    ? 'text-slate-900 border-slate-900'
+                    : tab.available || !isBackendConfigured
+                      ? 'text-gray-500 hover:text-gray-700 border-transparent hover:border-gray-300'
+                      : 'text-gray-300 cursor-not-allowed border-transparent'
+                } ${!isBackendConfigured ? 'cursor-not-allowed opacity-50' : ''}`}
+              >
+                <div className="flex items-center gap-2">
+                  <span className="text-base">{tab.icon}</span>
+                  <span>{tab.label}</span>
+                  {tab.badge && (
+                    <span className="ml-1 bg-slate-900 text-white text-xs font-medium px-2 py-0.5 rounded-full">
+                      {tab.badge}
+                    </span>
+                  )}
+                </div>
+              </button>
+            ))}
+          </div>
+        </div>
+      </nav>
+
+      {/* Main Content */}
+      <div className="flex-grow overflow-auto">
+        <div className="w-full max-w-7xl mx-auto p-6">
+          
+          {/* Backend Not Configured */}
+          {!isBackendConfigured && (
+            <div className="min-h-[calc(100vh-250px)] flex items-center justify-center">
+              <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-12 text-center max-w-2xl">
+                <div className="w-16 h-16 bg-gray-100 rounded-full flex items-center justify-center mx-auto mb-6">
+                  <svg className="w-8 h-8 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
+                  </svg>
+                </div>
+                <h3 className="text-2xl font-semibold text-gray-900 mb-3">Backend Connection Required</h3>
+                <p className="text-gray-600 mb-8">
+                  Connect to a backend server to unlock AI-powered legal document analysis and chat capabilities.
+                </p>
+                <button
+                  onClick={() => {
+                    const newUrl = prompt('Enter backend URL:', 'http://localhost:8000');
+                    if (newUrl) {
+                      setBackendUrl(newUrl.trim());
+                      setIsBackendConfigured(false);
+                    }
+                  }}
+                  className="bg-slate-900 text-white px-6 py-3 rounded-lg hover:bg-slate-800 transition-all font-medium"
+                >
+                  Configure Backend
+                </button>
+              </div>
+            </div>
+          )}
+          
+          {/* Chat Tab */}
+          {activeTab === 'chat' && isBackendConfigured && (
+            <div className="bg-white rounded-2xl shadow-sm border border-gray-100 h-[calc(100vh-200px)] flex flex-col overflow-hidden">
+              {!backendCapabilities.hasChat ? (
+                <div className="flex-grow flex items-center justify-center p-6">
+                  <div className="text-center">
+                    <div className="w-16 h-16 bg-gray-100 rounded-full flex items-center justify-center mx-auto mb-4">
+                      <svg className="w-8 h-8 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M18.364 18.364A9 9 0 005.636 5.636m12.728 12.728A9 9 0 015.636 5.636m12.728 12.728L5.636 5.636" />
+                      </svg>
+                    </div>
+                    <h3 className="text-lg font-semibold text-gray-900 mb-2">Chat Not Available</h3>
+                    <p className="text-gray-600">
+                      The current backend doesn't support chat. Try document analysis instead.
+                    </p>
+                  </div>
+                </div>
+              ) : (
+                <>
+                  <div className="flex-grow overflow-y-auto p-6 space-y-4">
+                    {messages.map((msg, idx) => (
+                      <div key={idx} className={`flex ${msg.from === 'user' ? 'justify-end' : 'justify-start'}`}>
+                        <div className={`max-w-3xl space-y-1 ${msg.from === 'user' ? 'items-end' : 'items-start'}`}>
+                          <div className={`flex items-center gap-2 text-xs font-medium ${
+                            msg.from === "user" ? "text-slate-600 justify-end" : "text-slate-600"
+                          }`}>
+                            {msg.from === "user" ? (
+                              <>You<div className="w-6 h-6 bg-slate-100 rounded-full flex items-center justify-center ml-1">
+                                <svg className="w-3.5 h-3.5 text-slate-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
+                                </svg>
+                              </div></>
+                            ) : (
+                              <><div className="w-6 h-6 bg-slate-900 rounded-full flex items-center justify-center mr-1">
+                                <svg className="w-3.5 h-3.5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M3 6l3 1m0 0l-3 9a5.002 5.002 0 006.001 0M6 7l3 9M6 7l6-2m6 2l3-1m-3 1l-3 9a5.002 5.002 0 006.001 0M18 7l3 9m-3-9l-6-2m0-2v2m0 16V5m0 16H9m3 0h3" />
+                                </svg>
+                              </div>Legal Assistant</>
+                            )}
+                            {msg.confidence && (
+                              <span className="text-slate-500 bg-slate-50 px-2 py-0.5 rounded text-xs">
+                                {Math.round(msg.confidence * 100)}% confident
+                              </span>
+                            )}
+                          </div>
+                          
+                          <div className={`inline-block px-5 py-3 rounded-2xl ${
+                            msg.from === "user" 
+                              ? "bg-slate-900 text-white" 
+                              : "bg-white border-2 border-gray-400 shadow-md"
+                          }`}>
+                            {msg.from === "user" ? (
+                              <div className="whitespace-pre-wrap">{msg.text}</div>
+                            ) : (
+                              <div 
+                                className="prose prose-sm max-w-none [&>*]:!text-black [&_p]:!text-black [&_h1]:!text-black [&_h2]:!text-black [&_h3]:!text-black [&_h4]:!text-black [&_strong]:!text-black [&_em]:!text-black [&_li]:!text-black [&_td]:!text-black [&_th]:!text-black"
+                                style={{ color: '#000000' }}
+                                dangerouslySetInnerHTML={{ __html: renderMarkdown(msg.text) }}
+                              />
+                            )}
+                          </div>
+                          
+                          {msg.expandAvailable && msg.from === "bot" && (
+                            <button
+                              onClick={() => requestExpansion(msg.text)}
+                              className="text-xs bg-slate-100 text-slate-700 px-3 py-1.5 rounded-full hover:bg-slate-200 transition-all"
+                            >
+                              Expand details →
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                    ))}
+
+                    {isLoading && (
+                      <div className="flex justify-start">
+                        <div className="max-w-3xl space-y-1">
+                          <div className="flex items-center gap-2 text-xs font-medium text-slate-600">
+                            <div className="w-6 h-6 bg-slate-900 rounded-full flex items-center justify-center">
+                              <svg className="w-3.5 h-3.5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M3 6l3 1m0 0l-3 9a5.002 5.002 0 006.001 0M6 7l3 9M6 7l6-2m6 2l3-1m-3 1l-3 9a5.002 5.002 0 006.001 0M18 7l3 9m-3-9l-6-2m0-2v2m0 16V5m0 16H9m3 0h3" />
+                              </svg>
+                            </div>
+                            Legal Assistant
+                          </div>
+                          <div className="inline-block px-5 py-3 bg-gray-50 rounded-2xl border border-gray-100">
+                            <div className="flex space-x-1">
+                              <div className="w-2 h-2 bg-gray-400 rounded-full animate-bounce" style={{ animationDelay: '0ms' }}></div>
+                              <div className="w-2 h-2 bg-gray-400 rounded-full animate-bounce" style={{ animationDelay: '150ms' }}></div>
+                              <div className="w-2 h-2 bg-gray-400 rounded-full animate-bounce" style={{ animationDelay: '300ms' }}></div>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    )}
+                    
+                    <div ref={messagesEndRef} />
+                  </div>
+
+                  <div className="border-t border-gray-100 p-4 bg-gray-50/50">
+                    <div className="mb-3 flex items-center justify-between">
+                      <label className="text-xs text-gray-600 font-medium">Response Style:</label>
+                      <select
+                        value={responseStyle}
+                        onChange={(e) => setResponseStyle(e.target.value)}
+                        className="text-xs border border-gray-200 rounded-lg px-3 py-1.5 bg-white focus:outline-none focus:ring-2 focus:ring-slate-500 focus:border-transparent"
+                      >
+                        <option value="concise">Concise</option>
+                        <option value="balanced">Balanced</option>
+                        <option value="detailed">Detailed</option>
+                      </select>
+                    </div>
+                    
+                    <div className="flex space-x-3">
+                      <input
+                        type="text"
+                        value={input}
+                        onChange={(e) => setInput(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter" && !e.shiftKey) {
+                            e.preventDefault();
+                            sendMessage();
+                          }
+                        }}
+                        placeholder="Ask a legal question..."
+                        className="flex-grow border border-gray-200 rounded-lg px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-slate-500 focus:border-transparent"
+                        disabled={isLoading}
+                      />
+                      <button
+                        onClick={() => sendMessage()}
+                        disabled={!input.trim() || isLoading}
+                        className="bg-slate-900 text-white px-6 py-2.5 rounded-lg hover:bg-slate-800 focus:outline-none focus:ring-2 focus:ring-slate-500 transition-all disabled:bg-gray-300 disabled:cursor-not-allowed text-sm font-medium"
+                      >
+                        Send
+                      </button>
+                    </div>
+                  </div>
+                </>
+              )}
+            </div>
+          )}
+
+          {/* Upload Tab */}
+          {activeTab === 'upload' && isBackendConfigured && (
+            <div className="min-h-[calc(100vh-250px)] flex items-center justify-center">
+              {!backendCapabilities.hasDocumentAnalysis ? (
+                <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-12 text-center max-w-2xl">
+                  <div className="w-16 h-16 bg-gray-100 rounded-full flex items-center justify-center mx-auto mb-4">
+                    <svg className="w-8 h-8 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M18.364 18.364A9 9 0 005.636 5.636m12.728 12.728A9 9 0 015.636 5.636m12.728 12.728L5.636 5.636" />
+                    </svg>
+                  </div>
+                  <h3 className="text-lg font-semibold text-gray-900 mb-2">Upload Not Available</h3>
+                  <p className="text-gray-600">
+                    The current backend doesn't support document upload. Use the chat feature instead.
+                  </p>
+                </div>
+              ) : (
+                <div className="bg-white rounded-2xl shadow-sm border-2 border-dashed border-gray-200 p-12 text-center max-w-2xl w-full transition-all hover:border-gray-300 hover:shadow-md">
+                  <div className="w-20 h-20 bg-slate-50 rounded-full flex items-center justify-center mx-auto mb-6">
+                    <svg className="w-10 h-10 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
+                    </svg>
+                  </div>
+                  <h3 className="text-xl font-semibold text-gray-900 mb-2">Upload Legal Document</h3>
+                  <p className="text-gray-600 mb-6">
+                    Drag and drop or click to upload contracts, agreements, or legal briefs for analysis
+                  </p>
+                  <p className="text-sm text-gray-500 mb-6">
+                    PDF, DOC, DOCX, TXT • Max 10MB
+                  </p>
+                  
+                  <input 
+                    type="file" 
+                    onChange={handleFileUpload}
+                    accept=".pdf,.doc,.docx,.txt" 
+                    className="hidden" 
+                    id="file-input"
+                  />
+                  <button 
+                    onClick={() => document.getElementById('file-input')?.click()}
+                    className="bg-slate-900 text-white px-6 py-3 rounded-lg hover:bg-slate-800 transition-all font-medium"
+                  >
+                    Choose File
+                  </button>
+                  
+                  {uploadedFile && (
+                    <div className="mt-8 bg-emerald-50 border border-emerald-200 rounded-xl p-6">
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-3">
+                          <div className="w-10 h-10 bg-emerald-100 rounded-lg flex items-center justify-center">
+                            <svg className="w-5 h-5 text-emerald-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+                            </svg>
+                          </div>
+                          <div className="text-left">
+                            <p className="font-medium text-gray-900">{uploadedFile.name}</p>
+                            <p className="text-sm text-gray-600">{(uploadedFile.size / 1024).toFixed(1)} KB</p>
+                          </div>
+                        </div>
+                        <button 
+                          onClick={() => setActiveTab('analysis')}
+                          className="bg-emerald-600 text-white px-4 py-2 rounded-lg hover:bg-emerald-700 transition-all text-sm font-medium"
+                        >
+                          Analyze →
+                        </button>
+                      </div>
+                      {uploadProgress > 0 && (
+                        <div className="mt-4 w-full bg-emerald-100 rounded-full h-2">
+                          <div className="bg-emerald-600 h-2 rounded-full transition-all duration-500" style={{ width: `${uploadProgress}%` }}></div>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Analysis Tools Tab */}
+          {activeTab === 'analysis' && isBackendConfigured && (
+            <div className="space-y-6">
+              {!backendCapabilities.hasDocumentAnalysis ? (
+                <div className="min-h-[calc(100vh-350px)] flex items-center justify-center">
+                  <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-12 text-center max-w-2xl">
+                    <div className="w-16 h-16 bg-gray-100 rounded-full flex items-center justify-center mx-auto mb-4">
+                      <svg className="w-8 h-8 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M18.364 18.364A9 9 0 005.636 5.636m12.728 12.728A9 9 0 015.636 5.636m12.728 12.728L5.636 5.636" />
+                      </svg>
+                    </div>
+                    <h3 className="text-lg font-semibold text-gray-900 mb-2">Analysis Not Available</h3>
+                    <p className="text-gray-600">
+                      The current backend doesn't support analysis tools. Use the chat feature instead.
+                    </p>
+                  </div>
+                </div>
+              ) : (
+                <>
+                  <div className="text-center mb-8">
+                    <h2 className="text-2xl font-semibold text-gray-900 mb-2">
+                      Choose Analysis Type
+                    </h2>
+                    <p className="text-gray-600">
+                      Select an AI-powered analysis tool for your legal document
+                    </p>
+                  </div>
+
+                  {!uploadedFile && (
+                    <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 mb-6">
+                      <div className="flex items-center gap-3">
+                        <svg className="w-5 h-5 text-amber-600 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20">
+                          <path fillRule="evenodd" d="M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 11-2 0 1 1 0 012 0zm-1-8a1 1 0 00-1 1v3a1 1 0 002 0V6a1 1 0 00-1-1z" clipRule="evenodd" />
+                        </svg>
+                        <p className="text-sm text-amber-800">
+                          No document uploaded.{' '}
+                          <button 
+                            onClick={() => setActiveTab('upload')}
+                            className="font-medium underline hover:no-underline"
+                          >
+                            Upload a document
+                          </button>
+                          {' '}to begin analysis.
+                        </p>
+                      </div>
+                    </div>
+                  )}
+
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    {analysisTools.map(tool => (
+                      <div 
+                        key={tool.id} 
+                        className={`relative group bg-white border border-gray-200 rounded-xl p-6 transition-all hover:shadow-lg hover:border-gray-300 cursor-pointer ${!uploadedFile || isAnalyzing ? 'opacity-60 cursor-not-allowed' : ''}`}
+                        onClick={() => uploadedFile && !isAnalyzing && runAnalysis(tool.id)}
+                      >
+                        <div className="flex items-start space-x-4">
+                          <div className="flex-shrink-0">
+                            <div className="w-12 h-12 bg-gray-50 rounded-xl flex items-center justify-center group-hover:bg-gray-100 transition-colors">
+                              <span className="text-xl">{tool.icon}</span>
+                            </div>
+                          </div>
+                          <div className="flex-1">
+                            <div className="flex items-center justify-between mb-2">
+                              <h3 className="text-base font-semibold text-gray-900">
+                                {tool.title}
+                              </h3>
+                              <span className={`text-xs px-2 py-1 rounded-full font-medium ${
+                                tool.riskLevel === 'low' ? 'bg-emerald-100 text-emerald-700' :
+                                tool.riskLevel === 'medium' ? 'bg-amber-100 text-amber-700' :
+                                'bg-rose-100 text-rose-700'
+                              }`}>
+                                {tool.riskLevel} risk
+                              </span>
+                            </div>
+                            <p className="text-sm text-gray-600 leading-relaxed">
+                              {tool.description}
+                            </p>
+                            <div className="mt-3 flex flex-wrap gap-1">
+                              {tool.idealFor.map((ideal, idx) => (
+                                <span key={idx} className="text-xs bg-gray-100 text-gray-600 px-2 py-1 rounded">
+                                  {ideal}
+                                </span>
+                              ))}
+                            </div>
+                          </div>
+                        </div>
+                        
+                        {isAnalyzing && (
+                          <div className="absolute inset-0 bg-white bg-opacity-90 rounded-xl flex items-center justify-center">
+                            <div className="flex items-center space-x-2">
+                              <svg className="animate-spin h-5 w-5 text-slate-600" fill="none" viewBox="0 0 24 24">
+                                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                              </svg>
+                              <span className="text-sm font-medium text-gray-700">Analyzing...</span>
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                </>
+              )}
+            </div>
+          )}
+
+          {/* Results Tab */}
+          {activeTab === 'results' && isBackendConfigured && (
+            <div className="space-y-6">
+              {!backendCapabilities.hasDocumentAnalysis ? (
+                <div className="min-h-[calc(100vh-350px)] flex items-center justify-center">
+                  <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-12 text-center max-w-2xl">
+                    <div className="w-16 h-16 bg-gray-100 rounded-full flex items-center justify-center mx-auto mb-4">
+                      <svg className="w-8 h-8 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M18.364 18.364A9 9 0 005.636 5.636m12.728 12.728A9 9 0 015.636 5.636m12.728 12.728L5.636 5.636" />
+                      </svg>
+                    </div>
+                    <h3 className="text-lg font-semibold text-gray-900 mb-2">Results Not Available</h3>
+                    <p className="text-gray-600">
+                      The current backend doesn't support analysis results. Use the chat feature instead.
+                    </p>
+                  </div>
+                </div>
+              ) : (
+                <>
+                  <div className="bg-white rounded-xl p-6 shadow-sm border border-gray-100">
+                    <h2 className="text-xl font-semibold text-gray-900 mb-2">
+                      Analysis Results
+                    </h2>
+                    <p className="text-gray-600">Review your document analysis results and export findings.</p>
+                  </div>
+                  
+                  {analysisResults.length === 0 ? (
+                    <div className="bg-gray-50 border border-gray-200 rounded-xl p-12 text-center">
+                      <div className="w-16 h-16 bg-gray-100 rounded-full flex items-center justify-center mx-auto mb-4">
+                        <svg className="w-8 h-8 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 17v-2m3 2v-4m3 4v-6m2 10H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                        </svg>
+                      </div>
+                      <p className="text-gray-600 mb-2">No analysis results yet</p>
+                      <p className="text-sm text-gray-500 mb-6">Upload a document and run an analysis to see results here</p>
+                      <button 
+                        onClick={() => setActiveTab('upload')}
+                        className="bg-slate-900 text-white px-5 py-2.5 rounded-lg hover:bg-slate-800 transition-all text-sm font-medium"
+                      >
+                        Upload Document
+                      </button>
+                    </div>
+                  ) : (
+                    <div className="space-y-4">
+                      {analysisResults.map(result => (
+                        <div key={result.id} className={`bg-white rounded-xl shadow-sm border border-gray-100 p-6 ${
+                          result.status === 'processing' ? 'animate-pulse' : ''
+                        }`}>
+                          <div className="flex items-start justify-between mb-4">
+                            <div className="flex items-start gap-3">
+                              <div className="w-10 h-10 bg-gray-50 rounded-lg flex items-center justify-center flex-shrink-0">
+                                <span className="text-lg">{analysisTools.find(t => t.id === result.toolId)?.icon}</span>
+                              </div>
+                              <div>
+                                <h3 className="font-semibold text-gray-900">{result.toolTitle}</h3>
+                                <p className="text-sm text-gray-500">{result.document}</p>
+                              </div>
+                            </div>
+                            <div className="text-right">
+                              <p className="text-xs text-gray-500 mb-1">{result.timestamp}</p>
+                              <span className={`text-xs px-2 py-1 rounded-full font-medium ${getStatusColor(result.status)}`}>
+                                {result.status}
+                              </span>
+                              {result.confidence && result.status === 'completed' && (
+                                <p className="text-xs text-gray-500 mt-1">
+                                  {Math.round(result.confidence * 100)}% confidence
+                                </p>
+                              )}
+                            </div>
+                          </div>
+                          
+                          <div className="bg-white rounded-lg p-4 max-h-96 overflow-y-auto border border-gray-300">
+                            {result.status === 'processing' ? (
+                              <div className="flex items-center gap-3 text-black">
+                                <svg className="animate-spin h-5 w-5" fill="none" viewBox="0 0 24 24">
+                                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                                </svg>
+                                <span className="font-medium">Analyzing document...</span>
+                              </div>
+                            ) : (
+                              <div 
+                                className="prose prose-sm max-w-none [&>*]:!text-black [&_p]:!text-black [&_h1]:!text-black [&_h2]:!text-black [&_h3]:!text-black [&_h4]:!text-black [&_strong]:!text-black [&_em]:!text-black [&_li]:!text-black [&_td]:!text-black [&_th]:!text-black"
+                                style={{ color: '#000000' }}
+                                dangerouslySetInnerHTML={{ __html: renderMarkdown(result.analysis) }}
+                              />
+                            )}
+                          </div>
+
+                          {result.warnings && result.warnings.length > 0 && (
+                            <div className="mt-4 bg-amber-50 border border-amber-200 rounded-lg p-3">
+                              <p className="text-sm font-medium text-amber-800 mb-1">Warnings:</p>
+                              <ul className="text-sm text-amber-700 list-disc list-inside">
+                                {result.warnings.map((warning, idx) => (
+                                  <li key={idx}>{warning}</li>
+                                ))}
+                              </ul>
+                            </div>
+                          )}
+                          
+                          {result.status === 'completed' && (
+                            <div className="mt-4 flex gap-2">
+                              <button 
+                                onClick={() => downloadResult(result.id)}
+                                className="text-sm bg-slate-900 text-white px-4 py-2 rounded-lg hover:bg-slate-800 transition-all"
+                              >
+                                Download
+                              </button>
+                              <button 
+                                onClick={() => {
+                                  navigator.clipboard.writeText(result.analysis);
+                                  alert('Copied to clipboard!');
+                                }}
+                                className="text-sm bg-gray-100 text-gray-700 px-4 py-2 rounded-lg hover:bg-gray-200 transition-all"
+                              >
+                                Copy
+                              </button>
+                            </div>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </>
+              )}
+            </div>
+          )}
+
+        </div>
+      </div>
+
+      {/* Footer */}
+      <footer className="py-4 px-6 text-center bg-white border-t border-gray-100">
+        <p className="text-xs text-black">
+          AI Legal Assistant • For informational purposes only • Not legal advice
+          {isBackendConfigured && ` • ${backendType === 'rag' ? 'RAG' : backendType === 'analysis' ? 'Analysis' : 'Unified'} Backend`}
+        </p>
+      </footer>
+    </div>
+  );
+}
