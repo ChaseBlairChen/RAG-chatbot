@@ -2182,6 +2182,88 @@ python your_filename.py
     </html>
     """
 
+@app.get("/debug/database-access-test")
+async def debug_database_access_test():
+    """Test if default database is accessible - NO AUTH REQUIRED"""
+    try:
+        # Test 1: Check if default database path exists
+        default_db_exists = os.path.exists(DEFAULT_CHROMA_PATH)
+        
+        # Test 2: Try to load default database
+        default_db_loaded = False
+        default_db_error = None
+        default_db_count = 0
+        
+        try:
+            default_db = load_database()
+            if default_db:
+                default_db_loaded = True
+                # Try to get document count
+                try:
+                    all_docs = default_db.get()
+                    default_db_count = len(all_docs.get('ids', []))
+                except Exception as count_error:
+                    default_db_error = f"Count error: {str(count_error)}"
+        except Exception as db_error:
+            default_db_error = str(db_error)
+        
+        # Test 3: Test a search on default database
+        search_test_results = []
+        if default_db_loaded:
+            try:
+                test_results = default_db.similarity_search("RCW immigration law", k=3)
+                search_test_results = [
+                    {
+                        "content_preview": doc.page_content[:200],
+                        "metadata": doc.metadata
+                    }
+                    for doc in test_results
+                ]
+            except Exception as search_error:
+                default_db_error = f"Search error: {str(search_error)}"
+        
+        # Test 4: Check combined search behavior
+        test_combined_search = []
+        try:
+            results, sources, method = combined_search(
+                "RCW prosecutorial powers immigration", 
+                "user_user_dem", 
+                "all", 
+                "", 
+                k=3
+            )
+            test_combined_search = {
+                "results_count": len(results),
+                "sources_searched": sources,
+                "method": method,
+                "source_types": [doc.metadata.get('source_type', 'unknown') for doc, score in results]
+            }
+        except Exception as combined_error:
+            test_combined_search = {"error": str(combined_error)}
+        
+        return {
+            "default_database": {
+                "path_exists": default_db_exists,
+                "path": DEFAULT_CHROMA_PATH,
+                "loaded_successfully": default_db_loaded,
+                "document_count": default_db_count,
+                "error": default_db_error
+            },
+            "search_tests": {
+                "default_db_search_results": len(search_test_results),
+                "sample_results": search_test_results[:2],
+                "combined_search": test_combined_search
+            },
+            "recommendation": "Check if default database has documents and is properly configured"
+        }
+        
+    except Exception as e:
+        import traceback
+        return {
+            "error": str(e),
+            "traceback": traceback.format_exc()
+        }
+
 @app.get("/debug/real-query-test")
 async def debug_real_query_test(user_id: str = "user_user_dem"):
     """Debug the exact same process as a real query - NO AUTH REQUIRED"""
