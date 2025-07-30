@@ -574,11 +574,11 @@ export default function EnhancedLegalAssistantWithAuth() {
         const formData = new FormData();
         formData.append('file', file);
 
-        // Set up manual timeout (more reliable than AbortSignal.timeout)
-        timeoutId = setTimeout(() => {
-          console.log(`Upload timeout for ${file.name}`);
-          controller.abort('Upload timeout after 5 minutes');
-        }, 300000); // 5 minutes for large legal documents
+        // No timeout - let it run as long as needed
+        // timeoutId = setTimeout(() => {
+        //   console.log(`Upload timeout for ${file.name}`);
+        //   controller.abort('Upload timeout after 10 minutes');
+        // }, 600000);
 
         const response = await fetch(`${backendUrl}/user/upload`, {
           method: 'POST',
@@ -590,10 +590,10 @@ export default function EnhancedLegalAssistantWithAuth() {
         });
 
         // Clear timeout immediately when response is received
-        if (timeoutId) {
-          clearTimeout(timeoutId);
-          timeoutId = null;
-        }
+        // if (timeoutId) {
+        //   clearTimeout(timeoutId);
+        //   timeoutId = null;
+        // }
 
         if (!response.ok) {
           let errorMessage = `Upload failed (${response.status})`;
@@ -622,11 +622,11 @@ export default function EnhancedLegalAssistantWithAuth() {
         uploadedDocIds.push(data.file_id);
 
       } catch (error: any) {
-        // Clear timeout on error
-        if (timeoutId) {
-          clearTimeout(timeoutId);
-          timeoutId = null;
-        }
+        // Clear timeout on error (not needed without timeout)
+        // if (timeoutId) {
+        //   clearTimeout(timeoutId);
+        //   timeoutId = null;
+        // }
 
         console.error(`Upload failed for ${file.name}:`, error);
         
