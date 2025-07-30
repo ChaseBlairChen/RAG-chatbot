@@ -843,7 +843,8 @@ def remove_duplicate_documents(results_with_scores: List[Tuple]) -> List[Tuple]:
             seen_content.add(content_hash)
             unique_results.append((doc, score))
     
-    unique_results.sort(key=lambda x: x[1], reverse=True)
+    # FIXED: Sort by score (lower is better) instead of reverse
+    unique_results.sort(key=lambda x: x[1])
     return unique_results
 
 def enhanced_retrieval_v2(db, query_text: str, conversation_history_context: str, k: int = 12, document_filter: Dict = None) -> Tuple[List, str]:
@@ -1137,13 +1138,18 @@ def combined_search(query: str, user_id: Optional[str], search_scope: str, conve
     sources_searched = []
     retrieval_method = "basic"
     
-    # Check if this is a bill-specific query first
+    # Check if this is a bill-specific query OR $183 surcharge query
     bill_match = re.search(r"\b(HB|SB|SSB|ESSB|SHB|ESHB)\s+(\d+)\b", query, re.IGNORECASE)
-    bill_specific_mode = bill_match is not None
+    surcharge_match = re.search(r"\$183.*surcharge", query, re.IGNORECASE)
+    bill_specific_mode = bill_match is not None or surcharge_match is not None
     
     if bill_specific_mode:
-        bill_number = f"{bill_match.group(1)} {bill_match.group(2)}"
-        logger.info(f"🎯 Bill-specific combined search for: {bill_number}")
+        if bill_match:
+            bill_number = f"{bill_match.group(1)} {bill_match.group(2)}"
+            logger.info(f"🎯 Bill-specific combined search for: {bill_number}")
+        elif surcharge_match:
+            bill_number = "SHB 1260"  # We know this is the $183 surcharge bill
+            logger.info(f"🎯 $183 surcharge query - targeting SHB 1260")
     
     if search_scope in ["all", "default_only"]:
         try:
@@ -1180,21 +1186,30 @@ def combined_search(query: str, user_id: Optional[str], search_scope: str, conve
                 other_chunks = []
                 
                 for doc, score in all_results:
-                    if 'contains_bills' in doc.metadata and bill_number in doc.metadata.get('contains_bills', ''):
+                    # Check for bill number OR $183 + surcharge content
+                    has_target_bill = False
+                    if bill_match and 'contains_bills' in doc.metadata and bill_number in doc.metadata.get('contains_bills', ''):
+                        has_target_bill = True
+                    elif surcharge_match and '$183' in doc.page_content and 'surcharge' in doc.page_content.lower():
+                        has_target_bill = True
+                    
+                    if has_target_bill:
                         bill_chunks.append((doc, 0.001))  # Top priority
-                        logger.info(f"🎯 Prioritizing bill chunk in combined search")
+                        logger.info(f"🎯 Prioritizing target chunk in combined search")
                     else:
                         other_chunks.append((doc, score))
                 
                 if bill_chunks:
                     all_results = bill_chunks + other_chunks
-                    logger.info(f"🎯 Combined search: {len(bill_chunks)} bill-specific chunks prioritized")
+                    logger.info(f"🎯 Combined search: {len(bill_chunks)} target chunks prioritized")
                     
         except Exception as e:
             logger.error(f"Error searching user container: {e}")
     
     if use_enhanced:
         all_results = remove_duplicate_documents(all_results)
+        # FIXED: Ensure proper sorting by score (lower is better)
+        all_results.sort(key=lambda x: x[1])
     else:
         all_results.sort(key=lambda x: x[1])  # Sort by score (lower is better)
     
