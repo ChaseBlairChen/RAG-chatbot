@@ -486,18 +486,59 @@ class UserContainerManager:
     
     def __init__(self, base_path: str):
         self.base_path = base_path
-        # Use the most powerful embedding model available
-        if embeddings:
-            self.embeddings = embeddings
-        else:
-            # Fallback
+        # Initialize embeddings safely - will be set after models are loaded
+        self.embeddings = None
+        self._initialize_embeddings()
+        logger.info(f"UserContainerManager initialized with base path: {base_path}")
+    
+    def _initialize_embeddings(self):
+        """Initialize embeddings with the best available model"""
+        global embeddings, sentence_model_name
+        
+        # Try to use the global embeddings if available
+        if 'embeddings' in globals() and globals()['embeddings']:
+            self.embeddings = globals()['embeddings']
+            logger.info(f"Using global embeddings model")
+            return
+        
+        # Fallback: try to initialize embeddings directly
+        embedding_models_to_try = [
+            "nlpaueb/legal-bert-base-uncased",
+            "law-ai/InCaseLawBERT", 
+            "sentence-transformers/all-mpnet-base-v2",
+            "sentence-transformers/all-roberta-large-v1",
+            "sentence-transformers/all-MiniLM-L12-v2",
+            "all-MiniLM-L6-v2"
+        ]
+        
+        for model_name in embedding_models_to_try:
+            try:
+                self.embeddings = HuggingFaceEmbeddings(model_name=model_name)
+                logger.info(f"✅ UserContainerManager using embeddings: {model_name}")
+                return
+            except Exception as e:
+                logger.warning(f"Failed to load {model_name}: {e}")
+                continue
+        
+        # Last resort fallback
+        try:
             self.embeddings = HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2")
-        logger.info(f"UserContainerManager using embeddings: {getattr(self.embeddings, 'model_name', 'unknown')}")
+            logger.warning("⚠️ Using fallback embeddings: all-MiniLM-L6-v2")
+        except Exception as e:
+            logger.error(f"❌ Failed to load any embeddings model: {e}")
+            self.embeddings = None
     
     def create_user_container(self, user_id: str) -> str:
         container_id = hashlib.sha256(user_id.encode()).hexdigest()[:16]
         container_path = os.path.join(self.base_path, container_id)
         os.makedirs(container_path, exist_ok=True)
+        
+        # Ensure embeddings are available
+        if not self.embeddings:
+            self._initialize_embeddings()
+        
+        if not self.embeddings:
+            raise Exception("No embeddings model available for container creation")
         
         user_db = Chroma(
             collection_name=f"user_{container_id}",
@@ -516,6 +557,14 @@ class UserContainerManager:
             logger.warning(f"Container not found for user {user_id}")
             return None
         
+        # Ensure embeddings are available
+        if not self.embeddings:
+            self._initialize_embeddings()
+        
+        if not self.embeddings:
+            logger.error("No embeddings model available for database access")
+            return None
+        
         return Chroma(
             collection_name=f"user_{container_id}",
             embedding_function=self.embeddings,
@@ -532,6 +581,14 @@ class UserContainerManager:
                 logger.warning(f"Container not found for user {user_id}, creating new one")
                 self.create_user_container(user_id)
             
+            # Ensure embeddings are available
+            if not self.embeddings:
+                self._initialize_embeddings()
+            
+            if not self.embeddings:
+                logger.error("No embeddings model available for safe database access")
+                return None
+            
             return Chroma(
                 collection_name=f"user_{container_id}",
                 embedding_function=self.embeddings,
@@ -545,6 +602,13 @@ class UserContainerManager:
                 self.create_user_container(user_id)
                 container_id = self.get_container_id(user_id)
                 container_path = os.path.join(self.base_path, container_id)
+                
+                if not self.embeddings:
+                    self._initialize_embeddings()
+                
+                if not self.embeddings:
+                    logger.error("No embeddings model available for recovery")
+                    return None
                 
                 return Chroma(
                     collection_name=f"user_{container_id}",
@@ -656,11 +720,12 @@ class UserContainerManager:
             logger.error(f"Error in enhanced user container search: {e}")
             return []
 
-# Global State
+# Global State - Initialize after models are loaded
 conversations: Dict[str, Dict] = {}
 uploaded_files: Dict[str, Dict] = {}
 user_sessions: Dict[str, User] = {}
-container_manager = UserContainerManager(USER_CONTAINERS_PATH)
+
+# External databases
 external_databases = {
     "lexisnexis": LexisNexisInterface(),
     "westlaw": WestlawInterface()
@@ -670,6 +735,7 @@ external_databases = {
 nlp = None
 sentence_model = None
 embeddings = None
+sentence_model_name = None
 
 # Legal-specific and powerful models to try in order of preference
 EMBEDDING_MODELS = [
@@ -723,6 +789,9 @@ try:
 except Exception as e:
     logger.error(f"Failed to load embeddings: {e}")
     embeddings = None
+
+# Initialize container manager AFTER models are loaded
+container_manager = UserContainerManager(USER_CONTAINERS_PATH)
 
 # Authentication
 def get_current_user(credentials: Optional[HTTPAuthorizationCredentials] = Depends(security)) -> User:
