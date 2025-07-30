@@ -1137,6 +1137,14 @@ def combined_search(query: str, user_id: Optional[str], search_scope: str, conve
     sources_searched = []
     retrieval_method = "basic"
     
+    # Check if this is a bill-specific query first
+    bill_match = re.search(r"\b(HB|SB|SSB|ESSB|SHB|ESHB)\s+(\d+)\b", query, re.IGNORECASE)
+    bill_specific_mode = bill_match is not None
+    
+    if bill_specific_mode:
+        bill_number = f"{bill_match.group(1)} {bill_match.group(2)}"
+        logger.info(f"🎯 Bill-specific combined search for: {bill_number}")
+    
     if search_scope in ["all", "default_only"]:
         try:
             default_db = load_database()
@@ -1157,6 +1165,7 @@ def combined_search(query: str, user_id: Optional[str], search_scope: str, conve
     
     if user_id and search_scope in ["all", "user_only"]:
         try:
+            # FIXED: Use enhanced search which includes bill-specific logic
             user_results = container_manager.enhanced_search_user_container(user_id, query, conversation_context, k=k, document_id=document_id)
             
             for doc, score in user_results:
@@ -1164,13 +1173,30 @@ def combined_search(query: str, user_id: Optional[str], search_scope: str, conve
                 all_results.append((doc, score))
             if user_results:
                 sources_searched.append("user_container")
+                
+            # FIXED: If bill-specific mode and we found bill chunks, prioritize them
+            if bill_specific_mode and user_results:
+                bill_chunks = []
+                other_chunks = []
+                
+                for doc, score in all_results:
+                    if 'contains_bills' in doc.metadata and bill_number in doc.metadata.get('contains_bills', ''):
+                        bill_chunks.append((doc, 0.001))  # Top priority
+                        logger.info(f"🎯 Prioritizing bill chunk in combined search")
+                    else:
+                        other_chunks.append((doc, score))
+                
+                if bill_chunks:
+                    all_results = bill_chunks + other_chunks
+                    logger.info(f"🎯 Combined search: {len(bill_chunks)} bill-specific chunks prioritized")
+                    
         except Exception as e:
             logger.error(f"Error searching user container: {e}")
     
     if use_enhanced:
         all_results = remove_duplicate_documents(all_results)
     else:
-        all_results.sort(key=lambda x: x[1], reverse=True)
+        all_results.sort(key=lambda x: x[1])  # Sort by score (lower is better)
     
     return all_results[:k], sources_searched, retrieval_method
 
