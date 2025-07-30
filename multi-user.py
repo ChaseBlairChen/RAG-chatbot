@@ -625,19 +625,36 @@ class UserContainerManager:
                 container_id = self.create_user_container(user_id)
                 user_db = self.get_user_database_safe(user_id)
             
-            # Use larger chunks to keep bill information together
-            text_splitter = RecursiveCharacterTextSplitter(
-                chunk_size=2000,  # Larger chunks to keep bill info together
-                chunk_overlap=500,  # More overlap to ensure bills don't get split
-                length_function=len,
-                separators=["\n\n", "\nHB ", "\nSB ", "\nSHB ", "\nSSB ", "\nESHB ", "\nESSB ", "\n", " "]
-            )
+            # Smart document type detection
+            bill_count = len(re.findall(r'\b(?:HB|SB|SHB|SSB|ESHB|ESSB)\s+\d+', document_text))
+            is_legislative = bill_count > 2  # Multiple bills = legislative document
+            
+            if is_legislative:
+                # Legislative document: Bill-aware chunking
+                logger.info(f"Detected legislative document with {bill_count} bills - using bill-aware chunking")
+                text_splitter = RecursiveCharacterTextSplitter(
+                    chunk_size=2000,
+                    chunk_overlap=500,
+                    length_function=len,
+                    separators=["\n\n", "\nHB ", "\nSB ", "\nSHB ", "\nSSB ", "\nESHB ", "\nESSB ", "\n", " "]
+                )
+                chunking_method = 'bill_aware_chunking'
+            else:
+                # Regular document: Standard semantic chunking
+                logger.info(f"Detected regular document ({bill_count} bills found) - using standard chunking")
+                text_splitter = RecursiveCharacterTextSplitter(
+                    chunk_size=1500,
+                    chunk_overlap=300,
+                    length_function=len,
+                    separators=["\n\n", "\n", ". ", " ", ""]  # Natural breakpoints
+                )
+                chunking_method = 'semantic_chunking'
+            
             chunks = text_splitter.split_text(document_text)
+            logger.info(f"Created {len(chunks)} chunks using {chunking_method}")
             
-            logger.info(f"Using bill-aware chunking: {len(chunks)} chunks created")
-            
-            # Process in smaller batches to avoid memory issues
-            batch_size = 25  # Smaller batches for larger chunks
+            # Adjust batch size based on chunk size
+            batch_size = 25 if is_legislative else 50
             total_batches = (len(chunks) + batch_size - 1) // batch_size
             
             for batch_num in range(total_batches):
@@ -655,28 +672,30 @@ class UserContainerManager:
                     doc_metadata['user_id'] = user_id
                     doc_metadata['upload_timestamp'] = datetime.utcnow().isoformat()
                     doc_metadata['chunk_size'] = len(chunk)
-                    doc_metadata['chunking_method'] = 'bill_aware_chunking'
+                    doc_metadata['chunking_method'] = chunking_method
+                    doc_metadata['document_type'] = 'legislative' if is_legislative else 'general'
                     
-                    # Extract bill numbers from chunk for better search
-                    bill_numbers = re.findall(r'\b(?:HB|SB|SHB|SSB|ESHB|ESSB)\s+\d+', chunk)
-                    if bill_numbers:
-                        doc_metadata['contains_bills'] = ', '.join(bill_numbers)
-                        logger.info(f"Chunk {start_idx + i} contains bills: {bill_numbers}")
+                    # Extract bill numbers for legislative docs only
+                    if is_legislative:
+                        bill_numbers = re.findall(r'\b(?:HB|SB|SHB|SSB|ESHB|ESSB)\s+\d+', chunk)
+                        if bill_numbers:
+                            doc_metadata['contains_bills'] = ', '.join(bill_numbers)
+                            logger.info(f"Chunk {start_idx + i} contains bills: {bill_numbers}")
                     
                     if file_id:
                         doc_metadata['file_id'] = file_id
                     
-                    # CRITICAL FIX: Clean metadata - remove lists and complex objects
+                    # Clean metadata for ChromaDB
                     clean_metadata = {}
                     for key, value in doc_metadata.items():
                         if isinstance(value, (str, int, float, bool)):
                             clean_metadata[key] = value
                         elif isinstance(value, list):
-                            clean_metadata[key] = str(value)  # Convert list to string
+                            clean_metadata[key] = str(value)
                         elif value is None:
                             clean_metadata[key] = ""
                         else:
-                            clean_metadata[key] = str(value)  # Convert other types to string
+                            clean_metadata[key] = str(value)
                     
                     documents.append(Document(
                         page_content=chunk,
@@ -729,7 +748,7 @@ class UserContainerManager:
             return []
     
     def enhanced_search_user_container(self, user_id: str, query: str, conversation_context: str, k: int = 12, document_id: str = None) -> List[Tuple]:
-        """Enhanced search with timeout protection"""
+        """Enhanced search with timeout protection and bill-specific optimization"""
         try:
             user_db = self.get_user_database_safe(user_id)
             if not user_db:
@@ -740,6 +759,41 @@ class UserContainerManager:
                 filter_dict = {"file_id": document_id}
             
             try:
+                # Check if this is a bill-specific query
+                bill_match = re.search(r"\b(HB|SB|SSB|ESSB|SHB|ESHB)\s+(\d+)\b", query, re.IGNORECASE)
+                
+                if bill_match:
+                    bill_number = f"{bill_match.group(1)} {bill_match.group(2)}"
+                    logger.info(f"Bill-specific search for: {bill_number}")
+                    
+                    # First, try to find chunks that contain this specific bill
+                    all_docs = user_db.get()
+                    bill_specific_chunks = []
+                    
+                    for i, (doc_id, metadata, content) in enumerate(zip(all_docs['ids'], all_docs['metadatas'], all_docs['documents'])):
+                        if metadata and 'contains_bills' in metadata:
+                            if bill_number in metadata['contains_bills']:
+                                # Calculate similarity score for this chunk
+                                similarity_results = user_db.similarity_search_with_score(query, k=1, 
+                                    filter={"chunk_index": metadata.get('chunk_index')})
+                                if similarity_results:
+                                    bill_specific_chunks.append(similarity_results[0])
+                                    logger.info(f"Found {bill_number} in chunk {metadata.get('chunk_index')}")
+                    
+                    if bill_specific_chunks:
+                        logger.info(f"Using {len(bill_specific_chunks)} bill-specific chunks")
+                        # Boost the relevance of bill-specific chunks
+                        boosted_chunks = [(doc, min(score + 0.2, 1.0)) for doc, score in bill_specific_chunks]
+                        
+                        # Get additional context chunks
+                        regular_results = user_db.similarity_search_with_score(query, k=k, filter=filter_dict)
+                        
+                        # Combine and deduplicate
+                        all_results = boosted_chunks + [r for r in regular_results 
+                                                       if not any(r[0].page_content == b[0].page_content for b in boosted_chunks)]
+                        return all_results[:k]
+                
+                # Fallback to regular search
                 direct_results = user_db.similarity_search_with_score(query, k=k, filter=filter_dict)
                 expanded_query = f"{query} {conversation_context}"
                 expanded_results = user_db.similarity_search_with_score(expanded_query, k=k, filter=filter_dict)
@@ -1802,6 +1856,23 @@ def process_query(question: str, session_id: str, user_id: Optional[str], search
         if bill_match:
             # Bill-specific extraction
             bill_number = f"{bill_match.group(1)} {bill_match.group(2)}"
+            logger.info(f"Searching for bill: {bill_number}")
+            
+            # Search specifically for chunks containing this bill
+            bill_specific_results = []
+            for doc, score in retrieved_results:
+                if 'contains_bills' in doc.metadata and bill_number in doc.metadata['contains_bills']:
+                    bill_specific_results.append((doc, score))
+                    logger.info(f"Found {bill_number} in chunk {doc.metadata.get('chunk_index', 'unknown')} with score {score}")
+            
+            # If we found bill-specific chunks, prioritize them
+            if bill_specific_results:
+                logger.info(f"Using {len(bill_specific_results)} bill-specific chunks for {bill_number}")
+                # Use the bill-specific chunks with boosted relevance
+                boosted_results = [(doc, min(score + 0.3, 1.0)) for doc, score in bill_specific_results]
+                retrieved_results = boosted_results + [r for r in retrieved_results if r not in bill_specific_results]
+                retrieved_results = retrieved_results[:len(retrieved_results)]
+            
             extracted_info = extract_bill_information(context_text, bill_number)
         else:
             # Universal extraction for any document type
