@@ -1,5 +1,5 @@
-# Unified Legal Assistant Backend - Multi-User with Enhanced RAG + Comprehensive Analysis
-# Fully fixed and complete version
+# Unified Legal Assistant Backend - Multi-User with Enhanced RAG + Comprehensive Analysis + Information Extraction
+# Fully fixed and complete version with enhanced extraction capabilities
 
 from fastapi import FastAPI, Request, HTTPException, File, UploadFile, Form, Depends, Header
 from fastapi.middleware.cors import CORSMiddleware
@@ -193,8 +193,8 @@ class SafeDocumentProcessor:
 # Create FastAPI app
 app = FastAPI(
     title="Unified Legal Assistant API",
-    description="Multi-User Legal Assistant with Enhanced RAG, Comprehensive Analysis, and External Database Integration",
-    version="10.0.0-SmartRAG-ComprehensiveAnalysis"
+    description="Multi-User Legal Assistant with Enhanced RAG, Comprehensive Analysis, Information Extraction, and External Database Integration",
+    version="10.1.0-SmartRAG-ComprehensiveAnalysis-InfoExtraction"
 )
 
 app.add_middleware(
@@ -311,6 +311,7 @@ class QueryResponse(BaseModel):
     expand_available: bool = False
     sources_searched: List[str] = []
     retrieval_method: Optional[str] = None
+    extracted_info: Optional[Dict] = None
 
 class ComprehensiveAnalysisRequest(BaseModel):
     document_id: Optional[str] = None
@@ -588,6 +589,83 @@ def get_current_user(credentials: Optional[HTTPAuthorizationCredentials] = Depen
         )
     
     return user_sessions[user_id]
+
+# Enhanced Information Extraction Functions
+def extract_bill_information(context_text: str, bill_number: str) -> Dict[str, str]:
+    """Pre-extract bill information using regex patterns"""
+    extracted_info = {}
+    
+    # Pattern to find bill information
+    bill_pattern = rf"{bill_number}.*?(?=\n\n|\n[A-Z]|\Z)"
+    bill_match = re.search(bill_pattern, context_text, re.DOTALL | re.IGNORECASE)
+    
+    if bill_match:
+        bill_text = bill_match.group(0)
+        
+        # Extract sponsors
+        sponsor_pattern = r"Sponsors?\s*:\s*([^\n]+)"
+        sponsor_match = re.search(sponsor_pattern, bill_text, re.IGNORECASE)
+        if sponsor_match:
+            extracted_info["sponsors"] = sponsor_match.group(1).strip()
+        
+        # Extract final status
+        status_pattern = r"Final Status\s*:\s*([^\n]+)"
+        status_match = re.search(status_pattern, bill_text, re.IGNORECASE)
+        if status_match:
+            extracted_info["final_status"] = status_match.group(1).strip()
+        
+        # Extract description
+        desc_pattern = rf"{bill_number}[^\n]*\n([^\n]+)"
+        desc_match = re.search(desc_pattern, bill_text, re.IGNORECASE)
+        if desc_match:
+            extracted_info["description"] = desc_match.group(1).strip()
+    
+    return extracted_info
+
+def extract_universal_information(context_text: str, question: str) -> Dict[str, Any]:
+    """Universal information extraction that works for any document type"""
+    extracted_info = {
+        "key_entities": [],
+        "numbers_and_dates": [],
+        "relationships": []
+    }
+    
+    try:
+        # Extract names (people, organizations, bills, cases, etc.)
+        name_patterns = [
+            r"\b[A-Z][a-z]+(?:\s+[A-Z][a-z]+)*",  # Names
+            r"(?:HB|SB|SSB|ESSB|SHB|ESHB)\s*\d+",  # Bill numbers
+        ]
+        
+        for pattern in name_patterns:
+            matches = re.findall(pattern, context_text)
+            extracted_info["key_entities"].extend(matches[:10])  # Limit to prevent overflow
+        
+        # Extract numbers, dates, amounts
+        number_patterns = [
+            r"\$[\d,]+(?:\.\d{2})?",  # Dollar amounts
+            r"\b\d{1,2}[/-]\d{1,2}[/-]\d{2,4}",  # Dates
+            r"\b(?:January|February|March|April|May|June|July|August|September|October|November|December)\s+\d{1,2},?\s+\d{4}",  # Written dates
+        ]
+        
+        for pattern in number_patterns:
+            matches = re.findall(pattern, context_text, re.IGNORECASE)
+            extracted_info["numbers_and_dates"].extend(matches[:10])
+        
+        # Extract relationships
+        relationship_patterns = [
+            r"(?:sponsors?|authored?\s+by):\s*([^.\n]+)",
+            r"(?:final\s+status|status):\s*([^.\n]+)",
+        ]
+        
+        for pattern in relationship_patterns:
+            matches = re.findall(pattern, context_text, re.IGNORECASE)
+            extracted_info["relationships"].extend(matches[:5])
+    
+    except Exception as e:
+        logger.warning(f"Error in universal extraction: {e}")
+    
+    return extracted_info
 
 # Enhanced RAG Functions
 def parse_multiple_questions(query_text: str) -> List[str]:
@@ -1158,7 +1236,7 @@ def call_openrouter_api(prompt: str, api_key: str, api_base: str = "https://open
     
     return "I apologize, but I'm experiencing technical difficulties. Please try again."
 
-# Main Query Processing
+# Main Query Processing with Enhanced Information Extraction
 def process_query(question: str, session_id: str, user_id: Optional[str], search_scope: str, response_style: str = "balanced", use_enhanced_rag: bool = True, document_id: str = None) -> QueryResponse:
     try:
         logger.info(f"Processing query - Question: '{question}', User: {user_id}, Scope: {search_scope}, Enhanced: {use_enhanced_rag}, Document: {document_id}")
@@ -1251,6 +1329,31 @@ def process_query(question: str, session_id: str, user_id: Optional[str], search
         
         context_text, source_info = format_context_for_llm(retrieved_results)
         
+        # NEW: Enhanced information extraction
+        bill_match = re.search(r"(HB|SB|SSB|ESSB|SHB|ESHB)\s*(\d+)", question, re.IGNORECASE)
+        extracted_info = {}
+
+        if bill_match:
+            # Bill-specific extraction
+            bill_number = f"{bill_match.group(1)} {bill_match.group(2)}"
+            extracted_info = extract_bill_information(context_text, bill_number)
+        else:
+            # Universal extraction for any document type
+            extracted_info = extract_universal_information(context_text, question)
+
+        # Add extracted information to context to make it more visible to AI
+        if extracted_info:
+            enhancement = "\n\nKEY INFORMATION FOUND:\n"
+            for key, value in extracted_info.items():
+                if value:  # Only add if there's actual content
+                    if isinstance(value, list):
+                        enhancement += f"- {key.replace('_', ' ').title()}: {', '.join(value[:5])}\n"
+                    else:
+                        enhancement += f"- {key.replace('_', ' ').title()}: {value}\n"
+            
+            if enhancement.strip() != "KEY INFORMATION FOUND:":
+                context_text += enhancement
+        
         style_instructions = {
             "concise": "Please provide a concise answer (1-2 sentences) based on the context.",
             "balanced": "Please provide a balanced answer (2-3 paragraphs) based on the context.",
@@ -1259,36 +1362,39 @@ def process_query(question: str, session_id: str, user_id: Optional[str], search
         
         instruction = style_instructions.get(response_style, style_instructions["balanced"])
         
-        prompt = f"""You are a legal research assistant. Your responses must be STRICTLY based on the provided legal documents.
+        # Enhanced prompt with better information extraction focus
+        prompt = f"""You are a legal research assistant. Provide thorough, accurate responses based on the provided documents.
 
 SOURCES SEARCHED: {', '.join(sources_searched)}
 RETRIEVAL METHOD: {retrieval_method}
 {f"DOCUMENT FILTER: Specific document {document_id}" if document_id else "DOCUMENT SCOPE: All available documents"}
 
-CRITICAL REQUIREMENTS:
-1. **ONLY use information from the provided context below**
-2. **You may draw reasonable legal implications based on explicit content**
-3. **Note which source type each piece of information comes from**
-4. **If the context doesn't contain sufficient information, explicitly state this**
-5. **Cite specific document names and source types for each claim**
-6. **Do NOT invent facts, statutes, or case law not found in the context**
+INSTRUCTIONS FOR THOROUGH ANALYSIS:
+1. **READ CAREFULLY**: Scan the entire context for information that answers the user's question
+2. **EXTRACT DIRECTLY**: When information is clearly stated, provide it exactly as written
+3. **BE SPECIFIC**: Include names, numbers, dates, and details when present
+4. **QUOTE WHEN HELPFUL**: Use direct quotes for key facts or important language
+5. **CITE SOURCES**: Reference the document name for each piece of information
+6. **BE COMPLETE**: Provide all relevant information found before saying anything is missing
+7. **BE HONEST**: Only say information is unavailable when truly absent from the context
 
 RESPONSE STYLE: {instruction}
 
 CONVERSATION HISTORY:
 {conversation_context}
 
-LEGAL DOCUMENT CONTEXT (USE ONLY THIS INFORMATION):
+DOCUMENT CONTEXT (ANALYZE THOROUGHLY):
 {context_text}
 
 USER QUESTION:
 {questions}
 
-INSTRUCTIONS:
-- Use only the provided legal content
-- If context is insufficient, say: "Based on the available documents, I can only provide limited information..."
-- Always cite the source document(s) for each fact or inference: [document_name.pdf]
-- If no relevant information exists, say: "The available documents do not contain information about this topic."
+RESPONSE APPROACH:
+- **FIRST**: Identify what specific information the user is asking for
+- **SECOND**: Search the context thoroughly for that information  
+- **THIRD**: Present any information found clearly and completely
+- **FOURTH**: Note what information is not available (if any)
+- **ALWAYS**: Cite the source document for each fact provided
 
 RESPONSE:"""
         
@@ -1321,7 +1427,8 @@ RESPONSE:"""
             confidence_score=float(confidence_score),
             sources_searched=sources_searched,
             expand_available=len(questions) > 1 if use_enhanced_rag else False,
-            retrieval_method=retrieval_method
+            retrieval_method=retrieval_method,
+            extracted_info=extracted_info if extracted_info else None
         )
         
     except Exception as e:
@@ -1398,7 +1505,7 @@ async def quick_document_analysis(
 
 @app.post("/ask", response_model=QueryResponse)
 async def ask_question(query: Query, current_user: Optional[User] = Depends(get_current_user)):
-    """Enhanced ask endpoint with comprehensive analysis detection"""
+    """Enhanced ask endpoint with comprehensive analysis detection and information extraction"""
     logger.info(f"Received ask request: {query}")
     
     cleanup_expired_conversations()
@@ -1621,7 +1728,8 @@ async def get_subscription_status(current_user: User = Depends(get_current_user)
             "ai_analysis": True,
             "api_calls_per_month": 100,
             "enhanced_rag": True,
-            "comprehensive_analysis": True
+            "comprehensive_analysis": True,
+            "information_extraction": True
         },
         "premium": {
             "default_database_access": True,
@@ -1633,7 +1741,8 @@ async def get_subscription_status(current_user: User = Depends(get_current_user)
             "priority_support": True,
             "enhanced_rag": True,
             "comprehensive_analysis": True,
-            "document_specific_analysis": True
+            "document_specific_analysis": True,
+            "information_extraction": True
         },
         "enterprise": {
             "default_database_access": True,
@@ -1647,7 +1756,8 @@ async def get_subscription_status(current_user: User = Depends(get_current_user)
             "enhanced_rag": True,
             "comprehensive_analysis": True,
             "document_specific_analysis": True,
-            "bulk_analysis": True
+            "bulk_analysis": True,
+            "information_extraction": True
         }
     }
     
@@ -1699,6 +1809,45 @@ async def ask_question_debug(query: Query):
         query.document_id
     )
     return response
+
+@app.post("/debug/test-extraction")
+async def debug_test_extraction(
+    question: str = Form(...),
+    user_id: str = Form(...),
+    current_user: User = Depends(get_current_user)
+):
+    """Test information extraction for any question"""
+    
+    try:
+        # Search user's documents
+        user_results = container_manager.enhanced_search_user_container(user_id, question, "", k=5)
+        
+        if user_results:
+            # Get context
+            context_text, source_info = format_context_for_llm(user_results, max_length=3000)
+            
+            # Test extraction
+            bill_match = re.search(r"(HB|SB|SSB|ESSB|SHB|ESHB)\s*(\d+)", question, re.IGNORECASE)
+            if bill_match:
+                bill_number = f"{bill_match.group(1)} {bill_match.group(2)}"
+                extracted_info = extract_bill_information(context_text, bill_number)
+            else:
+                extracted_info = extract_universal_information(context_text, question)
+            
+            return {
+                "question": question,
+                "context_preview": context_text[:500] + "...",
+                "extracted_info": extracted_info,
+                "sources_found": len(user_results)
+            }
+        else:
+            return {
+                "question": question,
+                "error": "No relevant documents found"
+            }
+            
+    except Exception as e:
+        return {"error": str(e)}
 
 # Container cleanup and document health endpoints
 @app.post("/admin/cleanup-containers")
@@ -1860,12 +2009,12 @@ async def emergency_clear_document_tracking():
 
 @app.get("/health")
 def health_check():
-    """Enhanced system health check with comprehensive analysis capabilities"""
+    """Enhanced system health check with comprehensive analysis capabilities and information extraction"""
     db_exists = os.path.exists(DEFAULT_CHROMA_PATH)
     
     return {
         "status": "healthy",
-        "version": "10.0.0-SmartRAG-ComprehensiveAnalysis",
+        "version": "10.1.0-SmartRAG-ComprehensiveAnalysis-InfoExtraction",
         "timestamp": datetime.utcnow().isoformat(),
         "ai_enabled": AI_ENABLED,
         "openrouter_api_configured": bool(OPENROUTER_API_KEY),
@@ -1907,6 +2056,22 @@ def health_check():
                 "confidence_scoring": True,
                 "single_api_call": True
             },
+            "information_extraction": {
+                "enabled": True,
+                "bill_specific_extraction": True,
+                "universal_extraction": True,
+                "features": [
+                    "bill_number_detection",
+                    "sponsor_extraction",
+                    "status_extraction",
+                    "entity_recognition",
+                    "date_extraction",
+                    "financial_amount_extraction",
+                    "relationship_mapping"
+                ],
+                "regex_patterns": True,
+                "context_enhancement": True
+            },
             "enhanced_rag": {
                 "enabled": True,
                 "features": [
@@ -1916,7 +2081,8 @@ def health_check():
                     "sub_query_decomposition",
                     "confidence_scoring",
                     "duplicate_removal",
-                    "document_specific_filtering"
+                    "document_specific_filtering",
+                    "information_pre_extraction"
                 ],
                 "nlp_model": nlp is not None,
                 "sentence_model": sentence_model is not None
@@ -1933,8 +2099,9 @@ def health_check():
         "new_endpoints": [
             "POST /comprehensive-analysis - Full structured analysis",
             "POST /quick-analysis/{document_id} - Quick single document analysis", 
-            "Enhanced /ask - Detects comprehensive analysis requests",
+            "Enhanced /ask - Detects comprehensive analysis requests + info extraction",
             "Enhanced /user/upload - Stores file_id for targeting",
+            "POST /debug/test-extraction - Test information extraction",
             "GET /admin/document-health - Check system health",
             "POST /admin/cleanup-containers - Clean orphaned containers",
             "POST /admin/emergency-clear-tracking - Reset document tracking"
@@ -1958,11 +2125,16 @@ def health_check():
             "🆕 File ID tracking for precise document retrieval",
             "🆕 Automatic comprehensive analysis detection",
             "🆕 Container cleanup and health monitoring",
-            "🆕 Enhanced error handling and recovery"
+            "🆕 Enhanced error handling and recovery",
+            "🚀 Bill-specific information extraction",
+            "🚀 Universal document information extraction",
+            "🚀 Context enhancement with extracted info",
+            "🚀 Debug endpoint for testing extraction"
         ],
         # Frontend compatibility fields
         "unified_mode": True,
         "enhanced_rag": True,
+        "information_extraction": True,
         "database_exists": db_exists,
         "database_path": DEFAULT_CHROMA_PATH,
         "api_key_configured": bool(OPENROUTER_API_KEY),
@@ -1971,12 +2143,12 @@ def health_check():
 
 @app.get("/", response_class=HTMLResponse)
 def get_interface():
-    """Web interface with updated documentation for comprehensive analysis"""
+    """Web interface with updated documentation for comprehensive analysis and information extraction"""
     return """
     <!DOCTYPE html>
     <html>
     <head>
-        <title>Legal Assistant - Complete Multi-Analysis Edition [FIXED]</title>
+        <title>Legal Assistant - Complete Multi-Analysis Edition with Information Extraction</title>
         <style>
             body { font-family: Arial, sans-serif; margin: 40px; background: #f8f9fa; }
             .container { max-width: 1200px; margin: 0 auto; }
@@ -1987,26 +2159,27 @@ def get_interface():
             .status { padding: 5px 10px; border-radius: 15px; font-size: 12px; }
             .status-active { background: #d4edda; color: #155724; }
             .status-ready { background: #cce5ff; color: #004085; }
-            .status-fixed { background: #28a745; color: white; }
-            .badge-fixed { background: #dc3545; color: white; padding: 2px 8px; border-radius: 10px; font-size: 11px; margin-left: 5px; }
+            .status-new { background: #28a745; color: white; }
+            .badge-new { background: #007bff; color: white; padding: 2px 8px; border-radius: 10px; font-size: 11px; margin-left: 5px; }
             .code-example { background: #f8f9fa; border: 1px solid #e9ecef; border-radius: 5px; padding: 15px; margin: 10px 0; font-family: monospace; font-size: 12px; }
         </style>
     </head>
     <body>
         <div class="container">
-            <h1>⚖️ Legal Assistant API v10.0 <span class="badge-fixed">FULLY FIXED</span></h1>
-            <p>Complete Multi-User Platform with Enhanced RAG, Comprehensive Analysis, and Container Management</p>
-            <div class="status status-fixed">🔧 All syntax errors fixed, complete functionality restored!</div>
+            <h1>⚖️ Legal Assistant API v10.1 <span class="badge-new">INFO EXTRACTION</span></h1>
+            <p>Complete Multi-User Platform with Enhanced RAG, Comprehensive Analysis, and Smart Information Extraction</p>
+            <div class="status status-new">🚀 NEW: Advanced information extraction for bills, entities, dates, and relationships!</div>
             
             <div class="feature-grid">
                 <div class="feature-card">
-                    <h3>✅ Corruption Fixed</h3>
-                    <p>All broken code sections have been repaired</p>
+                    <h3>🔍 Smart Information Extraction</h3>
+                    <p>Automatically extracts key information from documents</p>
                     <ul>
-                        <li>✅ SafeDocumentProcessor properly structured</li>
-                        <li>✅ All API endpoints complete</li>
-                        <li>✅ Syntax errors resolved</li>
-                        <li>✅ Missing functions restored</li>
+                        <li>✅ Bill-specific extraction (sponsors, status, descriptions)</li>
+                        <li>✅ Universal entity recognition (names, organizations)</li>
+                        <li>✅ Date and financial amount detection</li>
+                        <li>✅ Relationship mapping</li>
+                        <li>✅ Context enhancement for better AI responses</li>
                     </ul>
                 </div>
                 
@@ -2024,22 +2197,21 @@ def get_interface():
                 </div>
                 
                 <div class="feature-card">
-                    <h3>🛠️ Enhanced Error Handling</h3>
-                    <p>Robust container management with auto-recovery</p>
+                    <h3>🎯 Enhanced Query Processing</h3>
+                    <p>Smarter question answering with extraction</p>
                     <ul>
-                        <li>✅ Timeout protection</li>
-                        <li>✅ Container auto-recovery</li>
-                        <li>✅ Graceful degradation</li>
-                        <li>✅ Health monitoring</li>
+                        <li>✅ Pre-extracts key information before AI processing</li>
+                        <li>✅ Bill number detection (HB, SB, SSB, etc.)</li>
+                        <li>✅ Context enhancement for better accuracy</li>
+                        <li>✅ Thorough document analysis instructions</li>
                     </ul>
                 </div>
                 
                 <div class="feature-card">
-                    <h3>🔧 Admin Tools</h3>
-                    <p>Debug and maintenance endpoints</p>
-                    <div class="endpoint">GET /admin/document-health</div>
-                    <div class="endpoint">POST /admin/cleanup-containers</div>
-                    <div class="endpoint">POST /admin/emergency-clear-tracking</div>
+                    <h3>🔧 Debug & Testing</h3>
+                    <p>Test information extraction capabilities</p>
+                    <div class="endpoint">POST /debug/test-extraction</div>
+                    <p>Perfect for testing extraction on any document</p>
                 </div>
                 
                 <div class="feature-card">
@@ -2050,39 +2222,62 @@ def get_interface():
                 </div>
                 
                 <div class="feature-card">
-                    <h3>🎯 Document-Specific Targeting</h3>
-                    <p>Analyze specific documents with precision</p>
+                    <h3>🛠️ Enhanced Container Management</h3>
+                    <p>Robust document handling with auto-recovery</p>
                     <ul>
-                        <li>File ID tracking</li>
-                        <li>Document filtering</li>
-                        <li>Precise retrieval</li>
-                        <li>Source attribution</li>
+                        <li>✅ Timeout protection</li>
+                        <li>✅ Container auto-recovery</li>
+                        <li>✅ Graceful degradation</li>
+                        <li>✅ Health monitoring</li>
                     </ul>
                 </div>
             </div>
             
-            <h2>🔧 What Was Fixed</h2>
+            <h2>🔍 Information Extraction Examples</h2>
             <div class="feature-grid">
                 <div class="feature-card">
-                    <h4>❌ Original Issues</h4>
-                    <ul>
-                        <li>Broken SafeDocumentProcessor class</li>
-                        <li>Missing large code sections</li>
-                        <li>Syntax errors and malformed structure</li>
-                        <li>Incomplete file ending abruptly</li>
-                        <li>Missing API endpoints</li>
-                    </ul>
+                    <h4>📋 Bill Information</h4>
+                    <div class="code-example">
+Question: "What is HB 1234?"
+
+Extracted Info:
+- Bill Number: HB 1234
+- Sponsors: John Smith, Jane Doe
+- Final Status: Passed
+- Description: Education funding bill
+                    </div>
                 </div>
                 
                 <div class="feature-card">
-                    <h4>✅ Fixed Issues</h4>
-                    <ul>
-                        <li>Complete SafeDocumentProcessor class</li>
-                        <li>All functions and classes restored</li>
-                        <li>Proper syntax and indentation</li>
-                        <li>Complete file with all endpoints</li>
-                        <li>Full API functionality</li>
-                    </ul>
+                    <h4>🏢 Entity Recognition</h4>
+                    <div class="code-example">
+Universal Extraction:
+- Key Entities: [Names, Organizations]
+- Numbers & Dates: [$50,000, 2024-12-31]
+- Relationships: [Author: Smith, Status: Active]
+                    </div>
+                </div>
+                
+                <div class="feature-card">
+                    <h4>🎯 Enhanced Context</h4>
+                    <div class="code-example">
+Original Context + KEY INFORMATION FOUND:
+- Sponsors: John Smith, Jane Doe  
+- Final Status: Passed
+- Key Entities: Department of Education, School Board
+- Numbers And Dates: $2.5M, January 15, 2025
+                    </div>
+                </div>
+                
+                <div class="feature-card">
+                    <h4>🔧 Test Extraction</h4>
+                    <div class="code-example">
+curl -X POST /debug/test-extraction \
+  -F "question=What is SB 567?" \
+  -F "user_id=debug_user"
+
+Response: {extracted_info, context_preview}
+                    </div>
                 </div>
             </div>
             
@@ -2090,7 +2285,7 @@ def get_interface():
             <div class="feature-grid">
                 <div class="feature-card">
                     <h4>Core Endpoints</h4>
-                    <div class="endpoint">POST /ask - Enhanced chat with auto-detection</div>
+                    <div class="endpoint">POST /ask - Enhanced with extraction</div>
                     <div class="endpoint">POST /user/upload - Enhanced upload with file_id</div>
                     <div class="endpoint">GET /user/documents - Robust document listing</div>
                 </div>
@@ -2102,16 +2297,59 @@ def get_interface():
                 </div>
                 
                 <div class="feature-card">
+                    <h4>🆕 Extraction Endpoints</h4>
+                    <div class="endpoint">POST /debug/test-extraction - Test extraction</div>
+                </div>
+                
+                <div class="feature-card">
                     <h4>Admin Endpoints</h4>
                     <div class="endpoint">GET /admin/document-health - System health</div>
                     <div class="endpoint">POST /admin/cleanup-containers - Cleanup</div>
                     <div class="endpoint">POST /admin/emergency-clear-tracking - Reset</div>
                 </div>
+            </div>
+            
+            <h2>🚀 What's New in v10.1</h2>
+            <div class="feature-grid">
+                <div class="feature-card">
+                    <h4>🔍 Information Extraction</h4>
+                    <ul>
+                        <li>Bill-specific extraction (sponsors, status, description)</li>
+                        <li>Universal entity recognition</li>
+                        <li>Date and financial amount detection</li>
+                        <li>Relationship mapping</li>
+                        <li>Context enhancement for AI</li>
+                    </ul>
+                </div>
                 
                 <div class="feature-card">
-                    <h4>Debug Endpoints</h4>
-                    <div class="endpoint">POST /ask-debug - No auth required</div>
-                    <div class="endpoint">GET /health - System status</div>
+                    <h4>🎯 Enhanced Query Processing</h4>
+                    <ul>
+                        <li>Pre-extraction before AI processing</li>
+                        <li>Bill number detection (HB, SB, etc.)</li>
+                        <li>Thorough analysis instructions</li>
+                        <li>Better information completeness</li>
+                    </ul>
+                </div>
+                
+                <div class="feature-card">
+                    <h4>🔧 Debug Tools</h4>
+                    <ul>
+                        <li>Test extraction endpoint</li>
+                        <li>Context preview</li>
+                        <li>Extraction result inspection</li>
+                        <li>Source finding verification</li>
+                    </ul>
+                </div>
+                
+                <div class="feature-card">
+                    <h4>📊 Response Enhancement</h4>
+                    <ul>
+                        <li>extracted_info field in QueryResponse</li>
+                        <li>Context enhancement with key information</li>
+                        <li>Better AI instruction prompts</li>
+                        <li>Improved accuracy for specific questions</li>
+                    </ul>
                 </div>
             </div>
             
@@ -2141,38 +2379,40 @@ export OPENAI_API_BASE="https://openrouter.ai/api/v1"
 python enhanced_backend.py
 # Should show:
 # ✅ PyMuPDF available
-# 🚀 Starting Complete Enhanced Legal Assistant
-# Version: 10.0.0-SmartRAG-ComprehensiveAnalysis
+# 🚀 Starting Enhanced Legal Assistant
+# Version: 10.1.0-SmartRAG-InfoExtraction
                     </div>
                 </div>
                 
                 <div class="feature-card">
-                    <h4>Test Health</h4>
+                    <h4>Test Extraction</h4>
                     <div class="code-example">
 curl http://localhost:8000/health
-# Should return version with "SmartRAG"
-curl http://localhost:8000/admin/document-health
-# Check system status
+# Check "information_extraction": true
+
+curl -X POST /debug/test-extraction \
+  -F "question=What is HB 123?" \
+  -F "user_id=debug_user"
                     </div>
                 </div>
             </div>
             
-            <h2>✅ Verification Checklist</h2>
+            <h2>✅ New Features Checklist</h2>
             <ul>
-                <li><strong>✅ No syntax errors:</strong> All Python code properly formatted</li>
-                <li><strong>✅ Complete classes:</strong> SafeDocumentProcessor, UserContainerManager, etc.</li>
-                <li><strong>✅ All endpoints:</strong> upload, analysis, admin, debug endpoints</li>
-                <li><strong>✅ Error handling:</strong> Timeout protection and graceful failures</li>
-                <li><strong>✅ Frontend compatibility:</strong> SmartRAG version detection</li>
-                <li><strong>✅ Container management:</strong> Auto-recovery and cleanup tools</li>
-                <li><strong>✅ Comprehensive analysis:</strong> Multi-analysis in single API call</li>
-                <li><strong>✅ Document targeting:</strong> File ID tracking and filtering</li>
+                <li><strong>✅ Bill extraction:</strong> extract_bill_information() function</li>
+                <li><strong>✅ Universal extraction:</strong> extract_universal_information() function</li>
+                <li><strong>✅ Enhanced prompts:</strong> Thorough analysis instructions</li>
+                <li><strong>✅ Context enhancement:</strong> KEY INFORMATION FOUND section</li>
+                <li><strong>✅ Debug endpoint:</strong> /debug/test-extraction</li>
+                <li><strong>✅ Response field:</strong> extracted_info in QueryResponse</li>
+                <li><strong>✅ Health check:</strong> information_extraction status</li>
+                <li><strong>✅ Version bump:</strong> 10.1.0-InfoExtraction</li>
             </ul>
             
             <p style="text-align: center; color: #7f8c8d; margin-top: 30px;">
-                🎉 Fully Fixed & Complete Enhanced Legal Assistant Backend 🎉
-                <br>Version 10.0.0-SmartRAG-ComprehensiveAnalysis
-                <br>All corruption repaired - ready for production deployment!
+                🎉 Enhanced Legal Assistant Backend with Smart Information Extraction 🎉
+                <br>Version 10.1.0-SmartRAG-ComprehensiveAnalysis-InfoExtraction
+                <br>Now with intelligent document parsing and entity recognition!
             </p>
         </div>
     </body>
@@ -2182,12 +2422,14 @@ curl http://localhost:8000/admin/document-health
 if __name__ == "__main__":
     import uvicorn
     port = int(os.environ.get("PORT", 8000))
-    logger.info(f"🚀 Starting FULLY FIXED Enhanced Legal Assistant on port {port}")
+    logger.info(f"🚀 Starting Enhanced Legal Assistant with Information Extraction on port {port}")
     logger.info(f"ChromaDB Path: {DEFAULT_CHROMA_PATH}")
     logger.info(f"User Containers Path: {USER_CONTAINERS_PATH}")
     logger.info(f"AI Status: {'ENABLED with DeepSeek' if AI_ENABLED else 'DISABLED - Set OPENAI_API_KEY to enable'}")
     logger.info(f"PDF processing: PyMuPDF={PYMUPDF_AVAILABLE}, pdfplumber={PDFPLUMBER_AVAILABLE}")
-    logger.info(f"Features: Comprehensive analysis, document-specific targeting, container cleanup, enhanced error handling")
-    logger.info(f"Version: 10.0.0-SmartRAG-ComprehensiveAnalysis")
-    logger.info("✅ ALL CORRUPTION FIXED - Backend ready for deployment!")
+    logger.info(f"Features: Comprehensive analysis, document-specific targeting, container cleanup, enhanced error handling, INFORMATION EXTRACTION")
+    logger.info(f"Version: 10.1.0-SmartRAG-ComprehensiveAnalysis-InfoExtraction")
+    logger.info("✅ NEW: Bill-specific and universal information extraction enabled!")
+    logger.info("✅ Enhanced query processing with context enhancement!")
+    logger.info("✅ Debug endpoint for testing extraction: /debug/test-extraction")
     uvicorn.run(app, host="0.0.0.0", port=port)
