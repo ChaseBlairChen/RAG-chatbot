@@ -1803,6 +1803,8 @@ LEGAL ANALYSIS:"""
         else:
             response_text = f"Based on the retrieved documents:\n\n{context_text}\n\nPlease review this information to answer your question."
         
+        MIN_RELEVANCE_SCORE = 0.15
+        
         # Convert relevance scores to user-friendly labels
         def get_relevance_label(score):
             if score <= 0.01:
