@@ -438,7 +438,8 @@ export default function EnhancedLegalAssistantWithAuth() {
       };
 
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 30000);
+      // Removed timeout for chat requests - let them run as long as needed
+      // const timeoutId = setTimeout(() => controller.abort(), 30000);
 
       const res = await fetch(`${backendUrl}/ask`, {
         method: "POST",
@@ -447,7 +448,7 @@ export default function EnhancedLegalAssistantWithAuth() {
         body: JSON.stringify(requestBody),
       });
 
-      clearTimeout(timeoutId);
+      // clearTimeout(timeoutId); // Not needed without timeout
 
       if (!res.ok) {
         const errorText = await res.text();
@@ -743,7 +744,8 @@ Please be thorough and provide specific examples from the document text.`;
       };
 
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 60000);
+      // Removed timeout for analysis requests
+      // const timeoutId = setTimeout(() => controller.abort(), 60000);
 
       const response = await fetch(`${backendUrl}/ask`, {
         method: 'POST',
@@ -755,7 +757,7 @@ Please be thorough and provide specific examples from the document text.`;
         body: JSON.stringify(requestBody)
       });
 
-      clearTimeout(timeoutId);
+      // clearTimeout(timeoutId); // Not needed
 
       if (!response.ok) {
         const errorText = await response.text();
@@ -868,7 +870,8 @@ Please be thorough and provide specific examples from the document text.`;
       };
 
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 45000);
+      // Removed timeout for individual analysis requests
+      // const timeoutId = setTimeout(() => controller.abort(), 45000);
 
       const response = await fetch(`${backendUrl}/ask`, {
         method: 'POST',
@@ -880,7 +883,7 @@ Please be thorough and provide specific examples from the document text.`;
         body: JSON.stringify(requestBody)
       });
 
-      clearTimeout(timeoutId);
+      // clearTimeout(timeoutId); // Not needed
 
       if (!response.ok) {
         const errorText = await response.text();
