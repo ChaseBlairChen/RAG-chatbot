@@ -659,12 +659,23 @@ class UserContainerManager:
                     metadata=doc_metadata
                 ))
             
-            user_db.add_documents(documents)
-            logger.info(f"Added {len(documents)} basic chunks for document {file_id or 'unknown'} to user {user_id}'s container")
-            return True
+            logger.info(f"Starting to add {len(documents)} documents to ChromaDB...")
+            
+            # Add documents with timeout protection
+            try:
+                user_db.add_documents(documents)
+                logger.info(f"✅ Successfully added {len(documents)} basic chunks for document {file_id or 'unknown'} to user {user_id}'s container")
+                return True
+            except Exception as chroma_error:
+                logger.error(f"❌ ChromaDB add_documents failed: {chroma_error}")
+                logger.error(f"Error type: {type(chroma_error).__name__}")
+                return False
             
         except Exception as e:
-            logger.error(f"Error adding document to user container: {e}")
+            logger.error(f"❌ Error in add_document_to_container: {e}")
+            logger.error(f"Error type: {type(e).__name__}")
+            import traceback
+            logger.error(f"Full traceback: {traceback.format_exc()}")
             return False
     
     def search_user_container(self, user_id: str, query: str, k: int = 5, document_id: str = None) -> List[Tuple]:
