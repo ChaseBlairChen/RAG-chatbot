@@ -2244,6 +2244,41 @@ python your_filename.py
     </html>
     """
 
+@app.get("/debug/wac-search-test")
+async def debug_wac_search_test(user_id: str = "user_user_dem"):
+    """Debug WAC document search - NO AUTH REQUIRED"""
+    try:
+        user_db = container_manager.get_user_database_safe(user_id)
+        if not user_db:
+            return {"error": "No user database found"}
+        
+        all_docs = user_db.get()
+        wac_found = []
+        
+        for i, (doc_id, metadata, content) in enumerate(zip(
+            all_docs.get('ids', []), 
+            all_docs.get('metadatas', []), 
+            all_docs.get('documents', [])
+        )):
+            if content and 'WAC' in content:
+                wac_found.append({
+                    'chunk_index': metadata.get('chunk_index', 'unknown') if metadata else 'no_metadata',
+                    'content_preview': content[:400],
+                    'contains_308': '308' in content,
+                    'contains_124H': '124H' in content,
+                    'contains_945': '945' in content
+                })
+        
+        return {
+            "total_chunks": len(all_docs.get('ids', [])),
+            "wac_chunks_found": len(wac_found),
+            "wac_chunks": wac_found[:5],  # First 5 matches
+            "status": "success"
+        }
+        
+    except Exception as e:
+        return {"error": str(e)}
+
 @app.get("/debug/database-access-test")
 async def debug_database_access_test():
     """Test if default database is accessible - NO AUTH REQUIRED"""
