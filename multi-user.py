@@ -2099,6 +2099,36 @@ python your_filename.py
     </html>
     """
 
+@app.get("/debug/context-test")
+async def debug_context_test(user_id: str = "user_user_dem"):
+    """Debug what context is being sent to AI - NO AUTH REQUIRED"""
+    try:
+        # Simulate the exact search that happens
+        user_results = container_manager.enhanced_search_user_container(
+            user_id, 
+            "SHB 1260 $183 housing and homelessness document recording surcharge distribution", 
+            "", 
+            k=5
+        )
+        
+        if not user_results:
+            return {"error": "No search results found"}
+        
+        # Format context exactly like the main system does
+        context_text, source_info = format_context_for_llm(user_results, max_length=3000)
+        
+        return {
+            "search_results_count": len(user_results),
+            "context_sent_to_ai": context_text,
+            "context_length": len(context_text),
+            "source_info": source_info,
+            "first_chunk_preview": user_results[0][0].page_content[:800] if user_results else "No chunks",
+            "relevance_scores": [score for _, score in user_results]
+        }
+        
+    except Exception as e:
+        return {"error": str(e)}
+
 @app.get("/debug/simple-search-test")
 async def simple_search_test(user_id: str = "user_user_dem"):
     """Simple search test - NO AUTH REQUIRED"""
