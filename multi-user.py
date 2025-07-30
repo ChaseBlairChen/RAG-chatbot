@@ -2093,6 +2093,68 @@ python your_filename.py
     </html>
     """
 
+@app.get("/debug/search-scope-test")
+async def debug_search_scope_test(user_id: str = "user_user_dem", search_scope: str = "user_only"):
+    """Debug search scope behavior - NO AUTH REQUIRED"""
+    try:
+        # Test different search scenarios
+        query = "SHB 1260 $183 housing homelessness document recording surcharge"
+        
+        # Test 1: Search with user_only scope (what you're using)
+        user_only_results = []
+        if search_scope in ["all", "user_only"]:
+            user_results = container_manager.enhanced_search_user_container(
+                user_id, query, "", k=5, document_id=None
+            )
+            user_only_results = user_results
+        
+        # Test 2: Search with all scope
+        all_scope_results, sources_searched, retrieval_method = combined_search(
+            query, user_id, "all", "", use_enhanced=True, k=5, document_id=None
+        )
+        
+        # Test 3: Get your uploaded documents
+        user_documents = []
+        for file_id, file_data in uploaded_files.items():
+            if file_data.get('user_id') == user_id:
+                user_documents.append({
+                    'file_id': file_id,
+                    'filename': file_data['filename']
+                })
+        
+        return {
+            "query_used": query,
+            "search_scope_tested": search_scope,
+            "user_only_results": len(user_only_results),
+            "user_only_top_chunks": [
+                {
+                    "relevance": score,
+                    "preview": doc.page_content[:200] if hasattr(doc, 'page_content') else str(doc)[:200],
+                    "contains_shb_1260": "SHB 1260" in (doc.page_content if hasattr(doc, 'page_content') else str(doc))
+                }
+                for doc, score in user_only_results[:3]
+            ],
+            "all_scope_results": len(all_scope_results),
+            "all_scope_top_chunks": [
+                {
+                    "relevance": score,
+                    "preview": doc.page_content[:200] if hasattr(doc, 'page_content') else str(doc)[:200],
+                    "contains_shb_1260": "SHB 1260" in (doc.page_content if hasattr(doc, 'page_content') else str(doc))
+                }
+                for doc, score in all_scope_results[:3]
+            ],
+            "your_uploaded_documents": user_documents,
+            "sources_searched": sources_searched,
+            "retrieval_method": retrieval_method
+        }
+        
+    except Exception as e:
+        import traceback
+        return {
+            "error": str(e),
+            "traceback": traceback.format_exc()
+        }
+
 @app.get("/debug/context-test")
 async def debug_context_test(user_id: str = "user_user_dem"):
     """Debug what context is being sent to AI - NO AUTH REQUIRED"""
