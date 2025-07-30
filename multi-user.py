@@ -629,8 +629,17 @@ class UserContainerManager:
                 container_id = self.create_user_container(user_id)
                 user_db = self.get_user_database_safe(user_id)
             
-            # Use BERT-based semantic chunking instead of basic chunking
-            chunks = semantic_chunking_with_bert(document_text, max_chunk_size=1500, overlap=300)
+            # TEMPORARY: Use basic chunking for faster processing (large documents)
+            # TODO: Re-enable semantic chunking after optimization
+            text_splitter = RecursiveCharacterTextSplitter(
+                chunk_size=1000,  # Smaller chunks for faster processing
+                chunk_overlap=200,
+                length_function=len,
+            )
+            chunks = text_splitter.split_text(document_text)
+            
+            logger.info(f"Using basic chunking: {len(chunks)} chunks created")
+            
             documents = []
             
             for i, chunk in enumerate(chunks):
@@ -640,7 +649,7 @@ class UserContainerManager:
                 doc_metadata['user_id'] = user_id
                 doc_metadata['upload_timestamp'] = datetime.utcnow().isoformat()
                 doc_metadata['chunk_size'] = len(chunk)
-                doc_metadata['chunking_method'] = f'semantic_{sentence_model_name}' if sentence_model else 'basic'
+                doc_metadata['chunking_method'] = 'basic_fast'  # Indicate fast processing
                 
                 if file_id:
                     doc_metadata['file_id'] = file_id
@@ -651,7 +660,7 @@ class UserContainerManager:
                 ))
             
             user_db.add_documents(documents)
-            logger.info(f"Added {len(documents)} semantic chunks for document {file_id or 'unknown'} to user {user_id}'s container")
+            logger.info(f"Added {len(documents)} basic chunks for document {file_id or 'unknown'} to user {user_id}'s container")
             return True
             
         except Exception as e:
