@@ -1138,8 +1138,31 @@ def combined_search(query: str, user_id: Optional[str], search_scope: str, conve
     sources_searched = []
     retrieval_method = "basic"
     
-    # Check for specific legal document types and prioritize accordingly
-    bill_match = re.search(r"\b(HB|SB|SSB|ESSB|SHB|ESHB)\s+(\d+)\b", query, re.IGNORECASE)
+    # Enhanced legal citation detection for complex scenarios
+    legal_citations = []
+    
+    # Extract all legal citations from the query
+    if re.search(r"\bWAC\s+(\d+[-\w]+)\b", query, re.IGNORECASE):
+        legal_citations.append(("wac", re.search(r"\bWAC\s+(\d+[-\w]+)\b", query, re.IGNORECASE).group(0)))
+    if re.search(r"\bRCW\s+(\d+(?:\.\d+)+)\b", query, re.IGNORECASE):
+        legal_citations.append(("rcw", re.search(r"\bRCW\s+(\d+(?:\.\d+)+)\b", query, re.IGNORECASE).group(0)))
+    if re.search(r"\b(\d+)\s+U\.?S\.?C\.?\s+§?\s*(\d+)\b", query, re.IGNORECASE):
+        legal_citations.append(("usc", re.search(r"\b(\d+)\s+U\.?S\.?C\.?\s+§?\s*(\d+)\b", query, re.IGNORECASE).group(0)))
+    if re.search(r"\b(HB|SB|SSB|ESSB|SHB|ESHB)\s+(\d+)\b", query, re.IGNORECASE):
+        legal_citations.append(("bill", re.search(r"\b(HB|SB|SSB|ESSB|SHB|ESHB)\s+(\d+)\b", query, re.IGNORECASE).group(0)))
+    
+    # If multiple legal citations found, this is a complex legal analysis
+    multi_citation_mode = len(legal_citations) > 1
+    
+    if multi_citation_mode:
+        logger.info(f"🎯 Complex legal analysis detected with citations: {[cite[1] for cite in legal_citations]}")
+        special_search_mode = True
+        search_type = "multi_citation"
+        target_identifier = " + ".join([cite[1] for cite in legal_citations])
+    
+    # Standard single citation detection (existing code)
+    elif not special_search_mode:
+        bill_match = re.search(r"\b(HB|SB|SSB|ESSB|SHB|ESHB)\s+(\d+)\b", query, re.IGNORECASE)
     wac_match = re.search(r"\bWAC\s+(\d+[-\w]+)\b", query, re.IGNORECASE)
     federal_statute_match = re.search(r"\b(\d+)\s+U\.?S\.?C\.?\s+§?\s*(\d+)\b", query, re.IGNORECASE)
     cfr_match = re.search(r"\b(\d+)\s+C\.?F\.?R\.?\s+§?\s*(\d+(?:\.\d+)*)\b", query, re.IGNORECASE)
@@ -1375,11 +1398,14 @@ def call_openrouter_api(prompt: str, api_key: str, api_base: str = "https://open
     
     models_to_try = [
         "moonshotai/kimi-k2:free",
+        "deepseek/deepseek-r1",
         "deepseek/deepseek-chat",
+        "qwen/qwen-2.5-72b-instruct",
+        "z-ai/glm-4.5-air:free",
+        "mistralai/mistral-7b-instruct:free",
         "microsoft/phi-3-mini-128k-instruct:free",
         "meta-llama/llama-3.2-3b-instruct:free",
         "google/gemma-2-9b-it:free",
-        "mistralai/mistral-7b-instruct:free",
         "openchat/openchat-7b:free"
     ]
     
@@ -1758,7 +1784,21 @@ LEGAL ANALYSIS:"""
         else:
             response_text = f"Based on the retrieved documents:\n\n{context_text}\n\nPlease review this information to answer your question."
         
-        MIN_RELEVANCE_SCORE = 0.15
+        # Convert relevance scores to user-friendly labels
+        def get_relevance_label(score):
+            if score <= 0.01:
+                return "Excellent"
+            elif score <= 0.5:
+                return "Very High"
+            elif score <= 1.0:
+                return "High"
+            elif score <= 2.0:
+                return "Good"
+            elif score <= 5.0:
+                return "Moderate"
+            else:
+                return "Low"
+        
         relevant_sources = [s for s in source_info if s['relevance'] >= MIN_RELEVANCE_SCORE]
         
         if relevant_sources:
@@ -1766,7 +1806,8 @@ LEGAL ANALYSIS:"""
             for source in relevant_sources:
                 source_type = source['source_type'].replace('_', ' ').title()
                 page_info = f", Page {source['page']}" if source['page'] is not None else ""
-                response_text += f"\n- [{source_type}] {source['file_name']}{page_info} (Relevance: {source['relevance']:.2f})"
+                relevance_label = get_relevance_label(source['relevance'])
+                response_text += f"\n- [{source_type}] {source['file_name']}{page_info} ({relevance_label})"
         
         confidence_score = calculate_confidence_score(retrieved_results, len(response_text))
         
