@@ -341,7 +341,7 @@ os.makedirs(USER_CONTAINERS_PATH, exist_ok=True)
 OPENROUTER_API_KEY = os.environ.get("OPENAI_API_KEY")
 OPENAI_API_BASE = os.environ.get("OPENAI_API_BASE", "https://openrouter.ai/api/v1")
 AI_ENABLED = bool(OPENROUTER_API_KEY) and AIOHTTP_AVAILABLE
-MAX_FILE_SIZE = 10 * 1024 * 1024  # 10MB
+MAX_FILE_SIZE = 50 * 1024 * 1024  # Increased to 50MB for legal documents
 LEGAL_EXTENSIONS = {'.pdf', '.txt', '.docx', '.rtf'}
 
 security = HTTPBearer(auto_error=False)
@@ -1517,6 +1517,7 @@ def call_openrouter_api(prompt: str, api_key: str, api_base: str = "https://open
     
     models_to_try = [
         "moonshotai/kimi-k2:free",
+        "deepseek/deepseek-chat",
         "microsoft/phi-3-mini-128k-instruct:free",
         "meta-llama/llama-3.2-3b-instruct:free",
         "google/gemma-2-9b-it:free",
@@ -1538,6 +1539,7 @@ def call_openrouter_api(prompt: str, api_key: str, api_base: str = "https://open
             
             result = response.json()
             if 'choices' in result and len(result['choices']) > 0:
+                logger.info(f"✅ Successfully used model: {model}")
                 return result['choices'][0]['message']['content'].strip()
                 
         except Exception as e:
@@ -1947,22 +1949,42 @@ async def upload_user_document(
     file: UploadFile = File(...),
     current_user: User = Depends(get_current_user)
 ):
-    """Enhanced upload endpoint with file_id tracking"""
+    """Enhanced upload endpoint with file_id tracking and timeout handling"""
     start_time = datetime.utcnow()
     
     try:
+        # Check file size first (before reading)
         file.file.seek(0, 2)
         file_size = file.file.tell()
         file.file.seek(0)
         
         if file_size > MAX_FILE_SIZE:
-            raise HTTPException(status_code=400, detail=f"File too large. Maximum size is {MAX_FILE_SIZE//1024//1024}MB")
+            raise HTTPException(
+                status_code=400, 
+                detail=f"File too large. Maximum size is {MAX_FILE_SIZE//1024//1024}MB. Your file: {file_size//1024//1024}MB"
+            )
         
         file_ext = os.path.splitext(file.filename)[1].lower()
         if file_ext not in LEGAL_EXTENSIONS:
             raise HTTPException(status_code=400, detail=f"Unsupported file type. Supported: {LEGAL_EXTENSIONS}")
         
-        content, pages_processed, warnings = SafeDocumentProcessor.process_document_safe(file)
+        logger.info(f"Processing upload: {file.filename} ({file_size//1024}KB) for user {current_user.user_id}")
+        
+        # Process document with timeout protection
+        try:
+            content, pages_processed, warnings = SafeDocumentProcessor.process_document_safe(file)
+        except Exception as doc_error:
+            logger.error(f"Document processing failed: {doc_error}")
+            raise HTTPException(
+                status_code=422, 
+                detail=f"Failed to process document: {str(doc_error)}"
+            )
+        
+        if not content or len(content.strip()) < 50:
+            raise HTTPException(
+                status_code=422,
+                detail="Document appears to be empty or could not be processed properly"
+            )
         
         file_id = str(uuid.uuid4())
         metadata = {
@@ -1972,15 +1994,27 @@ async def upload_user_document(
             'user_id': current_user.user_id,
             'file_type': file_ext,
             'pages': pages_processed,
-            'file_size': file_size
+            'file_size': file_size,
+            'content_length': len(content),
+            'processing_warnings': warnings
         }
         
-        success = container_manager.add_document_to_container(
-            current_user.user_id,
-            content,
-            metadata,
-            file_id
-        )
+        logger.info(f"Adding document to container: {len(content)} chars, {pages_processed} pages")
+        
+        # Add to container with timeout protection
+        try:
+            success = container_manager.add_document_to_container(
+                current_user.user_id,
+                content,
+                metadata,
+                file_id
+            )
+        except Exception as container_error:
+            logger.error(f"Container operation failed: {container_error}")
+            raise HTTPException(
+                status_code=500,
+                detail=f"Failed to store document: {str(container_error)}"
+            )
         
         if not success:
             raise HTTPException(status_code=500, detail="Failed to add document to user container")
@@ -1993,13 +2027,16 @@ async def upload_user_document(
             'pages_processed': pages_processed,
             'uploaded_at': datetime.utcnow(),
             'session_id': session_id,
-            'file_size': file_size
+            'file_size': file_size,
+            'content_length': len(content)
         }
         
         processing_time = (datetime.utcnow() - start_time).total_seconds()
         
+        logger.info(f"Upload successful: {file.filename} processed in {processing_time:.2f}s")
+        
         return DocumentUploadResponse(
-            message=f"Document {file.filename} uploaded successfully to your personal container",
+            message=f"Document {file.filename} uploaded successfully ({pages_processed} pages, {len(content)} chars)",
             file_id=file_id,
             pages_processed=pages_processed,
             processing_time=processing_time,
@@ -2012,9 +2049,13 @@ async def upload_user_document(
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Error uploading user document: {e}")
+        processing_time = (datetime.utcnow() - start_time).total_seconds()
+        logger.error(f"Error uploading user document after {processing_time:.2f}s: {e}")
         traceback.print_exc()
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(
+            status_code=500, 
+            detail=f"Upload failed after {processing_time:.2f}s: {str(e)}"
+        )
 
 @app.get("/user/documents")
 async def list_user_documents(current_user: User = Depends(get_current_user)):
@@ -2731,7 +2772,7 @@ if __name__ == "__main__":
     logger.info(f"🚀 Starting FULLY FIXED Enhanced Legal Assistant on port {port}")
     logger.info(f"ChromaDB Path: {DEFAULT_CHROMA_PATH}")
     logger.info(f"User Containers Path: {USER_CONTAINERS_PATH}")
-    logger.info(f"AI Status: {'ENABLED with DeepSeek' if AI_ENABLED else 'DISABLED - Set OPENAI_API_KEY to enable'}")
+    logger.info(f"AI Status: {'ENABLED with Kimi-K2' if AI_ENABLED else 'DISABLED - Set OPENAI_API_KEY to enable'}")
     logger.info(f"PDF processing: PyMuPDF={PYMUPDF_AVAILABLE}, pdfplumber={PDFPLUMBER_AVAILABLE}")
     logger.info(f"Features: Comprehensive analysis, document-specific targeting, container cleanup, enhanced error handling")
     logger.info(f"Version: 10.0.0-SmartRAG-ComprehensiveAnalysis")
