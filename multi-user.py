@@ -625,18 +625,19 @@ class UserContainerManager:
                 container_id = self.create_user_container(user_id)
                 user_db = self.get_user_database_safe(user_id)
             
-            # TEMPORARY: Use basic chunking for faster processing (large documents)
+            # Use larger chunks to keep bill information together
             text_splitter = RecursiveCharacterTextSplitter(
-                chunk_size=800,  # Even smaller chunks for faster processing
-                chunk_overlap=100,
+                chunk_size=2000,  # Larger chunks to keep bill info together
+                chunk_overlap=500,  # More overlap to ensure bills don't get split
                 length_function=len,
+                separators=["\n\n", "\nHB ", "\nSB ", "\nSHB ", "\nSSB ", "\nESHB ", "\nESSB ", "\n", " "]
             )
             chunks = text_splitter.split_text(document_text)
             
-            logger.info(f"Using basic chunking: {len(chunks)} chunks created")
+            logger.info(f"Using bill-aware chunking: {len(chunks)} chunks created")
             
             # Process in smaller batches to avoid memory issues
-            batch_size = 50  # Process 50 chunks at a time
+            batch_size = 25  # Smaller batches for larger chunks
             total_batches = (len(chunks) + batch_size - 1) // batch_size
             
             for batch_num in range(total_batches):
@@ -654,7 +655,13 @@ class UserContainerManager:
                     doc_metadata['user_id'] = user_id
                     doc_metadata['upload_timestamp'] = datetime.utcnow().isoformat()
                     doc_metadata['chunk_size'] = len(chunk)
-                    doc_metadata['chunking_method'] = 'basic_fast_batch'
+                    doc_metadata['chunking_method'] = 'bill_aware_chunking'
+                    
+                    # Extract bill numbers from chunk for better search
+                    bill_numbers = re.findall(r'\b(?:HB|SB|SHB|SSB|ESHB|ESSB)\s+\d+', chunk)
+                    if bill_numbers:
+                        doc_metadata['contains_bills'] = ', '.join(bill_numbers)
+                        logger.info(f"Chunk {start_idx + i} contains bills: {bill_numbers}")
                     
                     if file_id:
                         doc_metadata['file_id'] = file_id
@@ -1589,31 +1596,64 @@ def extract_bill_information(context_text: str, bill_number: str) -> Dict[str, s
     """Pre-extract bill information using regex patterns"""
     extracted_info = {}
     
-    # Pattern to find bill information
-    bill_pattern = rf"{bill_number}.*?(?=\n\n|\n[A-Z]|\Z)"
-    bill_match = re.search(bill_pattern, context_text, re.DOTALL | re.IGNORECASE)
+    # Enhanced pattern to find bill information with more context
+    bill_patterns = [
+        rf"{bill_number}[^\n]*(?:\n(?:[^\n]*(?:sponsors?|final\s+status|enables|authorizes|establishes)[^\n]*\n?)*)",
+        rf"{bill_number}.*?(?=\n\s*[A-Z]{{2,}}|\n\s*[A-Z]{{1,3}}\s+\d+|\Z)",
+        rf"{bill_number}[^\n]*\n(?:[^\n]+\n?){{0,5}}"
+    ]
     
-    if bill_match:
-        bill_text = bill_match.group(0)
-        
-        # Extract sponsors
-        sponsor_pattern = r"Sponsors?\s*:\s*([^\n]+)"
-        sponsor_match = re.search(sponsor_pattern, bill_text, re.IGNORECASE)
-        if sponsor_match:
-            extracted_info["sponsors"] = sponsor_match.group(1).strip()
-        
-        # Extract final status
-        status_pattern = r"Final Status\s*:\s*([^\n]+)"
-        status_match = re.search(status_pattern, bill_text, re.IGNORECASE)
-        if status_match:
-            extracted_info["final_status"] = status_match.group(1).strip()
-        
-        # Extract description
-        desc_pattern = rf"{bill_number}[^\n]*\n([^\n]+)"
-        desc_match = re.search(desc_pattern, bill_text, re.IGNORECASE)
-        if desc_match:
-            extracted_info["description"] = desc_match.group(1).strip()
+    for pattern in bill_patterns:
+        bill_match = re.search(pattern, context_text, re.DOTALL | re.IGNORECASE)
+        if bill_match:
+            bill_text = bill_match.group(0)
+            logger.info(f"Found bill text for {bill_number}: {bill_text[:200]}...")
+            
+            # Extract sponsors with multiple patterns
+            sponsor_patterns = [
+                rf"Sponsors?\s*:\s*([^\n]+)",
+                rf"Sponsor\s*:\s*([^\n]+)",
+                rf"(?:Rep\.|Sen\.)\s+([^,\n]+(?:,\s*[^,\n]+)*)"
+            ]
+            
+            for sponsor_pattern in sponsor_patterns:
+                sponsor_match = re.search(sponsor_pattern, bill_text, re.IGNORECASE)
+                if sponsor_match:
+                    extracted_info["sponsors"] = sponsor_match.group(1).strip()
+                    break
+            
+            # Extract final status with multiple patterns
+            status_patterns = [
+                rf"Final Status\s*:\s*([^\n]+)",
+                rf"Status\s*:\s*([^\n]+)",
+                rf"(?:C\s+\d+\s+L\s+\d+)"
+            ]
+            
+            for status_pattern in status_patterns:
+                status_match = re.search(status_pattern, bill_text, re.IGNORECASE)
+                if status_match:
+                    extracted_info["final_status"] = status_match.group(1).strip()
+                    break
+            
+            # Extract description - everything after bill number until next bill or section
+            desc_patterns = [
+                rf"{bill_number}[^\n]*\n([^\n]+(?:\n[^\n]+)*?)(?=\n\s*[A-Z]{{2,}}|\n\s*[A-Z]{{1,3}}\s+\d+|\Z)",
+                rf"{bill_number}[^\n]*\n([^\n]+)"
+            ]
+            
+            for desc_pattern in desc_patterns:
+                desc_match = re.search(desc_pattern, bill_text, re.IGNORECASE)
+                if desc_match:
+                    description = desc_match.group(1).strip()
+                    # Clean up description
+                    description = re.sub(r'\s+', ' ', description)
+                    extracted_info["description"] = description
+                    break
+            
+            logger.info(f"Extracted info for {bill_number}: {extracted_info}")
+            return extracted_info
     
+    logger.warning(f"No bill information found for {bill_number}")
     return extracted_info
 
 def extract_universal_information(context_text: str, question: str) -> Dict[str, Any]:
