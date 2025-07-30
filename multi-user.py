@@ -2093,6 +2093,141 @@ python your_filename.py
     </html>
     """
 
+@app.get("/debug/real-query-test")
+async def debug_real_query_test(user_id: str = "user_user_dem"):
+    """Debug the exact same process as a real query - NO AUTH REQUIRED"""
+    try:
+        # Simulate the exact query processing
+        question = "Tell me about SHB 1260 and how it modifies the $183 housing and homelessness document recording surcharge distribution between counties and qualifying cities."
+        session_id = str(uuid.uuid4())
+        search_scope = "all"  # Using "all sources"
+        response_style = "balanced"
+        use_enhanced_rag = True
+        document_id = None
+        
+        logger.info(f"DEBUG: Starting real query simulation")
+        
+        # Step 1: Parse questions
+        questions = parse_multiple_questions(question) if use_enhanced_rag else [question]
+        combined_query = " ".join(questions)
+        
+        logger.info(f"DEBUG: Questions parsed: {questions}")
+        logger.info(f"DEBUG: Combined query: {combined_query}")
+        
+        # Step 2: Get conversation context
+        conversation_context = get_conversation_context(session_id)
+        
+        # Step 3: Do the combined search (this is the key part)
+        retrieved_results, sources_searched, retrieval_method = combined_search(
+            combined_query, 
+            user_id, 
+            search_scope, 
+            conversation_context,
+            use_enhanced=use_enhanced_rag,
+            document_id=document_id
+        )
+        
+        logger.info(f"DEBUG: Retrieved {len(retrieved_results)} results")
+        logger.info(f"DEBUG: Sources searched: {sources_searched}")
+        logger.info(f"DEBUG: Retrieval method: {retrieval_method}")
+        
+        # Step 4: Check for bill-specific processing
+        bill_match = re.search(r"(HB|SB|SSB|ESSB|SHB|ESHB)\s*(\d+)", question, re.IGNORECASE)
+        bill_processing_info = {}
+        
+        if bill_match:
+            bill_number = f"{bill_match.group(1)} {bill_match.group(2)}"
+            logger.info(f"DEBUG: Bill detected: {bill_number}")
+            bill_processing_info = {
+                "bill_detected": True,
+                "bill_number": bill_number,
+                "bill_specific_search_triggered": True
+            }
+        else:
+            bill_processing_info = {
+                "bill_detected": False,
+                "bill_specific_search_triggered": False
+            }
+        
+        # Step 5: Format context
+        context_text, source_info = format_context_for_llm(retrieved_results)
+        
+        return {
+            "debug_type": "real_query_simulation",
+            "question": question,
+            "parsed_questions": questions,
+            "combined_query": combined_query,
+            "search_scope": search_scope,
+            "bill_processing": bill_processing_info,
+            "retrieved_results_count": len(retrieved_results),
+            "sources_searched": sources_searched,
+            "retrieval_method": retrieval_method,
+            "context_length": len(context_text),
+            "context_preview": context_text[:800],
+            "source_info": source_info,
+            "relevance_scores": [s['relevance'] for s in source_info],
+            "contains_shb_1260": "SHB 1260" in context_text,
+            "context_has_183": "$183" in context_text,
+            "context_has_surcharge": "surcharge" in context_text.lower()
+        }
+        
+    except Exception as e:
+        import traceback
+        return {
+            "error": str(e),
+            "traceback": traceback.format_exc()
+        }
+
+@app.get("/debug/fix-document-tracking")
+async def fix_document_tracking(user_id: str = "user_user_dem"):
+    """Fix missing document tracking - NO AUTH REQUIRED"""
+    try:
+        # Get user database
+        user_db = container_manager.get_user_database_safe(user_id)
+        if not user_db:
+            return {"error": "No user database found"}
+        
+        # Get all documents from the database
+        all_docs = user_db.get()
+        
+        # Extract unique file_ids from metadata
+        found_files = {}
+        for metadata in all_docs.get('metadatas', []):
+            if metadata and 'file_id' in metadata:
+                file_id = metadata['file_id']
+                if file_id not in found_files:
+                    found_files[file_id] = {
+                        'file_id': file_id,
+                        'filename': metadata.get('source', 'unknown'),
+                        'user_id': metadata.get('user_id', user_id),
+                        'pages_processed': metadata.get('pages', 0),
+                        'uploaded_at': metadata.get('upload_date', datetime.utcnow().isoformat()),
+                        'container_id': container_manager.get_container_id(user_id),
+                        'session_id': str(uuid.uuid4()),
+                        'file_size': 0,  # Unknown
+                        'content_length': 0  # Unknown
+                    }
+        
+        # Add to uploaded_files tracking
+        global uploaded_files
+        for file_id, file_data in found_files.items():
+            uploaded_files[file_id] = file_data
+        
+        return {
+            "status": "success",
+            "files_found_in_database": len(found_files),
+            "files_added_to_tracking": list(found_files.keys()),
+            "tracking_rebuilt": True,
+            "message": "Document tracking has been rebuilt from database metadata"
+        }
+        
+    except Exception as e:
+        import traceback
+        return {
+            "error": str(e),
+            "traceback": traceback.format_exc()
+        }
+
 @app.get("/debug/search-scope-test")
 async def debug_search_scope_test(user_id: str = "user_user_dem", search_scope: str = "user_only"):
     """Debug search scope behavior - NO AUTH REQUIRED"""
