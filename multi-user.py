@@ -625,9 +625,9 @@ class UserContainerManager:
                 container_id = self.create_user_container(user_id)
                 user_db = self.get_user_database_safe(user_id)
             
-            # Smart document type detection
+            # Smart document type detection - lowered threshold
             bill_count = len(re.findall(r'\b(?:HB|SB|SHB|SSB|ESHB|ESSB)\s+\d+', document_text))
-            is_legislative = bill_count > 2  # Multiple bills = legislative document
+            is_legislative = bill_count > 1  # Lowered from 2 to 1 - even 1-2 bills = legislative
             
             if is_legislative:
                 # Legislative document: Bill-aware chunking
@@ -767,31 +767,31 @@ class UserContainerManager:
                     logger.info(f"Bill-specific search for: {bill_number}")
                     
                     # First, try to find chunks that contain this specific bill
-                    all_docs = user_db.get()
-                    bill_specific_chunks = []
-                    
-                    for i, (doc_id, metadata, content) in enumerate(zip(all_docs['ids'], all_docs['metadatas'], all_docs['documents'])):
-                        if metadata and 'contains_bills' in metadata:
-                            if bill_number in metadata['contains_bills']:
-                                # Calculate similarity score for this chunk
-                                similarity_results = user_db.similarity_search_with_score(query, k=1, 
-                                    filter={"chunk_index": metadata.get('chunk_index')})
-                                if similarity_results:
-                                    bill_specific_chunks.append(similarity_results[0])
-                                    logger.info(f"Found {bill_number} in chunk {metadata.get('chunk_index')}")
-                    
-                    if bill_specific_chunks:
-                        logger.info(f"Using {len(bill_specific_chunks)} bill-specific chunks")
-                        # Boost the relevance of bill-specific chunks
-                        boosted_chunks = [(doc, min(score + 0.2, 1.0)) for doc, score in bill_specific_chunks]
+                    try:
+                        all_docs = user_db.get()
+                        bill_specific_chunks = []
                         
-                        # Get additional context chunks
-                        regular_results = user_db.similarity_search_with_score(query, k=k, filter=filter_dict)
+                        for i, (doc_id, metadata, content) in enumerate(zip(all_docs['ids'], all_docs['metadatas'], all_docs['documents'])):
+                            if metadata and 'contains_bills' in metadata:
+                                if bill_number in metadata['contains_bills']:
+                                    # Create a document object for this chunk
+                                    from langchain.docstore.document import Document
+                                    doc_obj = Document(page_content=content, metadata=metadata)
+                                    # Use a high relevance score since we found exact bill match
+                                    bill_specific_chunks.append((doc_obj, 0.95))  # High relevance for exact matches
+                                    logger.info(f"Found {bill_number} in chunk {metadata.get('chunk_index')} with boosted score")
                         
-                        # Combine and deduplicate
-                        all_results = boosted_chunks + [r for r in regular_results 
-                                                       if not any(r[0].page_content == b[0].page_content for b in boosted_chunks)]
-                        return all_results[:k]
+                        if bill_specific_chunks:
+                            logger.info(f"Using {len(bill_specific_chunks)} bill-specific chunks with high relevance")
+                            # Get additional context chunks with lower threshold
+                            regular_results = user_db.similarity_search_with_score(query, k=k, filter=filter_dict)
+                            
+                            # Combine bill-specific (high score) with regular results
+                            all_results = bill_specific_chunks + regular_results
+                            return remove_duplicate_documents(all_results)[:k]
+                    except Exception as bill_search_error:
+                        logger.warning(f"Bill-specific search failed, falling back to regular search: {bill_search_error}")
+                        # Fall through to regular search
                 
                 # Fallback to regular search
                 direct_results = user_db.similarity_search_with_score(query, k=k, filter=filter_dict)
@@ -1939,7 +1939,7 @@ RESPONSE:"""
         else:
             response_text = f"Based on the retrieved documents:\n\n{context_text}\n\nPlease review this information to answer your question."
         
-        MIN_RELEVANCE_SCORE = 0.25
+        MIN_RELEVANCE_SCORE = 0.15  # Lowered from 0.25 to include more sources
         relevant_sources = [s for s in source_info if s['relevance'] >= MIN_RELEVANCE_SCORE]
         
         if relevant_sources:
