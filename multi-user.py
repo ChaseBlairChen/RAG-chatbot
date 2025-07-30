@@ -501,20 +501,16 @@ class UserContainerManager:
             logger.info(f"Using global embeddings model")
             return
         
-        # Fallback: try to initialize embeddings directly
-        embedding_models_to_try = [
-            "nlpaueb/legal-bert-base-uncased",
-            "law-ai/InCaseLawBERT", 
-            "sentence-transformers/all-mpnet-base-v2",
-            "sentence-transformers/all-roberta-large-v1",
-            "sentence-transformers/all-MiniLM-L12-v2",
-            "all-MiniLM-L6-v2"
+        # TEMPORARY: Use faster embeddings for large document processing
+        fast_embedding_models = [
+            "all-MiniLM-L6-v2",  # Fast and reliable
+            "all-MiniLM-L12-v2",
         ]
         
-        for model_name in embedding_models_to_try:
+        for model_name in fast_embedding_models:
             try:
                 self.embeddings = HuggingFaceEmbeddings(model_name=model_name)
-                logger.info(f"✅ UserContainerManager using embeddings: {model_name}")
+                logger.info(f"✅ UserContainerManager using FAST embeddings: {model_name}")
                 return
             except Exception as e:
                 logger.warning(f"Failed to load {model_name}: {e}")
@@ -630,46 +626,66 @@ class UserContainerManager:
                 user_db = self.get_user_database_safe(user_id)
             
             # TEMPORARY: Use basic chunking for faster processing (large documents)
-            # TODO: Re-enable semantic chunking after optimization
             text_splitter = RecursiveCharacterTextSplitter(
-                chunk_size=1000,  # Smaller chunks for faster processing
-                chunk_overlap=200,
+                chunk_size=800,  # Even smaller chunks for faster processing
+                chunk_overlap=100,
                 length_function=len,
             )
             chunks = text_splitter.split_text(document_text)
             
             logger.info(f"Using basic chunking: {len(chunks)} chunks created")
             
-            documents = []
+            # Process in smaller batches to avoid memory issues
+            batch_size = 50  # Process 50 chunks at a time
+            total_batches = (len(chunks) + batch_size - 1) // batch_size
             
-            for i, chunk in enumerate(chunks):
-                doc_metadata = metadata.copy()
-                doc_metadata['chunk_index'] = i
-                doc_metadata['total_chunks'] = len(chunks)
-                doc_metadata['user_id'] = user_id
-                doc_metadata['upload_timestamp'] = datetime.utcnow().isoformat()
-                doc_metadata['chunk_size'] = len(chunk)
-                doc_metadata['chunking_method'] = 'basic_fast'  # Indicate fast processing
+            for batch_num in range(total_batches):
+                start_idx = batch_num * batch_size
+                end_idx = min(start_idx + batch_size, len(chunks))
+                batch_chunks = chunks[start_idx:end_idx]
                 
-                if file_id:
-                    doc_metadata['file_id'] = file_id
+                logger.info(f"Processing batch {batch_num + 1}/{total_batches} ({len(batch_chunks)} chunks)")
                 
-                documents.append(Document(
-                    page_content=chunk,
-                    metadata=doc_metadata
-                ))
+                documents = []
+                for i, chunk in enumerate(batch_chunks):
+                    doc_metadata = metadata.copy()
+                    doc_metadata['chunk_index'] = start_idx + i
+                    doc_metadata['total_chunks'] = len(chunks)
+                    doc_metadata['user_id'] = user_id
+                    doc_metadata['upload_timestamp'] = datetime.utcnow().isoformat()
+                    doc_metadata['chunk_size'] = len(chunk)
+                    doc_metadata['chunking_method'] = 'basic_fast_batch'
+                    
+                    if file_id:
+                        doc_metadata['file_id'] = file_id
+                    
+                    # CRITICAL FIX: Clean metadata - remove lists and complex objects
+                    clean_metadata = {}
+                    for key, value in doc_metadata.items():
+                        if isinstance(value, (str, int, float, bool)):
+                            clean_metadata[key] = value
+                        elif isinstance(value, list):
+                            clean_metadata[key] = str(value)  # Convert list to string
+                        elif value is None:
+                            clean_metadata[key] = ""
+                        else:
+                            clean_metadata[key] = str(value)  # Convert other types to string
+                    
+                    documents.append(Document(
+                        page_content=chunk,
+                        metadata=clean_metadata
+                    ))
+                
+                # Add batch to ChromaDB
+                try:
+                    user_db.add_documents(documents)
+                    logger.info(f"✅ Added batch {batch_num + 1} ({len(documents)} chunks)")
+                except Exception as batch_error:
+                    logger.error(f"❌ Batch {batch_num + 1} failed: {batch_error}")
+                    return False
             
-            logger.info(f"Starting to add {len(documents)} documents to ChromaDB...")
-            
-            # Add documents with timeout protection
-            try:
-                user_db.add_documents(documents)
-                logger.info(f"✅ Successfully added {len(documents)} basic chunks for document {file_id or 'unknown'} to user {user_id}'s container")
-                return True
-            except Exception as chroma_error:
-                logger.error(f"❌ ChromaDB add_documents failed: {chroma_error}")
-                logger.error(f"Error type: {type(chroma_error).__name__}")
-                return False
+            logger.info(f"✅ Successfully added ALL {len(chunks)} chunks for document {file_id or 'unknown'}")
+            return True
             
         except Exception as e:
             logger.error(f"❌ Error in add_document_to_container: {e}")
