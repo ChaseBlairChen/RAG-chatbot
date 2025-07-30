@@ -2099,6 +2099,79 @@ python your_filename.py
     </html>
     """
 
+@app.get("/debug/simple-search-test")
+async def simple_search_test(user_id: str = "user_user_dem"):
+    """Simple search test - NO AUTH REQUIRED"""
+    try:
+        # Get user database
+        user_db = container_manager.get_user_database_safe(user_id)
+        if not user_db:
+            return {"error": "No user database found", "user_id": user_id}
+        
+        # Get all documents
+        all_docs = user_db.get()
+        total_chunks = len(all_docs.get('ids', []))
+        
+        # Search for SHB 1260 and $183 surcharge
+        found_shb_1260 = []
+        found_183_surcharge = []
+        found_document_recording = []
+        
+        for i, (doc_id, metadata, content) in enumerate(zip(
+            all_docs.get('ids', []), 
+            all_docs.get('metadatas', []), 
+            all_docs.get('documents', [])
+        )):
+            if content:
+                # Search for SHB 1260
+                if 'SHB 1260' in content:
+                    found_shb_1260.append({
+                        'chunk_index': metadata.get('chunk_index', 'unknown') if metadata else 'no_metadata',
+                        'content_preview': content[:600],
+                        'contains_183': '$183' in content,
+                        'contains_surcharge': 'surcharge' in content.lower(),
+                        'contains_distribution': 'distribution' in content.lower()
+                    })
+                
+                # Search for $183 surcharge
+                if '$183' in content and 'surcharge' in content.lower():
+                    found_183_surcharge.append({
+                        'chunk_index': metadata.get('chunk_index', 'unknown') if metadata else 'no_metadata', 
+                        'content_preview': content[:600],
+                        'contains_shb_1260': 'SHB 1260' in content,
+                        'contains_distribution': 'distribution' in content.lower()
+                    })
+                
+                # Search for Document Recording Fees
+                if 'Document Recording Fees' in content:
+                    found_document_recording.append({
+                        'chunk_index': metadata.get('chunk_index', 'unknown') if metadata else 'no_metadata',
+                        'content_preview': content[:600],
+                        'contains_183': '$183' in content,
+                        'contains_shb_1260': 'SHB 1260' in content
+                    })
+        
+        return {
+            "total_chunks": total_chunks,
+            "shb_1260_found": len(found_shb_1260),
+            "shb_1260_chunks": found_shb_1260,
+            "surcharge_found": len(found_183_surcharge),
+            "surcharge_chunks": found_183_surcharge,
+            "document_recording_found": len(found_document_recording),
+            "document_recording_chunks": found_document_recording,
+            "status": "success",
+            "user_id": user_id
+        }
+        
+    except Exception as e:
+        import traceback
+        return {
+            "error": str(e), 
+            "status": "failed",
+            "traceback": traceback.format_exc(),
+            "user_id": user_id
+        }
+
 if __name__ == "__main__":
     import uvicorn
     port = int(os.environ.get("PORT", 8000))
