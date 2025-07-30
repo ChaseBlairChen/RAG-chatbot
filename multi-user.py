@@ -1549,38 +1549,86 @@ def process_query(question: str, session_id: str, user_id: Optional[str], search
                 context_text += enhancement
         
         style_instructions = {
-            "concise": "Please provide a concise answer (1-2 sentences) based on the context.",
-            "balanced": "Please provide a balanced answer (2-3 paragraphs) based on the context.",
-            "detailed": "Please provide a detailed answer with explanations based on the context."
+            "concise": """CONCISE LEGAL SUMMARY MODE:
+- Provide a brief 2-3 sentence legal summary
+- Include bill number, sponsors, and final status
+- State the key legal effect in plain language
+- If insufficient information, specify what additional documents are needed (case law, regulations, etc.)""",
+            
+            "balanced": """BALANCED LEGAL ANALYSIS MODE:
+- Provide 2-3 paragraphs of legal analysis
+- Include statutory details: bill sponsors, status, effective dates
+- Explain legal implications and practical effects
+- Identify any compliance requirements or obligations
+- If analysis requires additional sources, specify: case law, administrative guidance, model forms, etc.
+- Note any legal ambiguities or areas needing clarification""",
+            
+            "detailed": """COMPREHENSIVE LEGAL ANALYSIS MODE:
+- Provide thorough legal analysis with multiple paragraphs
+- Include complete statutory framework: sponsors, status, cross-references
+- Analyze legal implications, compliance obligations, and enforcement mechanisms
+- Identify potential legal issues, risks, and mitigation strategies
+- When insufficient information for complete analysis, specifically request:
+  • Relevant case law (federal/state court decisions)
+  • Administrative regulations and guidance
+  • Legal precedents and advisory opinions
+  • Practice guides and model documents
+- Assess practical implementation challenges and legal uncertainties"""
         }
         
         instruction = style_instructions.get(response_style, style_instructions["balanced"])
         
-        prompt = f"""You are a legal research assistant. Answer the user's question based ONLY on the provided document context.
+        prompt = f"""You are a professional legal research assistant with expertise in legal analysis. Analyze the provided documents and respond according to the appropriate legal analysis mode.
+
+LEGAL ANALYSIS MODES:
+1. **BASIC LEGAL RESEARCH** - When answering factual questions about legislation, statutes, or regulations
+2. **COMPREHENSIVE LEGAL ANALYSIS** - When conducting thorough legal analysis requiring multiple sources
+3. **CASE LAW ANALYSIS** - When legal precedent and judicial decisions are needed
+
+CURRENT QUERY CONTEXT:
+- Sources searched: {', '.join(sources_searched)}
+- Retrieval method: {retrieval_method}
+- Document scope: {"Specific document " + document_id if document_id else "All available documents"}
+
+ANALYSIS INSTRUCTIONS:
+
+**FOR BASIC LEGAL RESEARCH:**
+- Extract and summarize relevant statutory/regulatory information
+- Provide bill sponsors, status, effective dates, and key provisions
+- Cite specific sections and requirements
+
+**FOR COMPREHENSIVE LEGAL ANALYSIS:**
+- Analyze legal implications and potential issues
+- Identify related statutes, regulations, and requirements
+- Assess compliance obligations and practical impacts
+- Note any ambiguities or areas requiring clarification
+
+**FOR CASE LAW ANALYSIS:**
+- When legal precedent is needed but not available, state: "This analysis would benefit from relevant case law. Please consider uploading:"
+  • Federal court decisions on [specific topic]
+  • State court precedents for [jurisdiction]
+  • Administrative law judge decisions
+  • Legal opinions or advisory letters
 
 CRITICAL INSTRUCTIONS:
-1. READ EVERY LINE of the context carefully - the answer may be buried in the middle
-2. SEARCH for the specific bill number mentioned in the question
-3. If you find ANY mention of the bill or topic, extract and provide that information
-4. DO NOT say "not found" unless you have carefully reviewed every single line
-5. The context contains legislative summaries - look for bill numbers like "SHB 1260"
+1. **READ EVERY LINE** of the context carefully - legal information may appear anywhere
+2. **EXTRACT DIRECTLY** - Quote exact statutory language when relevant
+3. **BE PRECISE** - Include specific bill numbers, section references, effective dates
+4. **IDENTIFY GAPS** - When analysis requires additional sources, specifically request them
+5. **PROFESSIONAL TONE** - Use clear, professional legal language
 
-SOURCES SEARCHED: {', '.join(sources_searched)}
-RETRIEVAL METHOD: {retrieval_method}
-{f"DOCUMENT FILTER: Specific document {document_id}" if document_id else "DOCUMENT SCOPE: All available documents"}
+LEGAL RESEARCH GUIDANCE:
+- If insufficient information for complete analysis, specify what additional documents are needed
+- For regulatory compliance questions, note if administrative guidance is needed
+- For litigation-related queries, identify when case law research is essential
+- For transactional matters, highlight when model forms or practice guides would help
 
 USER QUESTION: {questions}
 
-DOCUMENT CONTEXT (READ CAREFULLY LINE BY LINE):
+DOCUMENT CONTEXT (ANALYZE THOROUGHLY):
 {context_text}
 
-RESPONSE INSTRUCTIONS:
-- If you find information about the bill/topic in the question, provide it completely
-- Quote directly from the document when possible
-- Include sponsor names, final status, and description
-- If truly not found after careful review, then state that
-
-ANSWER:"""
+LEGAL ANALYSIS:"""
         
         if AI_ENABLED and OPENROUTER_API_KEY:
             response_text = call_openrouter_api(prompt, OPENROUTER_API_KEY, OPENAI_API_BASE)
