@@ -1515,40 +1515,31 @@ def process_query(question: str, session_id: str, user_id: Optional[str], search
         
         instruction = style_instructions.get(response_style, style_instructions["balanced"])
         
-        prompt = f"""You are a legal research assistant. Provide thorough, accurate responses based on the provided documents.
+        prompt = f"""You are a legal research assistant. Answer the user's question based ONLY on the provided document context.
+
+CRITICAL INSTRUCTIONS:
+1. READ EVERY LINE of the context carefully - the answer may be buried in the middle
+2. SEARCH for the specific bill number mentioned in the question
+3. If you find ANY mention of the bill or topic, extract and provide that information
+4. DO NOT say "not found" unless you have carefully reviewed every single line
+5. The context contains legislative summaries - look for bill numbers like "SHB 1260"
 
 SOURCES SEARCHED: {', '.join(sources_searched)}
 RETRIEVAL METHOD: {retrieval_method}
 {f"DOCUMENT FILTER: Specific document {document_id}" if document_id else "DOCUMENT SCOPE: All available documents"}
 
-INSTRUCTIONS FOR THOROUGH ANALYSIS:
-1. **READ CAREFULLY**: Scan the entire context for information that answers the user's question
-2. **EXTRACT DIRECTLY**: When information is clearly stated, provide it exactly as written
-3. **BE SPECIFIC**: Include names, numbers, dates, and details when present
-4. **QUOTE WHEN HELPFUL**: Use direct quotes for key facts or important language
-5. **CITE SOURCES**: Reference the document name for each piece of information
-6. **BE COMPLETE**: Provide all relevant information found before saying anything is missing
-7. **BE HONEST**: Only say information is unavailable when truly absent from the context
+USER QUESTION: {questions}
 
-RESPONSE STYLE: {instruction}
-
-CONVERSATION HISTORY:
-{conversation_context}
-
-DOCUMENT CONTEXT (ANALYZE THOROUGHLY):
+DOCUMENT CONTEXT (READ CAREFULLY LINE BY LINE):
 {context_text}
 
-USER QUESTION:
-{questions}
+RESPONSE INSTRUCTIONS:
+- If you find information about the bill/topic in the question, provide it completely
+- Quote directly from the document when possible
+- Include sponsor names, final status, and description
+- If truly not found after careful review, then state that
 
-RESPONSE APPROACH:
-- **FIRST**: Identify what specific information the user is asking for
-- **SECOND**: Search the context thoroughly for that information  
-- **THIRD**: Present any information found clearly and completely
-- **FOURTH**: Note what information is not available (if any)
-- **ALWAYS**: Cite the source document for each fact provided
-
-RESPONSE:"""
+ANSWER:"""
         
         if AI_ENABLED and OPENROUTER_API_KEY:
             response_text = call_openrouter_api(prompt, OPENROUTER_API_KEY, OPENAI_API_BASE)
