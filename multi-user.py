@@ -683,12 +683,14 @@ class UserContainerManager:
                             if metadata and 'contains_bills' in metadata:
                                 if bill_number in metadata['contains_bills']:
                                     doc_obj = Document(page_content=content, metadata=metadata)
-                                    bill_specific_chunks.append((doc_obj, 0.95))
+                                    # FIXED: Use very low score (0.001) to ensure these appear first
+                                    bill_specific_chunks.append((doc_obj, 0.001))
                                     logger.info(f"Found {bill_number} in chunk {metadata.get('chunk_index')} with boosted score")
                         
                         if bill_specific_chunks:
                             logger.info(f"Using {len(bill_specific_chunks)} bill-specific chunks with high relevance")
                             regular_results = user_db.similarity_search_with_score(query, k=k, filter=filter_dict)
+                            # FIXED: Put bill-specific chunks first with guaranteed top priority
                             all_results = bill_specific_chunks + regular_results
                             return remove_duplicate_documents(all_results)[:k]
                     except Exception as bill_search_error:
@@ -1483,7 +1485,8 @@ def process_query(question: str, session_id: str, user_id: Optional[str], search
             
             if bill_specific_results:
                 logger.info(f"Using {len(bill_specific_results)} bill-specific chunks for {bill_number}")
-                boosted_results = [(doc, min(score + 0.3, 1.0)) for doc, score in bill_specific_results]
+                # FIXED: Use very low scores (0.001) to ensure bill-specific chunks appear first
+                boosted_results = [(doc, 0.001) for doc, score in bill_specific_results]
                 retrieved_results = boosted_results + [r for r in retrieved_results if r not in bill_specific_results]
                 retrieved_results = retrieved_results[:len(retrieved_results)]
             
