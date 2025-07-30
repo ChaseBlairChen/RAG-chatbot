@@ -482,11 +482,17 @@ class ConversationHistory(BaseModel):
 
 # User Management - ENHANCED VERSION
 class UserContainerManager:
-    """Manages user-specific document containers"""
+    """Manages user-specific document containers with powerful embeddings"""
     
     def __init__(self, base_path: str):
         self.base_path = base_path
-        self.embeddings = HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2")
+        # Use the most powerful embedding model available
+        if embeddings:
+            self.embeddings = embeddings
+        else:
+            # Fallback
+            self.embeddings = HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2")
+        logger.info(f"UserContainerManager using embeddings: {getattr(self.embeddings, 'model_name', 'unknown')}")
     
     def create_user_container(self, user_id: str) -> str:
         container_id = hashlib.sha256(user_id.encode()).hexdigest()[:16]
@@ -570,7 +576,7 @@ class UserContainerManager:
                 doc_metadata['user_id'] = user_id
                 doc_metadata['upload_timestamp'] = datetime.utcnow().isoformat()
                 doc_metadata['chunk_size'] = len(chunk)
-                doc_metadata['chunking_method'] = 'bert_semantic' if sentence_model else 'basic'
+                doc_metadata['chunking_method'] = f'semantic_{sentence_model_name}' if sentence_model else 'basic'
                 
                 if file_id:
                     doc_metadata['file_id'] = file_id
@@ -660,30 +666,62 @@ external_databases = {
     "westlaw": WestlawInterface()
 }
 
-# Load NLP Models
+# Load NLP Models - Enhanced with powerful legal-focused models
 nlp = None
 sentence_model = None
 embeddings = None
 
+# Legal-specific and powerful models to try in order of preference
+EMBEDDING_MODELS = [
+    # Legal-specific models (best for legal documents)
+    "nlpaueb/legal-bert-base-uncased",
+    "law-ai/InCaseLawBERT", 
+    
+    # High-performance general models
+    "sentence-transformers/all-mpnet-base-v2",  # Much better than MiniLM
+    "sentence-transformers/all-roberta-large-v1",
+    "microsoft/DialoGPT-medium",
+    
+    # Fallback models
+    "sentence-transformers/all-MiniLM-L12-v2",  # Better than L6
+    "all-MiniLM-L6-v2"  # Last resort
+]
+
 try:
     nlp = spacy.load("en_core_web_sm")
-    logger.info("spaCy model loaded successfully")
+    logger.info("✅ spaCy model loaded successfully")
 except Exception as e:
     logger.error(f"Failed to load spaCy model: {e}")
     nlp = None
 
-try:
-    sentence_model = SentenceTransformer('all-MiniLM-L6-v2')
-    logger.info("Sentence transformer loaded successfully")
-except Exception as e:
-    logger.error(f"Failed to load Sentence Transformer model: {e}")
-    sentence_model = None
+# Try to load the most powerful available sentence transformer
+sentence_model_name = None
+for model_name in EMBEDDING_MODELS:
+    try:
+        sentence_model = SentenceTransformer(model_name)
+        sentence_model_name = model_name
+        logger.info(f"✅ Loaded powerful sentence model: {model_name}")
+        break
+    except Exception as e:
+        logger.warning(f"Failed to load {model_name}: {e}")
+        continue
 
+if sentence_model is None:
+    logger.error("❌ Failed to load any sentence transformer model")
+    sentence_model_name = "none"
+
+# Load embeddings with the same powerful model
 try:
-    embeddings = HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2")
-    logger.info("HuggingFace embeddings loaded successfully")
+    if sentence_model_name and sentence_model_name != "none":
+        # Use the same model for consistency
+        embeddings = HuggingFaceEmbeddings(model_name=sentence_model_name)
+        logger.info(f"✅ Loaded embeddings with: {sentence_model_name}")
+    else:
+        # Fallback
+        embeddings = HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2")
+        logger.info("⚠️ Using fallback embeddings: all-MiniLM-L6-v2")
 except Exception as e:
-    logger.error(f"Failed to load HuggingFace embeddings: {e}")
+    logger.error(f"Failed to load embeddings: {e}")
     embeddings = None
 
 # Authentication
@@ -735,50 +773,118 @@ def parse_multiple_questions(query_text: str) -> List[str]:
     return questions
 
 def semantic_chunking_with_bert(text: str, max_chunk_size: int = 1500, overlap: int = 300) -> List[str]:
-    """BERT-based semantic chunking for better document processing"""
+    """Advanced semantic chunking with powerful BERT models for legal documents"""
     try:
         if sentence_model is None:
-            # Fallback to basic chunking if BERT not available
+            logger.warning("No sentence model available, using basic chunking")
             return basic_text_chunking(text, max_chunk_size, overlap)
         
-        # Split text into paragraphs first
-        paragraphs = [p.strip() for p in text.split('\n\n') if p.strip()]
-        if not paragraphs:
-            paragraphs = [text]
+        logger.info(f"Using semantic chunking with model: {sentence_model_name}")
+        
+        # For legal documents, split on legal sections and paragraphs
+        # Look for common legal document patterns
+        legal_patterns = [
+            r'\n\s*SECTION\s+\d+',
+            r'\n\s*\d+\.\s+',  # Numbered sections
+            r'\n\s*\([a-z]\)',  # Subsections (a), (b), etc.
+            r'\n\s*WHEREAS',
+            r'\n\s*NOW, THEREFORE',
+            r'\n\s*Article\s+[IVX\d]+',
+        ]
+        
+        # Split text into meaningful sections first
+        sections = []
+        current_pos = 0
+        
+        # Find legal section breaks
+        import re
+        for pattern in legal_patterns:
+            matches = list(re.finditer(pattern, text, re.IGNORECASE))
+            for match in matches:
+                if match.start() > current_pos:
+                    section_text = text[current_pos:match.start()].strip()
+                    if section_text:
+                        sections.append(section_text)
+                current_pos = match.start()
+        
+        # Add remaining text
+        if current_pos < len(text):
+            remaining_text = text[current_pos:].strip()
+            if remaining_text:
+                sections.append(remaining_text)
+        
+        # If no legal patterns found, fall back to paragraph splitting
+        if not sections:
+            sections = [p.strip() for p in text.split('\n\n') if p.strip()]
+        
+        if not sections:
+            sections = [text]
         
         # If document is small enough, return as single chunk
         if len(text) <= max_chunk_size:
             return [text]
         
-        # Calculate embeddings for paragraphs
-        paragraph_embeddings = sentence_model.encode(paragraphs)
+        # Calculate embeddings for sections (batch processing for efficiency)
+        try:
+            section_embeddings = sentence_model.encode(sections, batch_size=32, show_progress_bar=False)
+        except Exception as e:
+            logger.warning(f"Embedding calculation failed: {e}, using basic chunking")
+            return basic_text_chunking(text, max_chunk_size, overlap)
         
-        # Group semantically similar paragraphs
+        # Advanced semantic grouping using cosine similarity
         chunks = []
         current_chunk = []
         current_chunk_size = 0
         
-        for i, paragraph in enumerate(paragraphs):
-            paragraph_size = len(paragraph)
+        for i, section in enumerate(sections):
+            section_size = len(section)
             
-            # If adding this paragraph would exceed chunk size
-            if current_chunk_size + paragraph_size > max_chunk_size and current_chunk:
-                # Save current chunk
-                chunk_text = '\n\n'.join(current_chunk)
-                chunks.append(chunk_text)
+            # If adding this section would exceed chunk size
+            if current_chunk_size + section_size > max_chunk_size and current_chunk:
                 
-                # Start new chunk with overlap from previous chunk
+                # For legal documents, try to find natural breaking points
                 if len(current_chunk) > 1:
-                    # Keep last paragraph for context
-                    overlap_text = current_chunk[-1]
-                    current_chunk = [overlap_text, paragraph]
-                    current_chunk_size = len(overlap_text) + paragraph_size
+                    # Calculate semantic similarity to decide on best split point
+                    chunk_text = '\n\n'.join(current_chunk)
+                    chunks.append(chunk_text)
+                    
+                    # Intelligent overlap: keep semantically similar content
+                    if i > 0:
+                        # Use similarity to determine overlap
+                        prev_embedding = section_embeddings[i-1:i]
+                        curr_embedding = section_embeddings[i:i+1]
+                        
+                        try:
+                            similarity = np.dot(prev_embedding[0], curr_embedding[0])
+                            if similarity > 0.7:  # High similarity - include more overlap
+                                overlap_sections = current_chunk[-2:] if len(current_chunk) > 1 else current_chunk[-1:]
+                            else:
+                                overlap_sections = current_chunk[-1:] if current_chunk else []
+                            
+                            current_chunk = overlap_sections + [section]
+                            current_chunk_size = sum(len(s) for s in current_chunk)
+                        except:
+                            # Fallback to simple overlap
+                            current_chunk = [current_chunk[-1], section] if current_chunk else [section]
+                            current_chunk_size = sum(len(s) for s in current_chunk)
+                    else:
+                        current_chunk = [section]
+                        current_chunk_size = section_size
                 else:
-                    current_chunk = [paragraph]
-                    current_chunk_size = paragraph_size
+                    # Single large section - need to split it
+                    if section_size > max_chunk_size:
+                        # Split large section into smaller parts
+                        large_section_chunks = basic_text_chunking(section, max_chunk_size, overlap)
+                        chunks.extend(large_section_chunks[:-1])  # Add all but last
+                        current_chunk = [large_section_chunks[-1]]  # Keep last for next iteration
+                        current_chunk_size = len(large_section_chunks[-1])
+                    else:
+                        chunks.append(section)
+                        current_chunk = []
+                        current_chunk_size = 0
             else:
-                current_chunk.append(paragraph)
-                current_chunk_size += paragraph_size
+                current_chunk.append(section)
+                current_chunk_size += section_size
         
         # Add remaining chunk
         if current_chunk:
@@ -789,10 +895,11 @@ def semantic_chunking_with_bert(text: str, max_chunk_size: int = 1500, overlap: 
         if not chunks:
             chunks = [text[:max_chunk_size]]
         
+        logger.info(f"Semantic chunking created {len(chunks)} chunks from {len(sections)} sections")
         return chunks
         
     except Exception as e:
-        logger.warning(f"BERT semantic chunking failed: {e}, falling back to basic chunking")
+        logger.error(f"Advanced semantic chunking failed: {e}, falling back to basic chunking")
         return basic_text_chunking(text, max_chunk_size, overlap)
 
 def basic_text_chunking(text: str, max_chunk_size: int = 1500, overlap: int = 300) -> List[str]:
@@ -1340,7 +1447,7 @@ def call_openrouter_api(prompt: str, api_key: str, api_base: str = "https://open
     }
     
     models_to_try = [
-        "deepseek/deepseek-chat",
+        "moonshotai/kimi-k2:free",
         "microsoft/phi-3-mini-128k-instruct:free",
         "meta-llama/llama-3.2-3b-instruct:free",
         "google/gemma-2-9b-it:free",
@@ -2275,7 +2382,9 @@ def health_check():
                     "document_specific_filtering"
                 ],
                 "nlp_model": nlp is not None,
-                "sentence_model": sentence_model is not None
+                "sentence_model": sentence_model is not None,
+                "sentence_model_name": sentence_model_name if sentence_model else "none",
+                "embedding_model": getattr(embeddings, 'model_name', 'unknown') if embeddings else "none"
             },
             "document_processing": {
                 "pdf_support": PYMUPDF_AVAILABLE or PDFPLUMBER_AVAILABLE,
@@ -2286,7 +2395,9 @@ def health_check():
                 "txt_support": True,
                 "safe_document_processor": True,
                 "enhanced_page_estimation": True,
-                "bert_semantic_chunking": sentence_model is not None
+                "bert_semantic_chunking": sentence_model is not None,
+                "advanced_legal_chunking": True,
+                "embedding_model": sentence_model_name if sentence_model else "none"
             }
         },
         "new_endpoints": [
@@ -2321,7 +2432,10 @@ def health_check():
             "🆕 Fixed page estimation with content analysis",
             "🆕 Unstructured.io integration for advanced processing",
             "🆕 BERT-based semantic chunking for better retrieval",
-            "🆕 Enhanced information extraction (bills, sponsors, etc.)"
+            "🆕 Enhanced information extraction (bills, sponsors, etc.)",
+            "🆕 Legal-specific BERT models (InCaseLawBERT, legal-bert-base-uncased)",
+            "🆕 Advanced semantic similarity for intelligent chunking",
+            "🆕 Legal document pattern recognition for better segmentation"
         ],
         # Frontend compatibility fields
         "unified_mode": True,
