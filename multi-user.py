@@ -1138,17 +1138,74 @@ def combined_search(query: str, user_id: Optional[str], search_scope: str, conve
     sources_searched = []
     retrieval_method = "basic"
     
-    # Check if this is a bill-specific query OR $183 surcharge query
+    # Check for specific legal document types and prioritize accordingly
     bill_match = re.search(r"\b(HB|SB|SSB|ESSB|SHB|ESHB)\s+(\d+)\b", query, re.IGNORECASE)
+    wac_match = re.search(r"\bWAC\s+(\d+[-\w]+)\b", query, re.IGNORECASE)
+    federal_statute_match = re.search(r"\b(\d+)\s+U\.?S\.?C\.?\s+§?\s*(\d+)\b", query, re.IGNORECASE)
+    cfr_match = re.search(r"\b(\d+)\s+C\.?F\.?R\.?\s+§?\s*(\d+(?:\.\d+)*)\b", query, re.IGNORECASE)
+    rcw_match = re.search(r"\bRCW\s+(\d+(?:\.\d+)+)\b", query, re.IGNORECASE)
+    public_law_match = re.search(r"\b(?:P\.?L\.?|Pub\.?\s*L\.?)\s*(\d+[-\d]+)\b", query, re.IGNORECASE)
+    case_citation_match = re.search(r"\b(\d+)\s+(?:U\.?S\.?|F\.?\d*d?|S\.?\s*Ct\.?)\s+(\d+)\b", query, re.IGNORECASE)
+    state_statute_match = re.search(r"\b([A-Z]{2,4})\s+§?\s*(\d+(?:[-\.]\d+)*)\b", query, re.IGNORECASE)
+    executive_order_match = re.search(r"\b(?:E\.?O\.?|Executive\s+Order)\s+(\d+)\b", query, re.IGNORECASE)
+    constitutional_match = re.search(r"\b(?:Article|Art\.?)\s+([IVX]+|[0-9]+)(?:,?\s*(?:Section|Sec\.?|§)\s*(\d+))?\b", query, re.IGNORECASE)
     surcharge_match = re.search(r"\$183.*surcharge", query, re.IGNORECASE)
-    bill_specific_mode = bill_match is not None or surcharge_match is not None
     
-    if bill_specific_mode:
+    special_search_mode = any([
+        bill_match, wac_match, federal_statute_match, cfr_match, rcw_match, 
+        public_law_match, case_citation_match, state_statute_match, 
+        executive_order_match, constitutional_match, surcharge_match
+    ])
+    
+    target_identifier = None
+    search_type = None
+    
+    if special_search_mode:
         if bill_match:
-            bill_number = f"{bill_match.group(1)} {bill_match.group(2)}"
-            logger.info(f"🎯 Bill-specific combined search for: {bill_number}")
+            target_identifier = f"{bill_match.group(1)} {bill_match.group(2)}"
+            search_type = "bill"
+            logger.info(f"🎯 Bill-specific search for: {target_identifier}")
+        elif wac_match:
+            target_identifier = f"WAC {wac_match.group(1)}"
+            search_type = "wac"
+            logger.info(f"🎯 WAC regulation search for: {target_identifier}")
+        elif federal_statute_match:
+            target_identifier = f"{federal_statute_match.group(1)} U.S.C. § {federal_statute_match.group(2)}"
+            search_type = "federal_statute"
+            logger.info(f"🎯 Federal statute search for: {target_identifier}")
+        elif cfr_match:
+            target_identifier = f"{cfr_match.group(1)} CFR § {cfr_match.group(2)}"
+            search_type = "cfr"
+            logger.info(f"🎯 CFR regulation search for: {target_identifier}")
+        elif rcw_match:
+            target_identifier = f"RCW {rcw_match.group(1)}"
+            search_type = "rcw"
+            logger.info(f"🎯 RCW statute search for: {target_identifier}")
+        elif public_law_match:
+            target_identifier = f"P.L. {public_law_match.group(1)}"
+            search_type = "public_law"
+            logger.info(f"🎯 Public Law search for: {target_identifier}")
+        elif case_citation_match:
+            target_identifier = f"{case_citation_match.group(1)} {case_citation_match.group(2)}"
+            search_type = "case"
+            logger.info(f"🎯 Case citation search for: {target_identifier}")
+        elif state_statute_match:
+            target_identifier = f"{state_statute_match.group(1)} § {state_statute_match.group(2)}"
+            search_type = "state_statute"
+            logger.info(f"🎯 State statute search for: {target_identifier}")
+        elif executive_order_match:
+            target_identifier = f"Executive Order {executive_order_match.group(1)}"
+            search_type = "executive_order"
+            logger.info(f"🎯 Executive Order search for: {target_identifier}")
+        elif constitutional_match:
+            article = constitutional_match.group(1)
+            section = constitutional_match.group(2) if constitutional_match.group(2) else ""
+            target_identifier = f"Article {article}" + (f", Section {section}" if section else "")
+            search_type = "constitutional"
+            logger.info(f"🎯 Constitutional provision search for: {target_identifier}")
         elif surcharge_match:
-            bill_number = "SHB 1260"  # We know this is the $183 surcharge bill
+            target_identifier = "SHB 1260"  # We know this is the $183 surcharge bill
+            search_type = "surcharge"
             logger.info(f"🎯 $183 surcharge query - targeting SHB 1260")
     
     if search_scope in ["all", "default_only"]:
@@ -1180,28 +1237,32 @@ def combined_search(query: str, user_id: Optional[str], search_scope: str, conve
             if user_results:
                 sources_searched.append("user_container")
                 
-            # FIXED: If bill-specific mode and we found bill chunks, prioritize them
-            if bill_specific_mode and user_results:
-                bill_chunks = []
+            # FIXED: If special search mode and we found target chunks, prioritize them
+            if special_search_mode and user_results:
+                priority_chunks = []
                 other_chunks = []
                 
                 for doc, score in all_results:
-                    # Check for bill number OR $183 + surcharge content
-                    has_target_bill = False
-                    if bill_match and 'contains_bills' in doc.metadata and bill_number in doc.metadata.get('contains_bills', ''):
-                        has_target_bill = True
-                    elif surcharge_match and '$183' in doc.page_content and 'surcharge' in doc.page_content.lower():
-                        has_target_bill = True
+                    # Check for various legal document types
+                    has_target_content = False
                     
-                    if has_target_bill:
-                        bill_chunks.append((doc, 0.001))  # Top priority
-                        logger.info(f"🎯 Prioritizing target chunk in combined search")
+                    if search_type == "bill" and 'contains_bills' in doc.metadata and target_identifier in doc.metadata.get('contains_bills', ''):
+                        has_target_content = True
+                    elif search_type == "surcharge" and '$183' in doc.page_content and 'surcharge' in doc.page_content.lower():
+                        has_target_content = True
+                    elif search_type in ["wac", "federal_statute", "cfr", "rcw", "public_law", "case", "state_statute", "executive_order", "constitutional"] and target_identifier in doc.page_content:
+                        has_target_content = True
+                        logger.info(f"🎯 Found {search_type} content: {target_identifier}")
+                    
+                    if has_target_content:
+                        priority_chunks.append((doc, 0.001))  # Top priority
+                        logger.info(f"🎯 Prioritizing {search_type} chunk in combined search")
                     else:
                         other_chunks.append((doc, score))
                 
-                if bill_chunks:
-                    all_results = bill_chunks + other_chunks
-                    logger.info(f"🎯 Combined search: {len(bill_chunks)} target chunks prioritized")
+                if priority_chunks:
+                    all_results = priority_chunks + other_chunks
+                    logger.info(f"🎯 Combined search: {len(priority_chunks)} {search_type} chunks prioritized")
                     
         except Exception as e:
             logger.error(f"Error searching user container: {e}")
