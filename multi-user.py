@@ -1138,31 +1138,50 @@ def combined_search(query: str, user_id: Optional[str], search_scope: str, conve
     sources_searched = []
     retrieval_method = "basic"
     
+    # Initialize all match variables first
+    bill_match = re.search(r"\b(HB|SB|SSB|ESSB|SHB|ESHB)\s+(\d+)\b", query, re.IGNORECASE)
+    wac_match = re.search(r"\bWAC\s+(\d+[-\w]+)\b", query, re.IGNORECASE)
+    federal_statute_match = re.search(r"\b(\d+)\s+U\.?S\.?C\.?\s+§?\s*(\d+)\b", query, re.IGNORECASE)
+    cfr_match = re.search(r"\b(\d+)\s+C\.?F\.?R\.?\s+§?\s*(\d+(?:\.\d+)*)\b", query, re.IGNORECASE)
+    rcw_match = re.search(r"\bRCW\s+(\d+(?:\.\d+)+)\b", query, re.IGNORECASE)
+    public_law_match = re.search(r"\b(?:P\.?L\.?|Pub\.?\s*L\.?)\s*(\d+[-\d]+)\b", query, re.IGNORECASE)
+    case_citation_match = re.search(r"\b(\d+)\s+(?:U\.?S\.?|F\.?\d*d?|S\.?\s*Ct\.?)\s+(\d+)\b", query, re.IGNORECASE)
+    state_statute_match = re.search(r"\b([A-Z]{2,4})\s+§?\s*(\d+(?:[-\.]\d+)*)\b", query, re.IGNORECASE)
+    executive_order_match = re.search(r"\b(?:E\.?O\.?|Executive\s+Order)\s+(\d+)\b", query, re.IGNORECASE)
+    constitutional_match = re.search(r"\b(?:Article|Art\.?)\s+([IVX]+|[0-9]+)(?:,?\s*(?:Section|Sec\.?|§)\s*(\d+))?\b", query, re.IGNORECASE)
+    surcharge_match = re.search(r"\$183.*surcharge", query, re.IGNORECASE)
+    
     # Enhanced legal citation detection for complex scenarios
     legal_citations = []
     
     # Extract all legal citations from the query
-    if re.search(r"\bWAC\s+(\d+[-\w]+)\b", query, re.IGNORECASE):
-        legal_citations.append(("wac", re.search(r"\bWAC\s+(\d+[-\w]+)\b", query, re.IGNORECASE).group(0)))
-    if re.search(r"\bRCW\s+(\d+(?:\.\d+)+)\b", query, re.IGNORECASE):
-        legal_citations.append(("rcw", re.search(r"\bRCW\s+(\d+(?:\.\d+)+)\b", query, re.IGNORECASE).group(0)))
-    if re.search(r"\b(\d+)\s+U\.?S\.?C\.?\s+§?\s*(\d+)\b", query, re.IGNORECASE):
-        legal_citations.append(("usc", re.search(r"\b(\d+)\s+U\.?S\.?C\.?\s+§?\s*(\d+)\b", query, re.IGNORECASE).group(0)))
-    if re.search(r"\b(HB|SB|SSB|ESSB|SHB|ESHB)\s+(\d+)\b", query, re.IGNORECASE):
-        legal_citations.append(("bill", re.search(r"\b(HB|SB|SSB|ESSB|SHB|ESHB)\s+(\d+)\b", query, re.IGNORECASE).group(0)))
+    if wac_match:
+        legal_citations.append(("wac", wac_match.group(0)))
+    if rcw_match:
+        legal_citations.append(("rcw", rcw_match.group(0)))
+    if federal_statute_match:
+        legal_citations.append(("usc", federal_statute_match.group(0)))
+    if bill_match:
+        legal_citations.append(("bill", bill_match.group(0)))
     
     # If multiple legal citations found, this is a complex legal analysis
     multi_citation_mode = len(legal_citations) > 1
+    
+    special_search_mode = any([
+        bill_match, wac_match, federal_statute_match, cfr_match, rcw_match, 
+        public_law_match, case_citation_match, state_statute_match, 
+        executive_order_match, constitutional_match, surcharge_match, multi_citation_mode
+    ])
+    
+    target_identifier = None
+    search_type = None
     
     if multi_citation_mode:
         logger.info(f"🎯 Complex legal analysis detected with citations: {[cite[1] for cite in legal_citations]}")
         special_search_mode = True
         search_type = "multi_citation"
         target_identifier = " + ".join([cite[1] for cite in legal_citations])
-    
-    # Standard single citation detection (existing code)
-    elif not special_search_mode:
-        bill_match = re.search(r"\b(HB|SB|SSB|ESSB|SHB|ESHB)\s+(\d+)\b", query, re.IGNORECASE)
+    elif special_search_mode:
     wac_match = re.search(r"\bWAC\s+(\d+[-\w]+)\b", query, re.IGNORECASE)
     federal_statute_match = re.search(r"\b(\d+)\s+U\.?S\.?C\.?\s+§?\s*(\d+)\b", query, re.IGNORECASE)
     cfr_match = re.search(r"\b(\d+)\s+C\.?F\.?R\.?\s+§?\s*(\d+(?:\.\d+)*)\b", query, re.IGNORECASE)
