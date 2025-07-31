@@ -1905,32 +1905,68 @@ SOURCES SEARCHED: {', '.join(sources_searched)}
 RETRIEVAL METHOD: {retrieval_method}
 {f"DOCUMENT FILTER: Specific document {document_id}" if document_id else "DOCUMENT SCOPE: All available documents"}
 
-INSTRUCTIONS FOR THOROUGH ANALYSIS:
-1. **READ CAREFULLY**: Scan the entire context for information that answers the user's question
-2. **EXTRACT DIRECTLY**: When information is clearly stated, provide it exactly as written
-3. **BE SPECIFIC**: Include names, numbers, dates, and details when present
-4. **QUOTE WHEN HELPFUL**: Use direct quotes for key facts or important language
-5. **CITE SOURCES**: Reference the document name for each piece of information
-6. **BE COMPLETE**: Provide all relevant information found before saying anything is missing
-7. **BE HONEST**: Only say information is unavailable when truly absent from the context
+STRICT SOURCE REQUIREMENTS:
+- Answer ONLY based on the retrieved documents provided in the context
+- If information is not in the provided documents, state: "This information is not available in the provided documents"
+- Do NOT use general legal knowledge or training data beyond what's explicitly provided
+- Do NOT make assumptions or inferences beyond what's explicitly stated in the documents
+- ALWAYS cite specific document sections when referencing information
 
-RESPONSE STYLE: {instruction}
+HALLUCINATION_CHECK - Before responding, verify:
+1. Is each claim supported by the retrieved documents?
+2. Am I adding information not present in the sources?
+3. If uncertain, default to "information not available"
 
-CONVERSATION HISTORY:
-{conversation_context}
+LEGAL ANALYSIS MODES:
+1. **BASIC LEGAL RESEARCH** - When answering factual questions about legislation, statutes, or regulations
+2. **COMPREHENSIVE LEGAL ANALYSIS** - When conducting thorough legal analysis requiring multiple sources
+3. **CASE LAW ANALYSIS** - When legal precedent and judicial decisions are needed
 
-DOCUMENT CONTEXT (ANALYZE THOROUGHLY):
-{context_text}
+SEARCH CONTEXT:
+- Sources searched: {', '.join(sources_searched)}
+- Retrieval method: {retrieval_method}
+- Document scope: {"Specific document " + document_id if document_id else "All available documents"}
 
-USER QUESTION:
-{questions}
+ANALYSIS INSTRUCTIONS:
+**FOR BASIC LEGAL RESEARCH:**
+- Extract and summarize relevant statutory/regulatory information from provided documents only
+- Provide bill sponsors, status, effective dates, and key provisions if present in documents
+- Cite specific sections and requirements from the provided context
+
+**FOR COMPREHENSIVE LEGAL ANALYSIS:**
+- Analyze legal implications based solely on provided documents
+- Identify related statutes, regulations, and requirements only if present in the context
+- Assess compliance obligations and practical impacts based on available information
+- Note any ambiguities or areas requiring clarification from additional sources
+
+**FOR CASE LAW ANALYSIS:**
+- When legal precedent is needed but not available in provided documents, state: "This analysis would benefit from relevant case law not available in the current documents. Please consider uploading relevant court decisions."
+
+RESPONSE REQUIREMENTS:
+1. If the documents contain relevant information: Provide the answer with specific citations
+2. If the documents are partially relevant: Answer what you can and clearly state what's missing
+3. If the documents don't address the query: State "The provided documents do not contain information about [specific topic]"
+
+WHEN INFORMATION IS MISSING:
+"Based on the provided documents, I cannot provide a complete answer to this question. To provide thorough analysis, I would need documents containing:
+- [Specific statute/regulation needed]
+- [Specific type of legal authority required]"
 
 RESPONSE APPROACH:
-- **FIRST**: Identify what specific information the user is asking for
-- **SECOND**: Search the context thoroughly for that information  
-- **THIRD**: Present any information found clearly and completely
-- **FOURTH**: Note what information is not available (if any)
-- **ALWAYS**: Cite the source document for each fact provided
+1. **IDENTIFY**: What specific information the user is asking for
+2. **SEARCH**: The context thoroughly for that information  
+3. **PRESENT**: Any information found clearly and completely with source citations
+4. **NOTE**: What information is not available (if any)
+
+RESPONSE STYLE: {instruction}
+CONVERSATION HISTORY: {conversation_context}
+
+PROVIDED DOCUMENT CONTEXT:
+{context_text}
+
+USER QUESTION: {questions}
+
+ANSWER BASED SOLELY ON THE ABOVE DOCUMENTS:"""
 
 RESPONSE:"""
         
