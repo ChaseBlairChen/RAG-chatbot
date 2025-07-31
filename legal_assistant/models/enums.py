@@ -1,13 +1,12 @@
-"""Models package"""
-from .api_models import (
-    User, Query, QueryResponse, ComprehensiveAnalysisRequest,
-    StructuredAnalysisResponse, UserDocumentUpload, DocumentUploadResponse,
-    ConversationHistory
-)
-from .enums import AnalysisType
+"""Enumeration types for the legal assistant application"""
+from enum import Enum
 
-__all__ = [
-    'User', 'Query', 'QueryResponse', 'ComprehensiveAnalysisRequest',
-    'StructuredAnalysisResponse', 'UserDocumentUpload', 'DocumentUploadResponse',
-    'ConversationHistory', 'AnalysisType'
-]
+class AnalysisType(str, Enum):
+    """Types of analysis that can be performed on legal documents"""
+    COMPREHENSIVE = "comprehensive"
+    SUMMARY = "document_summary"
+    CLAUSES = "key_clauses"
+    RISKS = "risk_assessment"
+    TIMELINE = "timeline_deadlines"
+    OBLIGATIONS = "party_obligations"
+    MISSING_CLAUSES = "missing_clauses"
