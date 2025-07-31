@@ -231,4 +231,97 @@ async def debug_bill_search_get(
         logger.error(f"Debug bill search failed: {e}")
         return {"error": str(e)}
 
-@router.post("/debug/test-bill
+@router.post("/debug/test-bill-search")
+async def debug_bill_search(
+    bill_number: str = Form(...),
+    user_id: str = Form(...),
+    current_user: User = Depends(get_current_user)
+):
+    """Debug bill-specific search functionality"""
+    
+    try:
+        container_manager = get_container_manager()
+        # Get user database
+        user_db = container_manager.get_user_database_safe(user_id)
+        if not user_db:
+            return {"error": "No user database found"}
+        
+        # Get all documents and check metadata
+        all_docs = user_db.get()
+        found_chunks = []
+        
+        logger.info(f"Debugging search for bill: {bill_number}")
+        logger.info(f"Total documents in database: {len(all_docs.get('ids', []))}")
+        
+        for i, (doc_id, metadata, content) in enumerate(zip(
+            all_docs.get('ids', []), 
+            all_docs.get('metadatas', []), 
+            all_docs.get('documents', [])
+        )):
+            if metadata:
+                chunk_index = metadata.get('chunk_index', 'unknown')
+                contains_bills = metadata.get('contains_bills', '')
+                
+                if bill_number in contains_bills:
+                    found_chunks.append({
+                        'chunk_index': chunk_index,
+                        'contains_bills': contains_bills,
+                        'content_preview': content[:200] + "..." if len(content) > 200 else content
+                    })
+                    logger.info(f"Found {bill_number} in chunk {chunk_index}")
+        
+        # Also test direct text search
+        direct_search = [content for content in all_docs.get('documents', []) if bill_number in content]
+        
+        return {
+            "bill_number": bill_number,
+            "total_chunks": len(all_docs.get('ids', [])),
+            "chunks_with_bill_metadata": found_chunks,
+            "chunks_with_bill_in_text": len(direct_search),
+            "text_search_preview": direct_search[0][:300] + "..." if direct_search else "Not found in text"
+        }
+        
+    except Exception as e:
+        logger.error(f"Debug bill search failed: {e}")
+        return {"error": str(e)}
+
+@router.post("/debug/test-extraction")
+async def debug_test_extraction(
+    question: str = Form(...),
+    user_id: str = Form(...),
+    current_user: User = Depends(get_current_user)
+):
+    """Test information extraction for any question"""
+    
+    try:
+        container_manager = get_container_manager()
+        # Search user's documents
+        user_results = container_manager.enhanced_search_user_container(user_id, question, "", k=5)
+        
+        if user_results:
+            # Get context
+            context_text, source_info = format_context_for_llm(user_results, max_length=3000)
+            
+            # Test extraction
+            import re
+            bill_match = re.search(r"(HB|SB|SSB|ESSB|SHB|ESHB)\s*(\d+)", question, re.IGNORECASE)
+            if bill_match:
+                bill_number = f"{bill_match.group(1)} {bill_match.group(2)}"
+                extracted_info = extract_bill_information(context_text, bill_number)
+            else:
+                extracted_info = extract_universal_information(context_text, question)
+            
+            return {
+                "question": question,
+                "context_preview": context_text[:500] + "...",
+                "extracted_info": extracted_info,
+                "sources_found": len(user_results)
+            }
+        else:
+            return {
+                "question": question,
+                "error": "No relevant documents found"
+            }
+            
+    except Exception as e:
+        return {"error": str(e)}
