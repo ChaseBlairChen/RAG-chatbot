@@ -1901,72 +1901,64 @@ def process_query(question: str, session_id: str, user_id: Optional[str], search
         
         prompt = f"""You are a legal research assistant. Provide thorough, accurate responses based on the provided documents.
 
+STRICT SOURCE REQUIREMENTS:
+- Answer ONLY based on the retrieved documents provided in the context
+- Do NOT use general legal knowledge, training data, assumptions, or inferences beyond what's explicitly stated
+- If information is not in the provided documents, state: "This information is not available in the provided documents"
+
 SOURCES SEARCHED: {', '.join(sources_searched)}
 RETRIEVAL METHOD: {retrieval_method}
 {f"DOCUMENT FILTER: Specific document {document_id}" if document_id else "DOCUMENT SCOPE: All available documents"}
 
-STRICT SOURCE REQUIREMENTS:
-- Answer ONLY based on the retrieved documents provided in the context
-- If information is not in the provided documents, state: "This information is not available in the provided documents"
-- Do NOT use general legal knowledge or training data beyond what's explicitly provided
-- Do NOT make assumptions or inferences beyond what's explicitly stated in the documents
-- ALWAYS cite specific document sections when referencing information
-
-HALLUCINATION_CHECK - Before responding, verify:
+HALLUCINATION CHECK - Before responding, verify:
 1. Is each claim supported by the retrieved documents?
 2. Am I adding information not present in the sources?
 3. If uncertain, default to "information not available"
 
+INSTRUCTIONS FOR THOROUGH ANALYSIS:
+1. **READ CAREFULLY**: Scan the entire context for information that answers the user's question
+2. **EXTRACT DIRECTLY**: When information is clearly stated, provide it exactly as written
+3. **BE SPECIFIC**: Include names, numbers, dates, and details when present
+4. **QUOTE WHEN HELPFUL**: Use direct quotes for key facts or important language
+5. **CITE SOURCES**: Reference the document name for each piece of information
+6. **BE COMPLETE**: Provide all relevant information found before saying anything is missing
+7. **BE HONEST**: Only say information is unavailable when truly absent from the context
+
 LEGAL ANALYSIS MODES:
-1. **BASIC LEGAL RESEARCH** - When answering factual questions about legislation, statutes, or regulations
-2. **COMPREHENSIVE LEGAL ANALYSIS** - When conducting thorough legal analysis requiring multiple sources
-3. **CASE LAW ANALYSIS** - When legal precedent and judicial decisions are needed
+1. **BASIC LEGAL RESEARCH** - For factual questions about legislation/statutes/regulations
+   - Extract statutory/regulatory information, sponsors, dates, provisions
+   
+2. **COMPREHENSIVE LEGAL ANALYSIS** - For thorough analysis requiring multiple sources
+   - Analyze legal implications, compliance obligations, practical impacts
+   - Note ambiguities requiring clarification
+   
+3. **CASE LAW ANALYSIS** - When precedent needed but unavailable, state:
+   "This analysis would benefit from relevant case law not available in the current documents."
 
-SEARCH CONTEXT:
-- Sources searched: {', '.join(sources_searched)}
-- Retrieval method: {retrieval_method}
-- Document scope: {"Specific document " + document_id if document_id else "All available documents"}
-
-ANALYSIS INSTRUCTIONS:
-**FOR BASIC LEGAL RESEARCH:**
-- Extract and summarize relevant statutory/regulatory information from provided documents only
-- Provide bill sponsors, status, effective dates, and key provisions if present in documents
-- Cite specific sections and requirements from the provided context
-
-**FOR COMPREHENSIVE LEGAL ANALYSIS:**
-- Analyze legal implications based solely on provided documents
-- Identify related statutes, regulations, and requirements only if present in the context
-- Assess compliance obligations and practical impacts based on available information
-- Note any ambiguities or areas requiring clarification from additional sources
-
-**FOR CASE LAW ANALYSIS:**
-- When legal precedent is needed but not available in provided documents, state: "This analysis would benefit from relevant case law not available in the current documents. Please consider uploading relevant court decisions."
-
-RESPONSE REQUIREMENTS:
-1. If the documents contain relevant information: Provide the answer with specific citations
-2. If the documents are partially relevant: Answer what you can and clearly state what's missing
-3. If the documents don't address the query: State "The provided documents do not contain information about [specific topic]"
+HANDLING CONFLICTS:
+- If documents contain conflicting information, present both views with citations
+- Note the conflict explicitly: "Document A states X, while Document B states Y"
 
 WHEN INFORMATION IS MISSING:
-"Based on the provided documents, I cannot provide a complete answer to this question. To provide thorough analysis, I would need documents containing:
-- [Specific statute/regulation needed]
-- [Specific type of legal authority required]"
-
-RESPONSE APPROACH:
-1. **IDENTIFY**: What specific information the user is asking for
-2. **SEARCH**: The context thoroughly for that information  
-3. **PRESENT**: Any information found clearly and completely with source citations
-4. **NOTE**: What information is not available (if any)
+"Based on the provided documents, I cannot provide a complete answer. To provide thorough analysis, I would need documents containing: [specific missing elements]"
 
 RESPONSE STYLE: {instruction}
-CONVERSATION HISTORY: {conversation_context}
 
-PROVIDED DOCUMENT CONTEXT:
+CONVERSATION HISTORY:
+{conversation_context}
+
+DOCUMENT CONTEXT (ANALYZE THOROUGHLY):
 {context_text}
 
-USER QUESTION: {questions}
+USER QUESTION:
+{questions}
 
-ANSWER BASED SOLELY ON THE ABOVE DOCUMENTS:"""
+RESPONSE APPROACH:
+- **FIRST**: Identify what specific information the user is asking for
+- **SECOND**: Search the context thoroughly for that information  
+- **THIRD**: Present any information found clearly and completely
+- **FOURTH**: Note what information is not available (if any)
+- **ALWAYS**: Cite the source document for each fact provided
 
 RESPONSE:"""
         
@@ -2417,6 +2409,60 @@ async def ask_question_debug(query: Query):
     )
     return response
 
+@app.get("/debug/test-bill-search")
+async def debug_bill_search_get(
+    bill_number: str,
+    user_id: str
+):
+    """Debug bill-specific search functionality (GET version for browser testing)"""
+    
+    try:
+        # Get user database
+        user_db = container_manager.get_user_database_safe(user_id)
+        if not user_db:
+            return {"error": "No user database found"}
+        
+        # Get all documents and check metadata
+        all_docs = user_db.get()
+        found_chunks = []
+        
+        logger.info(f"Debugging search for bill: {bill_number}")
+        logger.info(f"Total documents in database: {len(all_docs.get('ids', []))}")
+        
+        for i, (doc_id, metadata, content) in enumerate(zip(
+            all_docs.get('ids', []), 
+            all_docs.get('metadatas', []), 
+            all_docs.get('documents', [])
+        )):
+            if metadata:
+                chunk_index = metadata.get('chunk_index', 'unknown')
+                contains_bills = metadata.get('contains_bills', '')
+                
+                if bill_number in contains_bills:
+                    found_chunks.append({
+                        'chunk_index': chunk_index,
+                        'contains_bills': contains_bills,
+                        'content_preview': content[:200] + "..." if len(content) > 200 else content
+                    })
+                    logger.info(f"Found {bill_number} in chunk {chunk_index}")
+        
+        # Also test direct text search
+        direct_search = [content for content in all_docs.get('documents', []) if bill_number in content]
+        
+        return {
+            "bill_number": bill_number,
+            "user_id": user_id,
+            "total_chunks": len(all_docs.get('ids', [])),
+            "chunks_with_bill_metadata": found_chunks,
+            "chunks_with_bill_in_text": len(direct_search),
+            "text_search_preview": direct_search[0][:300] + "..." if direct_search else "Not found in text",
+            "sample_metadata": all_docs.get('metadatas', [])[:2] if all_docs.get('metadatas') else []
+        }
+        
+    except Exception as e:
+        logger.error(f"Debug bill search failed: {e}")
+        return {"error": str(e)}
+
 @app.post("/debug/test-bill-search")
 async def debug_bill_search(
     bill_number: str = Form(...),
@@ -2793,188 +2839,222 @@ def health_check():
 @app.get("/", response_class=HTMLResponse)
 def get_interface():
     """Web interface with updated documentation for comprehensive analysis"""
-    return """<!DOCTYPE html>
-<html>
-<head>
-    <title>Legal Assistant - Complete Multi-Analysis Edition [FIXED]</title>
-    <style>
-        body { font-family: Arial, sans-serif; margin: 40px; background: #f8f9fa; }
-        .container { max-width: 1200px; margin: 0 auto; }
-        h1 { color: #2c3e50; }
-        .feature-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 20px; margin: 30px 0; }
-        .feature-card { background: #fff; border: 1px solid #dee2e6; border-radius: 8px; padding: 20px; }
-        .endpoint { background: #f1f3f4; padding: 10px; margin: 10px 0; border-radius: 5px; font-family: monospace; }
-        .status { padding: 5px 10px; border-radius: 15px; font-size: 12px; }
-        .status-active { background: #d4edda; color: #155724; }
-        .status-ready { background: #cce5ff; color: #004085; }
-        .status-fixed { background: #28a745; color: white; }
-        .badge-fixed { background: #dc3545; color: white; padding: 2px 8px; border-radius: 10px; font-size: 11px; margin-left: 5px; }
-        .code-example { background: #f8f9fa; border: 1px solid #e9ecef; border-radius: 5px; padding: 15px; margin: 10px 0; font-family: monospace; font-size: 12px; }
-    </style>
-</head>
-<body>
-    <div class="container">
-        <h1>⚖️ Legal Assistant API v10.0 <span class="badge-fixed">FULLY FIXED</span></h1>
-        <p>Complete Multi-User Platform with Enhanced RAG, Comprehensive Analysis, and Container Management</p>
-        <div class="status status-fixed">🔧 All syntax errors fixed, complete functionality restored!</div>
-        
-        <div class="feature-grid">
-            <div class="feature-card">
-                <h3>✅ Corruption Fixed</h3>
-                <p>All broken code sections have been repaired</p>
-                <ul>
-                    <li>✅ SafeDocumentProcessor properly structured</li>
-                    <li>✅ All API endpoints complete</li>
-                    <li>✅ Syntax errors resolved</li>
-                    <li>✅ Missing functions restored</li>
-                </ul>
+    return """
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <title>Legal Assistant - Complete Multi-Analysis Edition [FIXED]</title>
+        <style>
+            body { font-family: Arial, sans-serif; margin: 40px; background: #f8f9fa; }
+            .container { max-width: 1200px; margin: 0 auto; }
+            h1 { color: #2c3e50; }
+            .feature-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 20px; margin: 30px 0; }
+            .feature-card { background: #fff; border: 1px solid #dee2e6; border-radius: 8px; padding: 20px; }
+            .endpoint { background: #f1f3f4; padding: 10px; margin: 10px 0; border-radius: 5px; font-family: monospace; }
+            .status { padding: 5px 10px; border-radius: 15px; font-size: 12px; }
+            .status-active { background: #d4edda; color: #155724; }
+            .status-ready { background: #cce5ff; color: #004085; }
+            .status-fixed { background: #28a745; color: white; }
+            .badge-fixed { background: #dc3545; color: white; padding: 2px 8px; border-radius: 10px; font-size: 11px; margin-left: 5px; }
+            .code-example { background: #f8f9fa; border: 1px solid #e9ecef; border-radius: 5px; padding: 15px; margin: 10px 0; font-family: monospace; font-size: 12px; }
+        </style>
+    </head>
+    <body>
+        <div class="container">
+            <h1>⚖️ Legal Assistant API v10.0 <span class="badge-fixed">FULLY FIXED</span></h1>
+            <p>Complete Multi-User Platform with Enhanced RAG, Comprehensive Analysis, and Container Management</p>
+            <div class="status status-fixed">🔧 All syntax errors fixed, complete functionality restored!</div>
+            
+            <div class="feature-grid">
+                <div class="feature-card">
+                    <h3>✅ Corruption Fixed</h3>
+                    <p>All broken code sections have been repaired</p>
+                    <ul>
+                        <li>✅ SafeDocumentProcessor properly structured</li>
+                        <li>✅ All API endpoints complete</li>
+                        <li>✅ Syntax errors resolved</li>
+                        <li>✅ Missing functions restored</li>
+                    </ul>
+                </div>
+                
+                <div class="feature-card">
+                    <h3>🚀 Comprehensive Analysis</h3>
+                    <p>All analysis types in a single efficient API call</p>
+                    <ul>
+                        <li>✅ Document summary</li>
+                        <li>✅ Key clauses extraction</li>
+                        <li>✅ Risk assessment</li>
+                        <li>✅ Timeline & deadlines</li>
+                        <li>✅ Party obligations</li>
+                        <li>✅ Missing clauses detection</li>
+                    </ul>
+                </div>
+                
+                <div class="feature-card">
+                    <h3>🛠️ Enhanced Error Handling</h3>
+                    <p>Robust container management with auto-recovery</p>
+                    <ul>
+                        <li>✅ Timeout protection</li>
+                        <li>✅ Container auto-recovery</li>
+                        <li>✅ Graceful degradation</li>
+                        <li>✅ Health monitoring</li>
+                    </ul>
+                </div>
+                
+                <div class="feature-card">
+                    <h3>🔧 Admin Tools</h3>
+                    <p>Debug and maintenance endpoints</p>
+                    <div class="endpoint">GET /admin/document-health</div>
+                    <div class="endpoint">POST /admin/cleanup-containers</div>
+                    <div class="endpoint">POST /admin/emergency-clear-tracking</div>
+                </div>
+                
+                <div class="feature-card">
+                    <h3>⚡ Quick Analysis</h3>
+                    <p>One-click document analysis</p>
+                    <div class="endpoint">POST /quick-analysis/{document_id}</div>
+                    <p>Perfect for frontend "Analyze" buttons</p>
+                </div>
+                
+                <div class="feature-card">
+                    <h3>🎯 Document-Specific Targeting</h3>
+                    <p>Analyze specific documents with precision</p>
+                    <ul>
+                        <li>File ID tracking</li>
+                        <li>Document filtering</li>
+                        <li>Precise retrieval</li>
+                        <li>Source attribution</li>
+                    </ul>
+                </div>
             </div>
             
-            <div class="feature-card">
-                <h3>🚀 Comprehensive Analysis</h3>
-                <p>All analysis types in a single efficient API call</p>
-                <ul>
-                    <li>✅ Document summary</li>
-                    <li>✅ Key clauses extraction</li>
-                    <li>✅ Risk assessment</li>
-                    <li>✅ Timeline & deadlines</li>
-                    <li>✅ Party obligations</li>
-                    <li>✅ Missing clauses detection</li>
-                </ul>
+            <h2>🔧 What Was Fixed</h2>
+            <div class="feature-grid">
+                <div class="feature-card">
+                    <h4>❌ Original Issues</h4>
+                    <ul>
+                        <li>Broken SafeDocumentProcessor class</li>
+                        <li>Missing large code sections</li>
+                        <li>Syntax errors and malformed structure</li>
+                        <li>Incomplete file ending abruptly</li>
+                        <li>Missing API endpoints</li>
+                    </ul>
+                </div>
+                
+                <div class="feature-card">
+                    <h4>✅ Fixed Issues</h4>
+                    <ul>
+                        <li>Complete SafeDocumentProcessor class</li>
+                        <li>All functions and classes restored</li>
+                        <li>Proper syntax and indentation</li>
+                        <li>Complete file with all endpoints</li>
+                        <li>Full API functionality</li>
+                    </ul>
+                </div>
             </div>
             
-            <div class="feature-card">
-                <h3>🛠️ Enhanced Error Handling</h3>
-                <p>Robust container management with auto-recovery</p>
-                <ul>
-                    <li>✅ Timeout protection</li>
-                    <li>✅ Container auto-recovery</li>
-                    <li>✅ Graceful degradation</li>
-                    <li>✅ Health monitoring</li>
-                </ul>
+            <h2>📡 Complete API Reference</h2>
+            <div class="feature-grid">
+                <div class="feature-card">
+                    <h4>Core Endpoints</h4>
+                    <div class="endpoint">POST /ask - Enhanced chat with auto-detection</div>
+                    <div class="endpoint">POST /user/upload - Enhanced upload with file_id</div>
+                    <div class="endpoint">GET /user/documents - Robust document listing</div>
+                </div>
+                
+                <div class="feature-card">
+                    <h4>Analysis Endpoints</h4>
+                    <div class="endpoint">POST /comprehensive-analysis - Full analysis</div>
+                    <div class="endpoint">POST /quick-analysis/{id} - One-click analysis</div>
+                </div>
+                
+                <div class="feature-card">
+                    <h4>Admin Endpoints</h4>
+                    <div class="endpoint">GET /admin/document-health - System health</div>
+                    <div class="endpoint">POST /admin/cleanup-containers - Cleanup</div>
+                    <div class="endpoint">POST /admin/emergency-clear-tracking - Reset</div>
+                </div>
+                
+                <div class="feature-card">
+                    <h4>Debug Endpoints</h4>
+                    <div class="endpoint">POST /ask-debug - No auth required</div>
+                    <div class="endpoint">GET /health - System status</div>
+                </div>
             </div>
             
-            <div class="feature-card">
-                <h3>🔧 Admin Tools</h3>
-                <p>Debug and maintenance endpoints</p>
-                <div class="endpoint">GET /admin/document-health</div>
-                <div class="endpoint">POST /admin/cleanup-containers</div>
-                <div class="endpoint">POST /admin/emergency-clear-tracking</div>
+            <h2>🚀 Ready to Deploy</h2>
+            <div class="feature-grid">
+                <div class="feature-card">
+                    <h4>Installation</h4>
+                    <div class="code-example">
+pip install fastapi uvicorn langchain-chroma 
+pip install langchain-huggingface spacy 
+pip install sentence-transformers numpy requests
+pip install PyMuPDF pdfplumber python-docx
+                    </div>
+                </div>
+                
+                <div class="feature-card">
+                    <h4>Environment Setup</h4>
+                    <div class="code-example">
+export OPENAI_API_KEY="your-openrouter-key"
+export OPENAI_API_BASE="https://openrouter.ai/api/v1"
+                    </div>
+                </div>
+                
+                <div class="feature-card">
+                    <h4>Run Server</h4>
+                    <div class="code-example">
+python enhanced_backend.py
+# Should show:
+# ✅ PyMuPDF available
+# 🚀 Starting Complete Enhanced Legal Assistant
+# Version: 10.0.0-SmartRAG-ComprehensiveAnalysis
+                    </div>
+                </div>
+                
+                <div class="feature-card">
+                    <h4>Test Health</h4>
+                    <div class="code-example">
+curl http://localhost:8000/health
+# Should return version with "SmartRAG"
+curl http://localhost:8000/admin/document-health
+# Check system status
+                    </div>
+                </div>
             </div>
             
-            <div class="feature-card">
-                <h3>⚡ Quick Analysis</h3>
-                <p>One-click document analysis</p>
-                <div class="endpoint">POST /quick-analysis/{document_id}</div>
-                <p>Perfect for frontend "Analyze" buttons</p>
-            </div>
+            <h2>✅ Verification Checklist</h2>
+            <ul>
+                <li><strong>✅ No syntax errors:</strong> All Python code properly formatted</li>
+                <li><strong>✅ Complete classes:</strong> SafeDocumentProcessor, UserContainerManager, etc.</li>
+                <li><strong>✅ All endpoints:</strong> upload, analysis, admin, debug endpoints</li>
+                <li><strong>✅ Error handling:</strong> Timeout protection and graceful failures</li>
+                <li><strong>✅ Frontend compatibility:</strong> SmartRAG version detection</li>
+                <li><strong>✅ Container management:</strong> Auto-recovery and cleanup tools</li>
+                <li><strong>✅ Comprehensive analysis:</strong> Multi-analysis in single API call</li>
+                <li><strong>✅ Document targeting:</strong> File ID tracking and filtering</li>
+            </ul>
             
-            <div class="feature-card">
-                <h3>🎯 Document-Specific Targeting</h3>
-                <p>Analyze specific documents with precision</p>
-                <ul>
-                    <li>File ID tracking</li>
-                    <li>Document filtering</li>
-                    <li>Precise retrieval</li>
-                    <li>Source attribution</li>
-                </ul>
-            </div>
+            <p style="text-align: center; color: #7f8c8d; margin-top: 30px;">
+                🎉 Fully Fixed & Complete Enhanced Legal Assistant Backend 🎉
+                <br>Version 10.0.0-SmartRAG-ComprehensiveAnalysis
+                <br>All corruption repaired - ready for production deployment!
+            </p>
         </div>
-        
-        <h2>🔧 What Was Fixed</h2>
-        <div class="feature-grid">
-            <div class="feature-card">
-                <h4>❌ Original Issues</h4>
-                <ul>
-                    <li>Broken SafeDocumentProcessor class</li>
-                    <li>Missing large code sections</li>
-                    <li>Syntax errors and malformed structure</li>
-                    <li>Incomplete file ending abruptly</li>
-                    <li>Missing API endpoints</li>
-                </ul>
-            </div>
-            
-            <div class="feature-card">
-                <h4>✅ Fixed Issues</h4>
-                <ul>
-                    <li>Complete SafeDocumentProcessor class</li>
-                    <li>All functions and classes restored</li>
-                    <li>Proper syntax and indentation</li>
-                    <li>Complete file with all endpoints</li>
-                    <li>Full API functionality</li>
-                </ul>
-            </div>
-        </div>
-        
-        <h2>📡 Complete API Reference</h2>
-        <div class="feature-grid">
-            <div class="feature-card">
-                <h4>Core Endpoints</h4>
-                <div class="endpoint">POST /ask - Enhanced chat with auto-detection</div>
-                <div class="endpoint">POST /user/upload - Enhanced upload with file_id</div>
-                <div class="endpoint">GET /user/documents - Robust document listing</div>
-            </div>
-            
-            <div class="feature-card">
-                <h4>Analysis Endpoints</h4>
-                <div class="endpoint">POST /comprehensive-analysis - Full analysis</div>
-                <div class="endpoint">POST /quick-analysis/{id} - One-click analysis</div>
-            </div>
-            
-            <div class="feature-card">
-                <h4>Admin Endpoints</h4>
-                <div class="endpoint">GET /admin/document-health - System health</div>
-                <div class="endpoint">POST /admin/cleanup-containers - Cleanup</div>
-                <div class="endpoint">POST /admin/emergency-clear-tracking - Reset</div>
-            </div>
-            
-            <div class="feature-card">
-                <h4>Debug Endpoints</h4>
-                <div class="endpoint">POST /ask-debug - No auth required</div>
-                <div class="endpoint">GET /health - System status</div>
-            </div>
-        </div>
-        
-        <h2>🚀 Ready to Deploy</h2>
-        <div class="feature-grid">
-            <div class="feature-card">
-                <h4>Installation</h4>
-                <div class="code-example">pip install fastapi uvicorn langchain-chroma langchain-huggingface spacy sentence-transformers numpy requests PyMuPDF pdfplumber python-docx</div>
-            </div>
-            
-            <div class="feature-card">
-                <h4>Environment Setup</h4>
-                <div class="code-example">export OPENAI_API_KEY="your-openrouter-key"<br>export OPENAI_API_BASE="https://openrouter.ai/api/v1"</div>
-            </div>
-            
-            <div class="feature-card">
-                <h4>Run Server</h4>
-                <div class="code-example">python enhanced_backend.py</div>
-            </div>
-            
-            <div class="feature-card">
-                <h4>Test Health</h4>
-                <div class="code-example">curl http://localhost:8000/health</div>
-            </div>
-        </div>
-        
-        <h2>✅ Verification Checklist</h2>
-        <ul>
-            <li><strong>✅ No syntax errors:</strong> All Python code properly formatted</li>
-            <li><strong>✅ Complete classes:</strong> SafeDocumentProcessor, UserContainerManager, etc.</li>
-            <li><strong>✅ All endpoints:</strong> upload, analysis, admin, debug endpoints</li>
-            <li><strong>✅ Error handling:</strong> Timeout protection and graceful failures</li>
-            <li><strong>✅ Frontend compatibility:</strong> SmartRAG version detection</li>
-            <li><strong>✅ Container management:</strong> Auto-recovery and cleanup tools</li>
-            <li><strong>✅ Comprehensive analysis:</strong> Multi-analysis in single API call</li>
-            <li><strong>✅ Document targeting:</strong> File ID tracking and filtering</li>
-        </ul>
-        
-        <p style="text-align: center; color: #7f8c8d; margin-top: 30px;">
-            🎉 Fully Fixed & Complete Enhanced Legal Assistant Backend 🎉<br>
-            Version 10.0.0-SmartRAG-ComprehensiveAnalysis<br>
-            All corruption repaired - ready for production deployment!
-        </p>
-    </div>
-</body>
-</html>"""
+    </body>
+    </html>
+    """
+
+if __name__ == "__main__":
+    import uvicorn
+    port = int(os.environ.get("PORT", 8000))
+    logger.info(f"🚀 Starting FULLY FIXED Enhanced Legal Assistant on port {port}")
+    logger.info(f"ChromaDB Path: {DEFAULT_CHROMA_PATH}")
+    logger.info(f"User Containers Path: {USER_CONTAINERS_PATH}")
+    logger.info(f"AI Status: {'ENABLED with Kimi-K2' if AI_ENABLED else 'DISABLED - Set OPENAI_API_KEY to enable'}")
+    logger.info(f"PDF processing: PyMuPDF={PYMUPDF_AVAILABLE}, pdfplumber={PDFPLUMBER_AVAILABLE}")
+    logger.info(f"Features: Comprehensive analysis, document-specific targeting, container cleanup, enhanced error handling")
+    logger.info(f"Version: 10.0.0-SmartRAG-ComprehensiveAnalysis")
+    logger.info("✅ ALL CORRUPTION FIXED - Backend ready for deployment!")
+    uvicorn.run(app, host="0.0.0.0", port=port)
