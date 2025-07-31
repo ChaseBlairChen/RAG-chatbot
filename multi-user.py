@@ -1964,6 +1964,7 @@ ADDITIONAL GUIDANCE:
 - After fully answering based solely on the provided documents, if relevant key legal principles under Washington state law, any other U.S. state law, or U.S. federal law are not found in the sources, you may add a clearly labeled general legal principles disclaimer.
 - This disclaimer must clearly state it is NOT based on the provided documents but represents general background knowledge of applicable Washington state, other state, and federal law.
 - Do NOT use this disclaimer to answer the user’s question directly; it serves only as supplementary context.
+- This disclaimer must explicitly state that these principles are not found in the provided documents but are usually relevant legal background.
 - Format this disclaimer distinctly at the end of the response under a heading such as "GENERAL LEGAL PRINCIPLES DISCLAIMER."
 
 RESPONSE:"""
