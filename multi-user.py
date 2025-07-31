@@ -1164,19 +1164,22 @@ def combined_search(query: str, user_id: Optional[str], search_scope: str, conve
     if bill_match:
         legal_citations.append(("bill", bill_match.group(0)))
     
-    # If multiple legal citations found, this is a complex legal analysis
-    multi_citation_mode = len(legal_citations) > 1
+    if multiple legal citations found, this is a complex legal analysis
+         multi_citation_mode = len(legal_citations) > 1
     
-    
-    
+       # Fixed version:
     if multi_citation_mode:
         logger.info(f"🎯 Complex legal analysis detected with citations: {[cite[1] for cite in legal_citations]}")
-         # First, determine if special_search_mode should be True
+        search_type = "multi_citation"
+        target_identifier = " + ".join([cite[1] for cite in legal_citations])
+
+# Determine if special_search_mode should be True (correct indentation)
 special_search_mode = any([
     bill_match, wac_match, federal_statute_match, cfr_match, rcw_match, 
     public_law_match, case_citation_match, state_statute_match, 
     executive_order_match, constitutional_match, multi_citation_mode
 ])
+
 
 target_identifier = None
 search_type = None
