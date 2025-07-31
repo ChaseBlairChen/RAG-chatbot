@@ -1,0 +1,77 @@
+"""Configuration and environment variables"""
+import os
+from typing import List
+
+# API Configuration
+OPENROUTER_API_KEY = os.environ.get("OPENAI_API_KEY")
+OPENAI_API_BASE = os.environ.get("OPENAI_API_BASE", "https://openrouter.ai/api/v1")
+
+# Database Paths
+DEFAULT_CHROMA_PATH = os.path.abspath(os.path.join(os.getcwd(), "chromadb-database"))
+USER_CONTAINERS_PATH = os.path.abspath(os.path.join(os.getcwd(), "user-containers"))
+
+# File Processing
+MAX_FILE_SIZE = 50 * 1024 * 1024  # 50MB
+LEGAL_EXTENSIONS = {'.pdf', '.txt', '.docx', '.rtf'}
+
+# External Database Configuration
+LEXISNEXIS_API_KEY = os.environ.get("LEXISNEXIS_API_KEY")
+LEXISNEXIS_API_ENDPOINT = os.environ.get("LEXISNEXIS_API_ENDPOINT")
+WESTLAW_API_KEY = os.environ.get("WESTLAW_API_KEY")
+WESTLAW_API_ENDPOINT = os.environ.get("WESTLAW_API_ENDPOINT")
+
+# Model Names
+EMBEDDING_MODELS = [
+    "nlpaueb/legal-bert-base-uncased",
+    "law-ai/InCaseLawBERT", 
+    "sentence-transformers/all-mpnet-base-v2",
+    "sentence-transformers/all-roberta-large-v1",
+    "microsoft/DialoGPT-medium",
+    "sentence-transformers/all-MiniLM-L12-v2",
+    "all-MiniLM-L6-v2"
+]
+
+FAST_EMBEDDING_MODELS = [
+    "all-MiniLM-L6-v2",
+    "all-MiniLM-L12-v2",
+]
+
+# AI Models
+AI_MODELS = [
+    "moonshotai/kimi-k2:free",
+    "deepseek/deepseek-chat",
+    "microsoft/phi-3-mini-128k-instruct:free",
+    "meta-llama/llama-3.2-3b-instruct:free",
+    "google/gemma-2-9b-it:free",
+    "mistralai/mistral-7b-instruct:free",
+    "openchat/openchat-7b:free"
+]
+
+# Chunk Sizes
+DEFAULT_CHUNK_SIZE = 1500
+LEGISLATIVE_CHUNK_SIZE = 2000
+DEFAULT_CHUNK_OVERLAP = 300
+LEGISLATIVE_CHUNK_OVERLAP = 500
+
+# Search Settings
+DEFAULT_SEARCH_K = 10
+ENHANCED_SEARCH_K = 12
+COMPREHENSIVE_SEARCH_K = 20
+MIN_RELEVANCE_SCORE = 0.15
+
+# Confidence Score Weights
+CONFIDENCE_WEIGHTS = {
+    "relevance": 0.4,
+    "document_count": 0.3,
+    "consistency": 0.2,
+    "completeness": 0.1
+}
+
+# Feature Flags
+class FeatureFlags:
+    AI_ENABLED: bool = bool(OPENROUTER_API_KEY)
+    AIOHTTP_AVAILABLE: bool = False
+    OPEN_SOURCE_NLP_AVAILABLE: bool = False
+    PYMUPDF_AVAILABLE: bool = False
+    PDFPLUMBER_AVAILABLE: bool = False
+    UNSTRUCTURED_AVAILABLE: bool = False
