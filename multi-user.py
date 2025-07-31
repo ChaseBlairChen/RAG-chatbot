@@ -1913,7 +1913,7 @@ RETRIEVAL METHOD: {retrieval_method}
 HALLUCINATION CHECK - Before responding, verify:
 1. Is each claim supported by the retrieved documents?
 2. Am I adding information not present in the sources?
-3. If uncertain, default to "information not available"
+3. If any fact or phrase cannot be traced to a source document, it must not appear in the response.
 
 INSTRUCTIONS FOR THOROUGH ANALYSIS:
 1. **READ CAREFULLY**: Scan the entire context for information that answers the user's question
@@ -1954,9 +1954,9 @@ USER QUESTION:
 {questions}
 
 RESPONSE APPROACH:
-- **FIRST**: Identify what specific information the user is asking for
+- **FIRST**: Identify what specific information the user is asking for. Do not reference any statute, case law, or principle unless it appears verbatim in the context.
 - **SECOND**: Search the context thoroughly for that information  
-- **THIRD**: Present any information found clearly and completely
+- **THIRD**: Present any information found clearly and completely. At the end of your response, list all facts provided and their source documents for verification.
 - **FOURTH**: Note what information is not available (if any)
 - **ALWAYS**: Cite the source document for each fact provided
 
