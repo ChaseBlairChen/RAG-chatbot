@@ -1167,78 +1167,69 @@ def combined_search(query: str, user_id: Optional[str], search_scope: str, conve
     # If multiple legal citations found, this is a complex legal analysis
     multi_citation_mode = len(legal_citations) > 1
     
-    special_search_mode = any([
-        bill_match, wac_match, federal_statute_match, cfr_match, rcw_match, 
-        public_law_match, case_citation_match, state_statute_match, 
-        executive_order_match, constitutional_match, surcharge_match, multi_citation_mode
-    ])
     
-    target_identifier = None
-    search_type = None
     
     if multi_citation_mode:
         logger.info(f"🎯 Complex legal analysis detected with citations: {[cite[1] for cite in legal_citations]}")
-        special_search_mode = True
-        search_type = "multi_citation"
-        target_identifier = " + ".join([cite[1] for cite in legal_citations])
-   
-    
-    special_search_mode = any([
-        bill_match, wac_match, federal_statute_match, cfr_match, rcw_match, 
-        public_law_match, case_citation_match, state_statute_match, 
-        executive_order_match, constitutional_match, surcharge_match
-    ])
-    
-    target_identifier = None
-    search_type = None
-    
-    if special_search_mode:
-        if bill_match:
-            target_identifier = f"{bill_match.group(1)} {bill_match.group(2)}"
-            search_type = "bill"
-            logger.info(f"🎯 Bill-specific search for: {target_identifier}")
-        elif wac_match:
-            target_identifier = f"WAC {wac_match.group(1)}"
-            search_type = "wac"
-            logger.info(f"🎯 WAC regulation search for: {target_identifier}")
-        elif federal_statute_match:
-            target_identifier = f"{federal_statute_match.group(1)} U.S.C. § {federal_statute_match.group(2)}"
-            search_type = "federal_statute"
-            logger.info(f"🎯 Federal statute search for: {target_identifier}")
-        elif cfr_match:
-            target_identifier = f"{cfr_match.group(1)} CFR § {cfr_match.group(2)}"
-            search_type = "cfr"
-            logger.info(f"🎯 CFR regulation search for: {target_identifier}")
-        elif rcw_match:
-            target_identifier = f"RCW {rcw_match.group(1)}"
-            search_type = "rcw"
-            logger.info(f"🎯 RCW statute search for: {target_identifier}")
-        elif public_law_match:
-            target_identifier = f"P.L. {public_law_match.group(1)}"
-            search_type = "public_law"
-            logger.info(f"🎯 Public Law search for: {target_identifier}")
-        elif case_citation_match:
-            target_identifier = f"{case_citation_match.group(1)} {case_citation_match.group(2)}"
-            search_type = "case"
-            logger.info(f"🎯 Case citation search for: {target_identifier}")
-        elif state_statute_match:
-            target_identifier = f"{state_statute_match.group(1)} § {state_statute_match.group(2)}"
-            search_type = "state_statute"
-            logger.info(f"🎯 State statute search for: {target_identifier}")
-        elif executive_order_match:
-            target_identifier = f"Executive Order {executive_order_match.group(1)}"
-            search_type = "executive_order"
-            logger.info(f"🎯 Executive Order search for: {target_identifier}")
-        elif constitutional_match:
-            article = constitutional_match.group(1)
-            section = constitutional_match.group(2) if constitutional_match.group(2) else ""
-            target_identifier = f"Article {article}" + (f", Section {section}" if section else "")
-            search_type = "constitutional"
-            logger.info(f"🎯 Constitutional provision search for: {target_identifier}")
-        elif surcharge_match:
-            target_identifier = "SHB 1260"  # We know this is the $183 surcharge bill
-            search_type = "surcharge"
-            logger.info(f"🎯 $183 surcharge query - targeting SHB 1260")
+         # First, determine if special_search_mode should be True
+special_search_mode = any([
+    bill_match, wac_match, federal_statute_match, cfr_match, rcw_match, 
+    public_law_match, case_citation_match, state_statute_match, 
+    executive_order_match, constitutional_match, multi_citation_mode
+])
+
+target_identifier = None
+search_type = None
+
+# Then check if multi_citation_mode is True (special case)
+if multi_citation_mode:
+    logger.info(f"🎯 Complex legal analysis detected with citations: {[cite[1] for cite in legal_citations]}")
+    search_type = "multi_citation"
+    target_identifier = " + ".join([cite[1] for cite in legal_citations])
+# Otherwise, if special_search_mode is True, check which specific match we have
+elif special_search_mode:
+    if bill_match:
+        target_identifier = f"{bill_match.group(1)} {bill_match.group(2)}"
+        search_type = "bill"
+        logger.info(f"🎯 Bill-specific search for: {target_identifier}")
+    elif wac_match:
+        target_identifier = f"WAC {wac_match.group(1)}"
+        search_type = "wac"
+        logger.info(f"🎯 WAC regulation search for: {target_identifier}")
+    elif federal_statute_match:
+        target_identifier = f"{federal_statute_match.group(1)} U.S.C. § {federal_statute_match.group(2)}"
+        search_type = "federal_statute"
+        logger.info(f"🎯 Federal statute search for: {target_identifier}")
+    elif cfr_match:
+        target_identifier = f"{cfr_match.group(1)} CFR § {cfr_match.group(2)}"
+        search_type = "cfr"
+        logger.info(f"🎯 CFR regulation search for: {target_identifier}")
+    elif rcw_match:
+        target_identifier = f"RCW {rcw_match.group(1)}"
+        search_type = "rcw"
+        logger.info(f"🎯 RCW statute search for: {target_identifier}")
+    elif public_law_match:
+        target_identifier = f"P.L. {public_law_match.group(1)}"
+        search_type = "public_law"
+        logger.info(f"🎯 Public Law search for: {target_identifier}")
+    elif case_citation_match:
+        target_identifier = f"{case_citation_match.group(1)} {case_citation_match.group(2)}"
+        search_type = "case"
+        logger.info(f"🎯 Case citation search for: {target_identifier}")
+    elif state_statute_match:
+        target_identifier = f"{state_statute_match.group(1)} § {state_statute_match.group(2)}"
+        search_type = "state_statute"
+        logger.info(f"🎯 State statute search for: {target_identifier}")
+    elif executive_order_match:
+        target_identifier = f"Executive Order {executive_order_match.group(1)}"
+        search_type = "executive_order"
+        logger.info(f"🎯 Executive Order search for: {target_identifier}")
+    elif constitutional_match:
+        article = constitutional_match.group(1)
+        section = constitutional_match.group(2) if constitutional_match.group(2) else ""
+        target_identifier = f"Article {article}" + (f", Section {section}" if section else "")
+        search_type = "constitutional"
+        logger.info(f"🎯 Constitutional provision search for: {target_identifier}")
     
     if search_scope in ["all", "default_only"]:
         try:
@@ -2356,7 +2347,422 @@ python your_filename.py
     </body>
     </html>
     """
+@app.get("/debug/wac-search-test")
+async def debug_wac_search_test(user_id: str = "debug_user"):
+    """Debug WAC document search - NO AUTH REQUIRED"""
+    try:
+        user_db = container_manager.get_user_database_safe(user_id)
+        if not user_db:
+            return {"error": "No user database found"}
+        
+        all_docs = user_db.get()
+        wac_found = []
+        
+        for i, (doc_id, metadata, content) in enumerate(zip(
+            all_docs.get('ids', []), 
+            all_docs.get('metadatas', []), 
+            all_docs.get('documents', [])
+        )):
+            if content and 'WAC' in content:
+                wac_found.append({
+                    'chunk_index': metadata.get('chunk_index', 'unknown') if metadata else 'no_metadata',
+                    'content_preview': content[:400],
+                    'contains_308': '308' in content,
+                    'contains_124H': '124H' in content,
+                    'contains_945': '945' in content
+                })
+        
+        return {
+            "total_chunks": len(all_docs.get('ids', [])),
+            "wac_chunks_found": len(wac_found),
+            "wac_chunks": wac_found[:5],  # First 5 matches
+            "status": "success"
+        }
+        
+    except Exception as e:
+        return {"error": str(e)}
 
+@app.get("/debug/database-access-test")
+async def debug_database_access_test():
+    """Test if default database is accessible - NO AUTH REQUIRED"""
+    try:
+        # Test 1: Check if default database path exists
+        default_db_exists = os.path.exists(DEFAULT_CHROMA_PATH)
+        
+        # Test 2: Try to load default database
+        default_db_loaded = False
+        default_db_error = None
+        default_db_count = 0
+        
+        try:
+            default_db = load_database()
+            if default_db:
+                default_db_loaded = True
+                # Try to get document count
+                try:
+                    all_docs = default_db.get()
+                    default_db_count = len(all_docs.get('ids', []))
+                except Exception as count_error:
+                    default_db_error = f"Count error: {str(count_error)}"
+        except Exception as db_error:
+            default_db_error = str(db_error)
+        
+        # Test 3: Test a search on default database
+        search_test_results = []
+        if default_db_loaded:
+            try:
+                test_results = default_db.similarity_search("RCW immigration law", k=3)
+                search_test_results = [
+                    {
+                        "content_preview": doc.page_content[:200],
+                        "metadata": doc.metadata
+                    }
+                    for doc in test_results
+                ]
+            except Exception as search_error:
+                default_db_error = f"Search error: {str(search_error)}"
+        
+        # Test 4: Check combined search behavior
+        test_combined_search = []
+        try:
+            results, sources, method = combined_search(
+                "RCW prosecutorial powers immigration", 
+                "debug_user", 
+                "all", 
+                "", 
+                k=3
+            )
+            test_combined_search = {
+                "results_count": len(results),
+                "sources_searched": sources,
+                "method": method,
+                "source_types": [doc.metadata.get('source_type', 'unknown') for doc, score in results]
+            }
+        except Exception as combined_error:
+            test_combined_search = {"error": str(combined_error)}
+        
+        return {
+            "default_database": {
+                "path_exists": default_db_exists,
+                "path": DEFAULT_CHROMA_PATH,
+                "loaded_successfully": default_db_loaded,
+                "document_count": default_db_count,
+                "error": default_db_error
+            },
+            "search_tests": {
+                "default_db_search_results": len(search_test_results),
+                "sample_results": search_test_results[:2],
+                "combined_search": test_combined_search
+            },
+            "recommendation": "Check if default database has documents and is properly configured"
+        }
+        
+    except Exception as e:
+        import traceback
+        return {
+            "error": str(e),
+            "traceback": traceback.format_exc()
+        }
+
+@app.get("/debug/real-query-test")
+async def debug_real_query_test(user_id: str = "debug_user"):
+    """Debug the exact same process as a real query - NO AUTH REQUIRED"""
+    try:
+        # Simulate the exact query processing
+        question = "Tell me about SHB 1260 and how it modifies the $183 housing and homelessness document recording surcharge distribution between counties and qualifying cities."
+        session_id = str(uuid.uuid4())
+        search_scope = "all"  # Using "all sources"
+        response_style = "balanced"
+        use_enhanced_rag = True
+        document_id = None
+        
+        logger.info(f"DEBUG: Starting real query simulation")
+        
+        # Step 1: Parse questions
+        questions = parse_multiple_questions(question) if use_enhanced_rag else [question]
+        combined_query = " ".join(questions)
+        
+        logger.info(f"DEBUG: Questions parsed: {questions}")
+        logger.info(f"DEBUG: Combined query: {combined_query}")
+        
+        # Step 2: Get conversation context
+        conversation_context = get_conversation_context(session_id)
+        
+        # Step 3: Do the combined search (this is the key part)
+        retrieved_results, sources_searched, retrieval_method = combined_search(
+            combined_query, 
+            user_id, 
+            search_scope, 
+            conversation_context,
+            use_enhanced=use_enhanced_rag,
+            document_id=document_id
+        )
+        
+        logger.info(f"DEBUG: Retrieved {len(retrieved_results)} results")
+        logger.info(f"DEBUG: Sources searched: {sources_searched}")
+        logger.info(f"DEBUG: Retrieval method: {retrieval_method}")
+        
+        # Step 4: Check for bill-specific processing
+        bill_match = re.search(r"(HB|SB|SSB|ESSB|SHB|ESHB)\s*(\d+)", question, re.IGNORECASE)
+        bill_processing_info = {}
+        
+        if bill_match:
+            bill_number = f"{bill_match.group(1)} {bill_match.group(2)}"
+            logger.info(f"DEBUG: Bill detected: {bill_number}")
+            bill_processing_info = {
+                "bill_detected": True,
+                "bill_number": bill_number,
+                "bill_specific_search_triggered": True
+            }
+        else:
+            bill_processing_info = {
+                "bill_detected": False,
+                "bill_specific_search_triggered": False
+            }
+        
+        # Step 5: Format context
+        context_text, source_info = format_context_for_llm(retrieved_results)
+        
+        return {
+            "debug_type": "real_query_simulation",
+            "question": question,
+            "parsed_questions": questions,
+            "combined_query": combined_query,
+            "search_scope": search_scope,
+            "bill_processing": bill_processing_info,
+            "retrieved_results_count": len(retrieved_results),
+            "sources_searched": sources_searched,
+            "retrieval_method": retrieval_method,
+            "context_length": len(context_text),
+            "context_preview": context_text[:800],
+            "source_info": source_info,
+            "relevance_scores": [s['relevance'] for s in source_info],
+            "contains_shb_1260": "SHB 1260" in context_text,
+            "context_has_183": "$183" in context_text,
+            "context_has_surcharge": "surcharge" in context_text.lower()
+        }
+        
+    except Exception as e:
+        import traceback
+        return {
+            "error": str(e),
+            "traceback": traceback.format_exc()
+        }
+
+@app.get("/debug/fix-document-tracking")
+async def fix_document_tracking(user_id: str = "debug_user"):
+    """Fix missing document tracking - NO AUTH REQUIRED"""
+    try:
+        # Get user database
+        user_db = container_manager.get_user_database_safe(user_id)
+        if not user_db:
+            return {"error": "No user database found"}
+        
+        # Get all documents from the database
+        all_docs = user_db.get()
+        
+        # Extract unique file_ids from metadata
+        found_files = {}
+        for metadata in all_docs.get('metadatas', []):
+            if metadata and 'file_id' in metadata:
+                file_id = metadata['file_id']
+                if file_id not in found_files:
+                    found_files[file_id] = {
+                        'file_id': file_id,
+                        'filename': metadata.get('source', 'unknown'),
+                        'user_id': metadata.get('user_id', user_id),
+                        'pages_processed': metadata.get('pages', 0),
+                        'uploaded_at': metadata.get('upload_date', datetime.utcnow().isoformat()),
+                        'container_id': container_manager.get_container_id(user_id),
+                        'session_id': str(uuid.uuid4()),
+                        'file_size': 0,  # Unknown
+                        'content_length': 0  # Unknown
+                    }
+        
+        # Add to uploaded_files tracking
+        global uploaded_files
+        for file_id, file_data in found_files.items():
+            uploaded_files[file_id] = file_data
+        
+        return {
+            "status": "success",
+            "files_found_in_database": len(found_files),
+            "files_added_to_tracking": list(found_files.keys()),
+            "tracking_rebuilt": True,
+            "message": "Document tracking has been rebuilt from database metadata"
+        }
+        
+    except Exception as e:
+        import traceback
+        return {
+            "error": str(e),
+            "traceback": traceback.format_exc()
+        }
+
+@app.get("/debug/search-scope-test")
+async def debug_search_scope_test(user_id: str = "debug_user", search_scope: str = "user_only"):
+    """Debug search scope behavior - NO AUTH REQUIRED"""
+    try:
+        # Test different search scenarios
+        query = "SHB 1260 $183 housing homelessness document recording surcharge"
+        
+        # Test 1: Search with user_only scope (what you're using)
+        user_only_results = []
+        if search_scope in ["all", "user_only"]:
+            user_results = container_manager.enhanced_search_user_container(
+                user_id, query, "", k=5, document_id=None
+            )
+            user_only_results = user_results
+        
+        # Test 2: Search with all scope
+        all_scope_results, sources_searched, retrieval_method = combined_search(
+            query, user_id, "all", "", use_enhanced=True, k=5, document_id=None
+        )
+        
+        # Test 3: Get your uploaded documents
+        user_documents = []
+        for file_id, file_data in uploaded_files.items():
+            if file_data.get('user_id') == user_id:
+                user_documents.append({
+                    'file_id': file_id,
+                    'filename': file_data['filename']
+                })
+        
+        return {
+            "query_used": query,
+            "search_scope_tested": search_scope,
+            "user_only_results": len(user_only_results),
+            "user_only_top_chunks": [
+                {
+                    "relevance": score,
+                    "preview": doc.page_content[:200] if hasattr(doc, 'page_content') else str(doc)[:200],
+                    "contains_shb_1260": "SHB 1260" in (doc.page_content if hasattr(doc, 'page_content') else str(doc))
+                }
+                for doc, score in user_only_results[:3]
+            ],
+            "all_scope_results": len(all_scope_results),
+            "all_scope_top_chunks": [
+                {
+                    "relevance": score,
+                    "preview": doc.page_content[:200] if hasattr(doc, 'page_content') else str(doc)[:200],
+                    "contains_shb_1260": "SHB 1260" in (doc.page_content if hasattr(doc, 'page_content') else str(doc))
+                }
+                for doc, score in all_scope_results[:3]
+            ],
+            "your_uploaded_documents": user_documents,
+            "sources_searched": sources_searched,
+            "retrieval_method": retrieval_method
+        }
+        
+    except Exception as e:
+        import traceback
+        return {
+            "error": str(e),
+            "traceback": traceback.format_exc()
+        }
+
+@app.get("/debug/context-test")
+async def debug_context_test(user_id: str = "debug_user"):
+    """Debug what context is being sent to AI - NO AUTH REQUIRED"""
+    try:
+        # Simulate the exact search that happens
+        user_results = container_manager.enhanced_search_user_container(
+            user_id, 
+            "SHB 1260 $183 housing and homelessness document recording surcharge distribution", 
+            "", 
+            k=5
+        )
+        
+        if not user_results:
+            return {"error": "No search results found"}
+        
+        # Format context exactly like the main system does
+        context_text, source_info = format_context_for_llm(user_results, max_length=3000)
+        
+        return {
+            "search_results_count": len(user_results),
+            "context_sent_to_ai": context_text,
+            "context_length": len(context_text),
+            "source_info": source_info,
+            "first_chunk_preview": user_results[0][0].page_content[:800] if user_results else "No chunks",
+            "relevance_scores": [score for _, score in user_results]
+        }
+        
+    except Exception as e:
+        return {"error": str(e)}
+
+@app.get("/debug/simple-search-test")
+async def simple_search_test(user_id: str = "debug_user"):
+    """Simple search test - NO AUTH REQUIRED"""
+    try:
+        # Get user database
+        user_db = container_manager.get_user_database_safe(user_id)
+        if not user_db:
+            return {"error": "No user database found", "user_id": user_id}
+        
+        # Get all documents
+        all_docs = user_db.get()
+        total_chunks = len(all_docs.get('ids', []))
+        
+        # Search for SHB 1260 and $183 surcharge
+        found_shb_1260 = []
+        found_183_surcharge = []
+        found_document_recording = []
+        
+        for i, (doc_id, metadata, content) in enumerate(zip(
+            all_docs.get('ids', []), 
+            all_docs.get('metadatas', []), 
+            all_docs.get('documents', [])
+        )):
+            if content:
+                # Search for SHB 1260
+                if 'SHB 1260' in content:
+                    found_shb_1260.append({
+                        'chunk_index': metadata.get('chunk_index', 'unknown') if metadata else 'no_metadata',
+                        'content_preview': content[:600],
+                        'contains_183': '$183' in content,
+                        'contains_surcharge': 'surcharge' in content.lower(),
+                        'contains_distribution': 'distribution' in content.lower()
+                    })
+                
+                # Search for $183 surcharge
+                if '$183' in content and 'surcharge' in content.lower():
+                    found_183_surcharge.append({
+                        'chunk_index': metadata.get('chunk_index', 'unknown') if metadata else 'no_metadata', 
+                        'content_preview': content[:600],
+                        'contains_shb_1260': 'SHB 1260' in content,
+                        'contains_distribution': 'distribution' in content.lower()
+                    })
+                
+                # Search for Document Recording Fees
+                if 'Document Recording Fees' in content:
+                    found_document_recording.append({
+                        'chunk_index': metadata.get('chunk_index', 'unknown') if metadata else 'no_metadata',
+                        'content_preview': content[:600],
+                        'contains_183': '$183' in content,
+                        'contains_shb_1260': 'SHB 1260' in content
+                    })
+        
+        return {
+            "total_chunks": total_chunks,
+            "shb_1260_found": len(found_shb_1260),
+            "shb_1260_chunks": found_shb_1260,
+            "surcharge_found": len(found_183_surcharge),
+            "surcharge_chunks": found_183_surcharge,
+            "document_recording_found": len(found_document_recording),
+            "document_recording_chunks": found_document_recording,
+            "status": "success",
+            "user_id": user_id
+        }
+        
+    except Exception as e:
+        import traceback
+        return {
+            "error": str(e), 
+            "status": "failed",
+            "traceback": traceback.format_exc(),
+            "user_id": user_id
+        }
 
 
 
