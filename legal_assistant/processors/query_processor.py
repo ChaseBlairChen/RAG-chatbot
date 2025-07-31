@@ -300,7 +300,20 @@ def create_statutory_prompt(context_text: str, question: str, conversation_conte
     
     return f"""You are a legal research assistant specializing in statutory analysis. Your job is to extract COMPLETE, SPECIFIC information from legal documents.
 
+STRICT SOURCE REQUIREMENTS:
+- Answer ONLY based on the retrieved documents provided in the context
+- Do NOT use general legal knowledge, training data, assumptions, or inferences beyond what's explicitly stated
+- If information is not in the provided documents, state: "This information is not available in the provided documents"
+
 🔴 CRITICAL: You MUST extract actual numbers, durations, and specific requirements. NEVER use placeholders like "[duration not specified]" or "[requirements not listed]".
+
+🔥 CRITICAL FAILURE PREVENTION:
+- If you write "[duration not specified]" you have FAILED at your job
+- If you write "[duties not specified]" you have FAILED at your job  
+- If you write "[requirements not listed]" you have FAILED at your job
+- READ EVERY WORD of the context before claiming information is missing
+- The human is counting on you to find the actual requirements
+- Your job is to be a thorough legal researcher, not a lazy summarizer
 
 MANDATORY EXTRACTION RULES:
 1. 📖 READ EVERY WORD of the provided context before claiming anything is missing
@@ -309,6 +322,15 @@ MANDATORY EXTRACTION RULES:
 4. 📋 LIST ALL REQUIREMENTS: Number each requirement found (1., 2., 3., etc.)
 5. 🎯 BE SPECIFIC: Include section numbers, subsection letters, paragraph numbers
 6. ⚠️ ONLY claim information is "missing" after thorough analysis of ALL provided text
+
+INSTRUCTIONS FOR THOROUGH ANALYSIS:
+1. **READ CAREFULLY**: Scan the entire context for information that answers the user's question
+2. **EXTRACT COMPLETELY**: When extracting requirements, include FULL details (e.g., "60 minutes" not just "minimum of")
+3. **QUOTE VERBATIM**: For statutory standards, use exact quotes: `"[Exact Text]" (Source)`
+4. **ENUMERATE EXPLICITLY**: Present listed requirements as numbered points with full quotes
+5. **CITE SOURCES**: Reference the document name for each fact
+6. **BE COMPLETE**: Explicitly note missing standards: "Documents lack full subsection [X]"
+7. **USE DECISIVE PHRASING**: State facts directly ("The statute requires...") - NEVER "documents indicate"
 
 SOURCES SEARCHED: {', '.join(sources_searched)}
 RETRIEVAL METHOD: {retrieval_method}
@@ -352,12 +374,18 @@ USER QUESTION REQUIRING COMPLETE EXTRACTION:
 {question}
 
 MANDATORY STEPS FOR YOUR RESPONSE:
-1. 🔍 Scan the ENTIRE context for specific numbers, requirements, and procedures
-2. 📊 Extract ALL quantitative information (minutes, hours, numbers of people, etc.)
-3. 📜 Quote the exact statutory language for each requirement
-4. 🏷️ Provide specific citations (section, subsection, paragraph)
+1. 🔍 Scan the ENTIRE context for specific numbers, requirements, and procedures - READ EVERY WORD
+2. 📊 Extract ALL quantitative information (minutes, hours, numbers of people, etc.) - NO PLACEHOLDERS ALLOWED
+3. 📜 Quote the exact statutory language for each requirement - FULL QUOTES, NOT SUMMARIES
+4. 🏷️ Provide specific citations (section, subsection, paragraph) - EXACT REFERENCES
 5. 📝 Organize information clearly with headers and numbered lists
-6. ⚠️ Only claim information is missing if it's truly not in the provided text
+6. ⚠️ Only claim information is missing if it's truly not in the provided text AFTER reading every word twice
+
+🚨 BEFORE YOU RESPOND: Ask yourself these questions:
+- Did I read every single word of the provided context?
+- Did I look for numbers, durations, quantities in ALL sections?
+- Am I using any lazy placeholders like "[not specified]"?
+- Can I quote the exact text that supports each claim I'm making?
 
 BEGIN THOROUGH STATUTORY ANALYSIS:
 
@@ -393,12 +421,12 @@ HALLUCINATION CHECK - Before responding, verify:
 
 INSTRUCTIONS FOR THOROUGH ANALYSIS:
 1. **READ CAREFULLY**: Scan the entire context for information that answers the user's question
-2. **EXTRACT DIRECTLY**: When information is clearly stated, provide it exactly as written
-3. **BE SPECIFIC**: Include names, numbers, dates, and details when present
-4. **QUOTE WHEN HELPFUL**: Use direct quotes for key facts or important language
-5. **CITE SOURCES**: Reference the document name for each piece of information
-6. **BE COMPLETE**: Provide all relevant information found before saying anything is missing
-7. **BE HONEST**: Only say information is unavailable when truly absent from the context
+2. **EXTRACT COMPLETELY**: When extracting requirements, include FULL details (e.g., "60 minutes" not just "minimum of")
+3. **QUOTE VERBATIM**: For statutory standards, use exact quotes: `"[Exact Text]" (Source)`
+4. **ENUMERATE EXPLICITLY**: Present listed requirements as numbered points with full quotes
+5. **CITE SOURCES**: Reference the document name for each fact
+6. **BE COMPLETE**: Explicitly note missing standards: "Documents lack full subsection [X]"
+7. **USE DECISIVE PHRASING**: State facts directly ("The statute requires...") - NEVER "documents indicate"
 
 RESPONSE STYLE: {instruction}
 
@@ -412,9 +440,9 @@ USER QUESTION:
 {question}
 
 RESPONSE APPROACH:
-- **FIRST**: Identify what specific information the user is asking for
+- **FIRST**: Identify what specific information the user is asking for. Do not reference any statute, case law, or principle unless it appears verbatim in the context.
 - **SECOND**: Search the context thoroughly for that information  
-- **THIRD**: Present any information found clearly and completely
+- **THIRD**: Present any information found clearly and completely. At the end of your response, list all facts provided and their source documents for verification.
 - **FOURTH**: Note what information is not available (if any)
 - **ALWAYS**: Cite the source document for each fact provided
 
@@ -505,7 +533,7 @@ def process_query(question: str, session_id: str, user_id: Optional[str], search
         conversation_context = get_conversation_context(session_id)
         
         # For statutory questions, get more context
-        search_k = 15 if is_statutory else 10
+        search_k = 20 if is_statutory else 10
         
         retrieved_results, sources_searched, retrieval_method = combined_search(
             combined_query, 
@@ -530,7 +558,7 @@ def process_query(question: str, session_id: str, user_id: Optional[str], search
             )
         
         # Format context for LLM - more context for statutory questions
-        max_context_length = 6000 if is_statutory else 3000
+        max_context_length = 8000 if is_statutory else 3000
         context_text, source_info = format_context_for_llm(retrieved_results, max_length=max_context_length)
         
         # Enhanced information extraction
