@@ -1,1764 +1,457 @@
-# Unified Legal Assistant Backend - Multi-User with Enhanced RAG + Comprehensive Analysis
-# Fully fixed and complete version
-
-from fastapi import FastAPI, Request, HTTPException, File, UploadFile, Form, Depends, Header
-from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse
-from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
-from pydantic import BaseModel
-import os
-import json
-import requests
+"""Query processing logic - Enhanced for better statutory analysis"""
 import re
 import logging
-import uuid
-import time
-from datetime import datetime, timedelta
-from typing import Optional, List, Dict, Tuple, Set, Any
-from dataclasses import dataclass
-from enum import Enum
-import io
-import tempfile
-import sys
 import traceback
-import hashlib
-from abc import ABC, abstractmethod
+from typing import Optional
 
-# Configure logging
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+from ..models import QueryResponse, ComprehensiveAnalysisRequest, AnalysisType
+from ..config import FeatureFlags, OPENROUTER_API_KEY, MIN_RELEVANCE_SCORE
+from ..services import (
+    ComprehensiveAnalysisProcessor,
+    combined_search,
+    calculate_confidence_score,
+    call_openrouter_api
+)
+from ..storage.managers import add_to_conversation, get_conversation_context
+from ..utils import (
+    parse_multiple_questions,
+    extract_bill_information,
+    extract_universal_information,
+    format_context_for_llm
+)
+
 logger = logging.getLogger(__name__)
 
-# Third-party library imports for RAG
-from langchain_chroma import Chroma
-from langchain_huggingface import HuggingFaceEmbeddings
-from langchain.text_splitter import RecursiveCharacterTextSplitter
-from langchain.docstore.document import Document
-import spacy
-from sentence_transformers import SentenceTransformer
-import numpy as np
-
-# AI imports
-try:
-    import aiohttp
-    AIOHTTP_AVAILABLE = True
-except ImportError:
-    AIOHTTP_AVAILABLE = False
-    print("⚠️ aiohttp not available - AI features disabled. Install with: pip install aiohttp")
-
-# Import open-source NLP models support
-OPEN_SOURCE_NLP_AVAILABLE = False
-try:
-    import torch
-    from transformers import (
-        pipeline,
-        AutoTokenizer,
-        AutoModelForSequenceClassification,
-        AutoModelForQuestionAnswering,
-        AutoModelForTokenClassification,
-        AutoModelForCausalLM,
-        AutoModelForSeq2SeqLM,
-    )
-    OPEN_SOURCE_NLP_AVAILABLE = True
-    logger.info("✅ Open-source NLP models available")
-except ImportError as e:
-    logger.warning(f"⚠️ Open-source NLP models not available: {e}")
-    print("Install with: pip install transformers torch")
-
-# Import PDF processing libraries
-PYMUPDF_AVAILABLE = False
-PDFPLUMBER_AVAILABLE = False
-UNSTRUCTURED_AVAILABLE = False
-
-try:
-    import fitz  # PyMuPDF
-    PYMUPDF_AVAILABLE = True
-    print("✅ PyMuPDF available - using enhanced PDF extraction")
-except ImportError as e:
-    print(f"⚠️ PyMuPDF not available: {e}")
-    print("Install with: pip install PyMuPDF")
-
-try:
-    import pdfplumber
-    PDFPLUMBER_AVAILABLE = True
-    print("✅ pdfplumber available - using enhanced PDF extraction")
-except ImportError as e:
-    print(f"⚠️ pdfplumber not available: {e}")
-    print("Install with: pip install pdfplumber")
-
-try:
-    from unstructured.partition.auto import partition
-    from unstructured.chunking.title import chunk_by_title
-    from unstructured.staging.base import convert_to_dict
-    UNSTRUCTURED_AVAILABLE = True
-    print("✅ Unstructured.io available - using advanced document processing")
-except ImportError as e:
-    print(f"⚠️ Unstructured.io not available: {e}")
-    print("Install with: pip install unstructured[all-docs]")
-
-print(f"Document processing status: PyMuPDF={PYMUPDF_AVAILABLE}, pdfplumber={PDFPLUMBER_AVAILABLE}, Unstructured={UNSTRUCTURED_AVAILABLE}")
-
-# FIXED: SafeDocumentProcessor class - properly structured with enhanced processing
-class SafeDocumentProcessor:
-    """Safe document processor for various file types with enhanced processing capabilities"""
-    
-    @staticmethod
-    def process_document_safe(file) -> Tuple[str, int, List[str]]:
-        """
-        Process uploaded document safely with enhanced processing
-        Returns: (content, pages_processed, warnings)
-        """
-        warnings = []
-        content = ""
-        pages_processed = 0
+def detect_statutory_question(question: str) -> bool:
+    """Detect if this is a statutory/regulatory question requiring detailed extraction"""
+    statutory_indicators = [
+        # Federal Laws and Regulations
+        r'\bUSC\s+\d+',                    # US Code
+        r'\bU\.S\.C\.\s*§?\s*\d+',         # U.S.C. § 123
+        r'\bCFR\s+\d+',                    # Code of Federal Regulations
+        r'\bC\.F\.R\.\s*§?\s*\d+',         # C.F.R. § 123
+        r'\bFed\.\s*R\.\s*Civ\.\s*P\.',    # Federal Rules of Civil Procedure
+        r'\bFed\.\s*R\.\s*Crim\.\s*P\.',   # Federal Rules of Criminal Procedure
+        r'\bFed\.\s*R\.\s*Evid\.',         # Federal Rules of Evidence
         
-        try:
-            filename = getattr(file, 'filename', 'unknown')
-            file_ext = os.path.splitext(filename)[1].lower()
-            file_content = file.file.read()
-            
-            if file_ext == '.txt':
-                content = file_content.decode('utf-8', errors='ignore')
-                pages_processed = SafeDocumentProcessor._estimate_pages_from_text(content)
-            elif file_ext == '.pdf':
-                content, pages_processed = SafeDocumentProcessor._process_pdf_enhanced(file_content, warnings)
-            elif file_ext == '.docx':
-                content, pages_processed = SafeDocumentProcessor._process_docx_enhanced(file_content, warnings)
-            else:
-                try:
-                    content = file_content.decode('utf-8', errors='ignore')
-                    pages_processed = SafeDocumentProcessor._estimate_pages_from_text(content)
-                    warnings.append(f"File type {file_ext} processed as plain text")
-                except Exception as e:
-                    warnings.append(f"Could not process file: {str(e)}")
-                    content = "Unable to process this file type"
-                    pages_processed = 0
-            
-            file.file.seek(0)
-            
-        except Exception as e:
-            warnings.append(f"Error processing document: {str(e)}")
-            content = "Error processing document"
-            pages_processed = 0
+        # Washington State
+        r'\bRCW\s+\d+\.\d+\.\d+',          # Washington Revised Code
+        r'\bWAC\s+\d+',                    # Washington Administrative Code
+        r'\bWash\.\s*Rev\.\s*Code\s*§?\s*\d+', # Washington Revised Code alternate format
         
-        return content, pages_processed, warnings
-    
-    @staticmethod
-    def _estimate_pages_from_text(text: str) -> int:
-        """Fixed page estimation based on content analysis"""
-        if not text:
-            return 0
+        # California
+        r'\bCal\.\s*(?:Bus\.\s*&\s*Prof\.|Civ\.|Comm\.|Corp\.|Educ\.|Fam\.|Gov\.|Health\s*&\s*Safety|Ins\.|Lab\.|Penal|Prob\.|Pub\.\s*Util\.|Rev\.\s*&\s*Tax\.|Veh\.|Welf\.\s*&\s*Inst\.)\s*Code\s*§?\s*\d+',
+        r'\bCalifornia\s+(?:Business|Civil|Commercial|Corporation|Education|Family|Government|Health|Insurance|Labor|Penal|Probate|Public\s+Utilities|Revenue|Vehicle|Welfare)\s+Code\s*§?\s*\d+',
+        r'\bCal\.\s*Code\s*Regs\.\s*tit\.\s*\d+',  # California Code of Regulations
         
-        # Enhanced page estimation logic
-        word_count = len(text.split())
-        char_count = len(text)
-        line_count = len(text.split('\n'))
+        # Texas
+        r'\bTex\.\s*(?:Agric\.|Alco\.|Bus\.\s*&\s*Com\.|Civ\.\s*Prac\.\s*&\s*Rem\.|Code\s*Crim\.\s*Proc\.|Educ\.|Elec\.|Fam\.|Gov\.|Health\s*&\s*Safety|Hum\.\s*Res\.|Ins\.|Lab\.|Loc\.\s*Gov\.|Nat\.\s*Res\.|Occ\.|Parks\s*&\s*Wild\.|Penal|Prop\.|Tax|Transp\.|Util\.|Water)\s*Code\s*(?:Ann\.)?\s*§?\s*\d+',
+        r'\bTexas\s+(?:Agriculture|Alcoholic\s+Beverage|Business|Civil\s+Practice|Criminal\s+Procedure|Education|Election|Family|Government|Health|Human\s+Resources|Insurance|Labor|Local\s+Government|Natural\s+Resources|Occupations|Parks|Penal|Property|Tax|Transportation|Utilities|Water)\s+Code\s*§?\s*\d+',
+        r'\bTex\.\s*Admin\.\s*Code\s*tit\.\s*\d+',  # Texas Administrative Code
         
-        # Average words per page: 250-500 (legal documents tend to be dense)
-        pages_by_words = max(1, word_count // 350)
+        # New York
+        r'\bN\.Y\.\s*(?:Agric\.\s*&\s*Mkts\.|Arts\s*&\s*Cult\.\s*Aff\.|Bank\.|Bus\.\s*Corp\.|Civ\.\s*Prac\.\s*L\.\s*&\s*R\.|Civ\.\s*Rights|Civ\.\s*Serv\.|Com\.|Correct\.|County|Crim\.\s*Proc\.|Dom\.\s*Rel\.|Econ\.\s*Dev\.|Educ\.|Elec\.|Empl\.|Energy|Envtl\.\s*Conserv\.|Est\.\s*Powers\s*&\s*Trusts|Exec\.|Fam\.\s*Ct\.\s*Act|Gen\.\s*Bus\.|Gen\.\s*City|Gen\.\s*Constr\.|Gen\.\s*Mun\.|Gen\.\s*Oblig\.|High\.|Indian|Ins\.|Jud\.|Lab\.|Lien|Local\s*Fin\.|Ment\.\s*Hyg\.|Mil\.|Multi-Dwell\.|Multi-Mun\.|Nav\.|Not-for-Profit\s*Corp\.|Parks\s*Rec\.\s*&\s*Hist\.\s*Preserv\.|Penal|Pers\.\s*Prop\.|Priv\.\s*Hous\.\s*Fin\.|Pub\.\s*Auth\.|Pub\.\s*Health|Pub\.\s*Hous\.|Pub\.\s*Off\.|Pub\.\s*Serv\.|Racing\s*Pari-Mut\.\s*Wag\.\s*&\s*Breed\.|Real\s*Prop\.|Real\s*Prop\.\s*Actions\s*&\s*Proc\.|Real\s*Prop\.\s*Tax|Relig\.\s*Corp\.|Retire\.\s*&\s*Soc\.\s*Sec\.|Rural\s*Elec\.\s*Coop\.|Second\s*Class\s*Cities|Soc\.\s*Serv\.|State|State\s*Fin\.|Surr\.\s*Ct\.\s*Proc\.\s*Act|Tax|Town|Transp\.|Transp\.\s*Corp\.|U\.C\.C\.|Unconsol\.|Veh\.\s*&\s*Traf\.|Vill\.|Vol\.\s*Fire\s*Benefit|Workers\'\s*Comp\.)\s*(?:Law)?\s*§?\s*\d+',
+        r'\bNew\s+York\s+(?:Criminal\s+Procedure|Penal|Civil\s+Practice|Family\s+Court\s+Act|General\s+Business|Vehicle\s+and\s+Traffic)\s+Law\s*§?\s*\d+',
+        r'\bN\.Y\.C\.R\.R\.\s*tit\.\s*\d+',         # New York Codes, Rules and Regulations
         
-        # Average characters per page: 1500-3000 (including spaces)
-        pages_by_chars = max(1, char_count // 2000)
+        # Florida
+        r'\bFla\.\s*Stat\.\s*(?:Ann\.)?\s*§?\s*\d+', # Florida Statutes
+        r'\bFlorida\s+Statutes\s*§?\s*\d+',
+        r'\bFla\.\s*Admin\.\s*Code\s*Ann\.\s*r\.\s*\d+', # Florida Administrative Code
         
-        # For documents with many line breaks (structured content)
-        pages_by_lines = max(1, line_count // 50)
+        # Illinois
+        r'\b\d+\s*ILCS\s*\d+', # Illinois Compiled Statutes (e.g., 720 ILCS 5)
+        r'\bIll\.\s*Comp\.\s*Stat\.\s*ch\.\s*\d+', # Illinois Compiled Statutes alternate
+        r'\bIll\.\s*Admin\.\s*Code\s*tit\.\s*\d+', # Illinois Administrative Code
         
-        # Use the median of the three estimates for better accuracy
-        estimates = [pages_by_words, pages_by_chars, pages_by_lines]
-        estimates.sort()
-        estimated_pages = estimates[1]  # median
+        # Pennsylvania
+        r'\b\d+\s*Pa\.\s*(?:C\.S\.|Cons\.\s*Stat\.)\s*§?\s*\d+', # Pennsylvania Consolidated Statutes
+        r'\bPa\.\s*Code\s*§?\s*\d+',               # Pennsylvania Code
         
-        # Ensure reasonable bounds
-        return max(1, min(estimated_pages, 1000))
-    
-    @staticmethod
-    def _process_pdf_enhanced(file_content: bytes, warnings: List[str]) -> Tuple[str, int]:
-        """Enhanced PDF processing with Unstructured.io fallback"""
-        # Try Unstructured.io first for best results
-        if UNSTRUCTURED_AVAILABLE:
-            try:
-                # Save content to temporary file for Unstructured
-                import tempfile
-                with tempfile.NamedTemporaryFile(suffix='.pdf', delete=False) as temp_file:
-                    temp_file.write(file_content)
-                    temp_file_path = temp_file.name
-                
-                try:
-                    # Use Unstructured.io for advanced processing
-                    elements = partition(filename=temp_file_path)
-                    
-                    # Extract text and structure
-                    text_content = ""
-                    page_count = 0
-                    
-                    for element in elements:
-                        if hasattr(element, 'text') and element.text:
-                            text_content += element.text + "\n"
-                        
-                        # Try to get page information
-                        if hasattr(element, 'metadata') and element.metadata:
-                            if 'page_number' in element.metadata:
-                                page_count = max(page_count, element.metadata['page_number'])
-                    
-                    # Clean up temp file
-                    os.unlink(temp_file_path)
-                    
-                    if page_count == 0:
-                        page_count = SafeDocumentProcessor._estimate_pages_from_text(text_content)
-                    
-                    return text_content, page_count
-                    
-                except Exception as e:
-                    os.unlink(temp_file_path)
-                    warnings.append(f"Unstructured.io processing failed: {str(e)}, falling back to PyMuPDF")
-                    
-            except Exception as e:
-                warnings.append(f"Unstructured.io setup failed: {str(e)}")
+        # Ohio
+        r'\bOhio\s*Rev\.\s*Code\s*(?:Ann\.)?\s*§?\s*\d+', # Ohio Revised Code
+        r'\bOhio\s*Admin\.\s*Code\s*\d+',          # Ohio Administrative Code
         
-        # Fallback to existing PDF processing
-        return SafeDocumentProcessor._process_pdf(file_content, warnings)
-    
-    @staticmethod
-    def _process_pdf(file_content: bytes, warnings: List[str]) -> Tuple[str, int]:
-        """Process PDF content with enhanced page counting"""
-        try:
-            if PYMUPDF_AVAILABLE:
-                try:
-                    import fitz
-                    doc = fitz.open(stream=file_content, filetype="pdf")
-                    text_content = ""
-                    pages = len(doc)
-                    for page_num in range(pages):
-                        page = doc.load_page(page_num)
-                        text_content += page.get_text()
-                    doc.close()
-                    return text_content, pages
-                except Exception as e:
-                    warnings.append(f"PyMuPDF error: {str(e)}")
-            
-            if PDFPLUMBER_AVAILABLE:
-                try:
-                    import pdfplumber
-                    with pdfplumber.open(io.BytesIO(file_content)) as pdf:
-                        text_content = ""
-                        pages = len(pdf.pages)
-                        for page in pdf.pages:
-                            text_content += page.extract_text() or ""
-                    return text_content, pages
-                except Exception as e:
-                    warnings.append(f"pdfplumber error: {str(e)}")
-            
-            warnings.append("No PDF processing libraries available. Install PyMuPDF or pdfplumber.")
-            return "PDF processing not available", 0
-            
-        except Exception as e:
-            warnings.append(f"Error processing PDF: {str(e)}")
-            return "Error processing PDF", 0
-    
-    @staticmethod
-    def _process_docx_enhanced(file_content: bytes, warnings: List[str]) -> Tuple[str, int]:
-        """Enhanced DOCX processing with better page estimation"""
-        if UNSTRUCTURED_AVAILABLE:
-            try:
-                # Save content to temporary file for Unstructured
-                import tempfile
-                with tempfile.NamedTemporaryFile(suffix='.docx', delete=False) as temp_file:
-                    temp_file.write(file_content)
-                    temp_file_path = temp_file.name
-                
-                try:
-                    # Use Unstructured.io for advanced processing
-                    elements = partition(filename=temp_file_path)
-                    
-                    text_content = ""
-                    for element in elements:
-                        if hasattr(element, 'text') and element.text:
-                            text_content += element.text + "\n"
-                    
-                    os.unlink(temp_file_path)
-                    
-                    pages_estimated = SafeDocumentProcessor._estimate_pages_from_text(text_content)
-                    return text_content, pages_estimated
-                    
-                except Exception as e:
-                    os.unlink(temp_file_path)
-                    warnings.append(f"Unstructured.io DOCX processing failed: {str(e)}")
-                    
-            except Exception as e:
-                warnings.append(f"Unstructured.io DOCX setup failed: {str(e)}")
+        # Georgia
+        r'\bO\.C\.G\.A\.\s*§?\s*\d+',              # Official Code of Georgia Annotated
+        r'\bGa\.\s*Code\s*(?:Ann\.)?\s*§?\s*\d+',   # Georgia Code
+        r'\bGa\.\s*Comp\.\s*R\.\s*&\s*Regs\.\s*r\.\s*\d+', # Georgia Rules and Regulations
         
-        # Fallback to existing DOCX processing
-        return SafeDocumentProcessor._process_docx(file_content, warnings)
-    
-    @staticmethod
-    def _process_docx(file_content: bytes, warnings: List[str]) -> Tuple[str, int]:
-        """Process DOCX content with enhanced page estimation"""
-        try:
-            try:
-                from docx import Document
-                doc = Document(io.BytesIO(file_content))
-                text_content = ""
-                for paragraph in doc.paragraphs:
-                    text_content += paragraph.text + "\n"
-                
-                # Enhanced page estimation for DOCX
-                pages_estimated = SafeDocumentProcessor._estimate_pages_from_text(text_content)
-                return text_content, pages_estimated
-                
-            except ImportError:
-                warnings.append("python-docx not available. Install with: pip install python-docx")
-                return "DOCX processing not available", 0
-            except Exception as e:
-                warnings.append(f"Error processing DOCX: {str(e)}")
-                return "Error processing DOCX", 0
-                
-        except Exception as e:
-            warnings.append(f"Error processing DOCX: {str(e)}")
-            return "Error processing DOCX", 0
-
-# Create FastAPI app
-app = FastAPI(
-    title="Unified Legal Assistant API",
-    description="Multi-User Legal Assistant with Enhanced RAG, Comprehensive Analysis, and External Database Integration",
-    version="10.0.0-SmartRAG-ComprehensiveAnalysis"
-)
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
-# Configuration
-DEFAULT_CHROMA_PATH = os.path.abspath(os.path.join(os.getcwd(), "chromadb-database"))
-USER_CONTAINERS_PATH = os.path.abspath(os.path.join(os.getcwd(), "user-containers"))
-logger.info(f"Using DEFAULT_CHROMA_PATH: {DEFAULT_CHROMA_PATH}")
-logger.info(f"Using USER_CONTAINERS_PATH: {USER_CONTAINERS_PATH}")
-
-os.makedirs(USER_CONTAINERS_PATH, exist_ok=True)
-
-OPENROUTER_API_KEY = os.environ.get("OPENAI_API_KEY")
-OPENAI_API_BASE = os.environ.get("OPENAI_API_BASE", "https://openrouter.ai/api/v1")
-AI_ENABLED = bool(OPENROUTER_API_KEY) and AIOHTTP_AVAILABLE
-MAX_FILE_SIZE = 50 * 1024 * 1024  # Increased to 50MB for legal documents
-LEGAL_EXTENSIONS = {'.pdf', '.txt', '.docx', '.rtf'}
-
-security = HTTPBearer(auto_error=False)
-
-# Analysis Types Enum
-class AnalysisType(str, Enum):
-    COMPREHENSIVE = "comprehensive"
-    SUMMARY = "summarize"
-    CLAUSES = "extract-clauses"
-    RISKS = "risk-flagging"
-    TIMELINE = "timeline-extraction"
-    OBLIGATIONS = "obligations"
-    MISSING_CLAUSES = "missing-clauses"
-
-# External Legal Database Interface
-class LegalDatabaseInterface(ABC):
-    """Abstract interface for external legal databases"""
-    
-    @abstractmethod
-    def search(self, query: str, filters: Optional[Dict] = None) -> List[Dict]:
-        pass
-    
-    @abstractmethod
-    def get_document(self, document_id: str) -> Dict:
-        pass
-    
-    @abstractmethod
-    def authenticate(self, credentials: Dict) -> bool:
-        pass
-
-class LexisNexisInterface(LegalDatabaseInterface):
-    def __init__(self, api_key: str = None, api_endpoint: str = None):
-        self.api_key = api_key or os.environ.get("LEXISNEXIS_API_KEY")
-        self.api_endpoint = api_endpoint or os.environ.get("LEXISNEXIS_API_ENDPOINT")
-        self.authenticated = False
-    
-    def authenticate(self, credentials: Dict) -> bool:
-        logger.info("LexisNexis authentication placeholder")
-        return False
-    
-    def search(self, query: str, filters: Optional[Dict] = None) -> List[Dict]:
-        logger.info(f"LexisNexis search placeholder for query: {query}")
-        return []
-    
-    def get_document(self, document_id: str) -> Dict:
-        logger.info(f"LexisNexis document retrieval placeholder for ID: {document_id}")
-        return {}
-
-class WestlawInterface(LegalDatabaseInterface):
-    def __init__(self, api_key: str = None, api_endpoint: str = None):
-        self.api_key = api_key or os.environ.get("WESTLAW_API_KEY")
-        self.api_endpoint = api_endpoint or os.environ.get("WESTLAW_API_ENDPOINT")
-        self.authenticated = False
-    
-    def authenticate(self, credentials: Dict) -> bool:
-        logger.info("Westlaw authentication placeholder")
-        return False
-    
-    def search(self, query: str, filters: Optional[Dict] = None) -> List[Dict]:
-        logger.info(f"Westlaw search placeholder for query: {query}")
-        return []
-    
-    def get_document(self, document_id: str) -> Dict:
-        logger.info(f"Westlaw document retrieval placeholder for ID: {document_id}")
-        return {}
-
-# Pydantic Models
-class User(BaseModel):
-    user_id: str
-    email: Optional[str] = None
-    container_id: Optional[str] = None
-    subscription_tier: str = "free"
-    external_db_access: List[str] = []
-
-class Query(BaseModel):
-    question: str
-    session_id: Optional[str] = None
-    response_style: Optional[str] = "balanced"
-    user_id: Optional[str] = None
-    search_scope: Optional[str] = "all"
-    external_databases: Optional[List[str]] = []
-    use_enhanced_rag: Optional[bool] = True
-    document_id: Optional[str] = None
-
-class QueryResponse(BaseModel):
-    response: Optional[str] = None
-    error: Optional[str] = None
-    context_found: bool = False
-    sources: Optional[list] = None
-    session_id: str
-    confidence_score: float = 0.0
-    expand_available: bool = False
-    sources_searched: List[str] = []
-    retrieval_method: Optional[str] = None
-
-class ComprehensiveAnalysisRequest(BaseModel):
-    document_id: Optional[str] = None
-    analysis_types: List[AnalysisType] = [AnalysisType.COMPREHENSIVE]
-    user_id: str
-    session_id: Optional[str] = None
-    response_style: str = "detailed"
-
-class StructuredAnalysisResponse(BaseModel):
-    document_summary: Optional[str] = None
-    key_clauses: Optional[str] = None
-    risk_assessment: Optional[str] = None
-    timeline_deadlines: Optional[str] = None
-    party_obligations: Optional[str] = None
-    missing_clauses: Optional[str] = None
-    confidence_scores: Dict[str, float] = {}
-    sources_by_section: Dict[str, List[Dict]] = {}
-    overall_confidence: float = 0.0
-    processing_time: float = 0.0
-    warnings: List[str] = []
-    retrieval_method: str = "comprehensive_analysis"
-
-class UserDocumentUpload(BaseModel):
-    user_id: str
-    file_id: str
-    filename: str
-    upload_timestamp: str
-    pages_processed: int
-    metadata: Dict[str, Any]
-
-class DocumentUploadResponse(BaseModel):
-    message: str
-    file_id: str
-    pages_processed: int
-    processing_time: float
-    warnings: List[str]
-    session_id: str
-    user_id: str
-    container_id: str
-
-class ConversationHistory(BaseModel):
-    session_id: str
-    messages: List[Dict[str, Any]]
-
-# User Management - ENHANCED VERSION
-class UserContainerManager:
-    """Manages user-specific document containers with powerful embeddings"""
-    
-    def __init__(self, base_path: str):
-        self.base_path = base_path
-        # Initialize embeddings safely - will be set after models are loaded
-        self.embeddings = None
-        self._initialize_embeddings()
-        logger.info(f"UserContainerManager initialized with base path: {base_path}")
-    
-    def _initialize_embeddings(self):
-        """Initialize embeddings with the best available model"""
-        global embeddings, sentence_model_name
+        # North Carolina
+        r'\bN\.C\.\s*Gen\.\s*Stat\.\s*§?\s*\d+',   # North Carolina General Statutes
+        r'\bN\.C\.\s*Admin\.\s*Code\s*tit\.\s*\d+', # North Carolina Administrative Code
         
-        # Try to use the global embeddings if available
-        if 'embeddings' in globals() and globals()['embeddings']:
-            self.embeddings = globals()['embeddings']
-            logger.info(f"Using global embeddings model")
-            return
+        # Michigan
+        r'\bMich\.\s*Comp\.\s*Laws\s*(?:Ann\.)?\s*§?\s*\d+', # Michigan Compiled Laws
+        r'\bMich\.\s*Admin\.\s*Code\s*r\.\s*\d+',   # Michigan Administrative Code
         
-        # TEMPORARY: Use faster embeddings for large document processing
-        fast_embedding_models = [
-            "all-MiniLM-L6-v2",  # Fast and reliable
-            "all-MiniLM-L12-v2",
-        ]
+        # New Jersey
+        r'\bN\.J\.\s*Stat\.\s*(?:Ann\.)?\s*§?\s*\d+', # New Jersey Statutes
+        r'\bN\.J\.\s*Admin\.\s*Code\s*§?\s*\d+',    # New Jersey Administrative Code
         
-        for model_name in fast_embedding_models:
-            try:
-                self.embeddings = HuggingFaceEmbeddings(model_name=model_name)
-                logger.info(f"✅ UserContainerManager using FAST embeddings: {model_name}")
-                return
-            except Exception as e:
-                logger.warning(f"Failed to load {model_name}: {e}")
-                continue
+        # Virginia
+        r'\bVa\.\s*Code\s*(?:Ann\.)?\s*§?\s*\d+',   # Virginia Code
+        r'\bVirginia\s+Code\s*§?\s*\d+',
+        r'\bVa\.\s*Admin\.\s*Code\s*§?\s*\d+',      # Virginia Administrative Code
         
-        # Last resort fallback
-        try:
-            self.embeddings = HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2")
-            logger.warning("⚠️ Using fallback embeddings: all-MiniLM-L6-v2")
-        except Exception as e:
-            logger.error(f"❌ Failed to load any embeddings model: {e}")
-            self.embeddings = None
+        # Massachusetts
+        r'\bMass\.\s*Gen\.\s*Laws\s*(?:Ann\.)?\s*ch\.\s*\d+', # Massachusetts General Laws
+        r'\bM\.G\.L\.\s*ch?\.\s*\d+',               # Massachusetts General Laws (abbreviated)
+        r'\bMass\.\s*Regs\.\s*Code\s*tit\.\s*\d+', # Massachusetts Regulations
+        
+        # Maryland
+        r'\bMd\.\s*Code\s*(?:Ann\.)?(?:\s*,\s*\w+)?\s*§?\s*\d+', # Maryland Code (with possible subject area)
+        r'\bCOMR\s*\d+',                           # Code of Maryland Regulations
+        
+        # Wisconsin
+        r'\bWis\.\s*Stat\.\s*(?:Ann\.)?\s*§?\s*\d+', # Wisconsin Statutes
+        r'\bWis\.\s*Admin\.\s*Code\s*§?\s*\d+',     # Wisconsin Administrative Code
+        
+        # Minnesota
+        r'\bMinn\.\s*Stat\.\s*(?:Ann\.)?\s*§?\s*\d+', # Minnesota Statutes
+        r'\bMinn\.\s*R\.\s*\d+',                   # Minnesota Rules
+        
+        # Colorado
+        r'\bColo\.\s*Rev\.\s*Stat\.\s*(?:Ann\.)?\s*§?\s*\d+', # Colorado Revised Statutes
+        r'\bC\.R\.S\.\s*§?\s*\d+',                 # Colorado Revised Statutes (abbreviated)
+        r'\bColo\.\s*Code\s*Regs\.\s*§?\s*\d+',    # Colorado Code of Regulations
+        
+        # Arizona
+        r'\bAriz\.\s*Rev\.\s*Stat\.\s*(?:Ann\.)?\s*§?\s*\d+', # Arizona Revised Statutes
+        r'\bA\.R\.S\.\s*§?\s*\d+',                 # Arizona Revised Statutes (abbreviated)
+        r'\bAriz\.\s*Admin\.\s*Code\s*§?\s*\d+',   # Arizona Administrative Code
+        
+        # Tennessee
+        r'\bTenn\.\s*Code\s*(?:Ann\.)?\s*§?\s*\d+', # Tennessee Code
+        r'\bT\.C\.A\.\s*§?\s*\d+',                 # Tennessee Code (abbreviated)
+        r'\bTenn\.\s*Comp\.\s*R\.\s*&\s*Regs\.\s*\d+', # Tennessee Rules and Regulations
+        
+        # Missouri
+        r'\bMo\.\s*(?:Ann\.\s*)?Stat\.\s*§?\s*\d+', # Missouri Statutes
+        r'\bR\.S\.Mo\.\s*§?\s*\d+',                # Revised Statutes of Missouri
+        r'\bMo\.\s*Code\s*Regs\.\s*Ann\.\s*tit\.\s*\d+', # Missouri Code of Regulations
+        
+        # Indiana
+        r'\bInd\.\s*Code\s*(?:Ann\.)?\s*§?\s*\d+',  # Indiana Code
+        r'\bI\.C\.\s*§?\s*\d+',                    # Indiana Code (abbreviated)
+        r'\bInd\.\s*Admin\.\s*Code\s*tit\.\s*\d+', # Indiana Administrative Code
+        
+        # Louisiana
+        r'\bLa\.\s*(?:Civ\.|Rev\.\s*Stat\.\s*Ann\.|Code\s*Civ\.\s*Proc\.\s*Ann\.|Code\s*Crim\.\s*Proc\.\s*Ann\.|Code\s*Evid\.\s*Ann\.|Const\.|R\.S\.)\s*(?:art\.)?\s*§?\s*\d+', # Louisiana various codes
+        r'\bLouisiana\s+(?:Civil|Revised\s+Statutes|Criminal|Evidence)\s+Code\s*(?:art\.)?\s*§?\s*\d+',
+        r'\bLa\.\s*Admin\.\s*Code\s*tit\.\s*\d+',  # Louisiana Administrative Code
+        
+        # Alabama
+        r'\bAla\.\s*Code\s*§?\s*\d+',              # Alabama Code
+        r'\bAlabama\s+Code\s*§?\s*\d+',
+        r'\bAla\.\s*Admin\.\s*Code\s*r\.\s*\d+',   # Alabama Administrative Code
+        
+        # South Carolina
+        r'\bS\.C\.\s*Code\s*(?:Ann\.)?\s*§?\s*\d+', # South Carolina Code
+        r'\bS\.C\.\s*Code\s*Regs\.\s*\d+',         # South Carolina Code of Regulations
+        
+        # Kentucky
+        r'\bKy\.\s*Rev\.\s*Stat\.\s*(?:Ann\.)?\s*§?\s*\d+', # Kentucky Revised Statutes
+        r'\bK\.R\.S\.\s*§?\s*\d+',                 # Kentucky Revised Statutes (abbreviated)
+        r'\bKy\.\s*Admin\.\s*Regs\.\s*tit\.\s*\d+', # Kentucky Administrative Regulations
+        
+        # Oregon
+        r'\bOr\.\s*Rev\.\s*Stat\.\s*(?:Ann\.)?\s*§?\s*\d+', # Oregon Revised Statutes
+        r'\bO\.R\.S\.\s*§?\s*\d+',                 # Oregon Revised Statutes (abbreviated)
+        r'\bOr\.\s*Admin\.\s*R\.\s*\d+',           # Oregon Administrative Rules
+        
+        # Oklahoma
+        r'\bOkla\.\s*Stat\.\s*(?:Ann\.)?\s*tit\.\s*\d+', # Oklahoma Statutes
+        r'\bOklahoma\s+Statutes\s+tit\.\s*\d+',
+        r'\bOkla\.\s*Admin\.\s*Code\s*§?\s*\d+',   # Oklahoma Administrative Code
+        
+        # Connecticut
+        r'\bConn\.\s*Gen\.\s*Stat\.\s*(?:Ann\.)?\s*§?\s*\d+', # Connecticut General Statutes
+        r'\bC\.G\.S\.\s*§?\s*\d+',                 # Connecticut General Statutes (abbreviated)
+        r'\bConn\.\s*Agencies\s*Regs\.\s*§?\s*\d+', # Connecticut Agencies Regulations
+        
+        # Iowa
+        r'\bIowa\s*Code\s*(?:Ann\.)?\s*§?\s*\d+',   # Iowa Code
+        r'\bI\.C\.\s*§?\s*\d+',                    # Iowa Code (abbreviated) - Note: conflicts with Indiana
+        r'\bIowa\s*Admin\.\s*Code\s*r\.\s*\d+',    # Iowa Administrative Code
+        
+        # Arkansas
+        r'\bArk\.\s*Code\s*(?:Ann\.)?\s*§?\s*\d+',  # Arkansas Code
+        r'\bA\.C\.A\.\s*§?\s*\d+',                 # Arkansas Code (abbreviated)
+        r'\bArk\.\s*Code\s*R\.\s*\d+',             # Arkansas Code of Rules
+        
+        # Mississippi
+        r'\bMiss\.\s*Code\s*(?:Ann\.)?\s*§?\s*\d+', # Mississippi Code
+        r'\bMississippi\s+Code\s*§?\s*\d+',
+        
+        # Kansas
+        r'\bKan\.\s*Stat\.\s*(?:Ann\.)?\s*§?\s*\d+', # Kansas Statutes
+        r'\bK\.S\.A\.\s*§?\s*\d+',                 # Kansas Statutes (abbreviated)
+        r'\bKan\.\s*Admin\.\s*Regs\.\s*§?\s*\d+',  # Kansas Administrative Regulations
+        
+        # Utah
+        r'\bUtah\s*Code\s*(?:Ann\.)?\s*§?\s*\d+',   # Utah Code
+        r'\bU\.C\.A\.\s*§?\s*\d+',                 # Utah Code (abbreviated)
+        r'\bUtah\s*Admin\.\s*Code\s*r\.\s*\d+',    # Utah Administrative Code
+        
+        # Nevada
+        r'\bNev\.\s*Rev\.\s*Stat\.\s*(?:Ann\.)?\s*§?\s*\d+', # Nevada Revised Statutes
+        r'\bN\.R\.S\.\s*§?\s*\d+',                 # Nevada Revised Statutes (abbreviated)
+        r'\bNev\.\s*Admin\.\s*Code\s*§?\s*\d+',    # Nevada Administrative Code
+        
+        # New Mexico
+        r'\bN\.M\.\s*Stat\.\s*(?:Ann\.)?\s*§?\s*\d+', # New Mexico Statutes
+        r'\bNMSA\s*§?\s*\d+',                      # New Mexico Statutes (abbreviated)
+        r'\bN\.M\.\s*Code\s*R\.\s*§?\s*\d+',       # New Mexico Code of Rules
+        
+        # West Virginia
+        r'\bW\.\s*Va\.\s*Code\s*(?:Ann\.)?\s*§?\s*\d+', # West Virginia Code
+        r'\bW\.Va\.\s*Code\s*R\.\s*§?\s*\d+',      # West Virginia Code of Rules
+        
+        # Nebraska
+        r'\bNeb\.\s*Rev\.\s*Stat\.\s*(?:Ann\.)?\s*§?\s*\d+', # Nebraska Revised Statutes
+        r'\bR\.R\.S\.\s*Neb\.\s*§?\s*\d+',         # Revised Revised Statutes Nebraska
+        r'\bNeb\.\s*Admin\.\s*R\.\s*&\s*Regs\.\s*§?\s*\d+', # Nebraska Administrative Rules
+        
+        # Idaho
+        r'\bIdaho\s*Code\s*(?:Ann\.)?\s*§?\s*\d+',  # Idaho Code
+        r'\bI\.C\.\s*§?\s*\d+',                    # Idaho Code (abbreviated) - Note: conflicts with others
+        r'\bIDAPA\s*\d+',                          # Idaho Administrative Procedures Act
+        
+        # Hawaii
+        r'\bHaw\.\s*Rev\.\s*Stat\.\s*(?:Ann\.)?\s*§?\s*\d+', # Hawaii Revised Statutes
+        r'\bH\.R\.S\.\s*§?\s*\d+',                 # Hawaii Revised Statutes (abbreviated)
+        r'\bHaw\.\s*Code\s*R\.\s*§?\s*\d+',        # Hawaii Code of Rules
+        
+        # New Hampshire
+        r'\bN\.H\.\s*Rev\.\s*Stat\.\s*(?:Ann\.)?\s*§?\s*\d+', # New Hampshire Revised Statutes
+        r'\bR\.S\.A\.\s*§?\s*\d+',                 # Revised Statutes Annotated
+        r'\bN\.H\.\s*Code\s*Admin\.\s*R\.\s*§?\s*\d+', # New Hampshire Code of Administrative Rules
+        
+        # Maine
+        r'\bMe\.\s*Rev\.\s*Stat\.\s*(?:Ann\.)?\s*tit\.\s*\d+', # Maine Revised Statutes
+        r'\bM\.R\.S\.\s*tit\.\s*\d+',              # Maine Revised Statutes (abbreviated)
+        r'\bMe\.\s*Code\s*R\.\s*§?\s*\d+',         # Maine Code of Rules
+        
+        # Rhode Island
+        r'\bR\.I\.\s*Gen\.\s*Laws\s*(?:Ann\.)?\s*§?\s*\d+', # Rhode Island General Laws
+        r'\bR\.I\.\s*Code\s*R\.\s*§?\s*\d+',       # Rhode Island Code of Rules
+        
+        # Montana
+        r'\bMont\.\s*Code\s*(?:Ann\.)?\s*§?\s*\d+', # Montana Code
+        r'\bM\.C\.A\.\s*§?\s*\d+',                 # Montana Code (abbreviated)
+        r'\bMont\.\s*Admin\.\s*R\.\s*§?\s*\d+',    # Montana Administrative Rules
+        
+        # Delaware
+        r'\bDel\.\s*Code\s*(?:Ann\.)?\s*tit\.\s*\d+', # Delaware Code
+        r'\bDel\.\s*Admin\.\s*Code\s*tit\.\s*\d+', # Delaware Administrative Code
+        
+        # South Dakota
+        r'\bS\.D\.\s*Codified\s*Laws\s*(?:Ann\.)?\s*§?\s*\d+', # South Dakota Codified Laws
+        r'\bSDCL\s*§?\s*\d+',                      # South Dakota Codified Laws (abbreviated)
+        r'\bS\.D\.\s*Admin\.\s*R\.\s*§?\s*\d+',    # South Dakota Administrative Rules
+        
+        # North Dakota
+        r'\bN\.D\.\s*Cent\.\s*Code\s*(?:Ann\.)?\s*§?\s*\d+', # North Dakota Century Code
+        r'\bN\.D\.C\.C\.\s*§?\s*\d+',              # North Dakota Century Code (abbreviated)
+        r'\bN\.D\.\s*Admin\.\s*Code\s*§?\s*\d+',   # North Dakota Administrative Code
+        
+        # Alaska
+        r'\bAlaska\s*Stat\.\s*(?:Ann\.)?\s*§?\s*\d+', # Alaska Statutes
+        r'\bA\.S\.\s*§?\s*\d+',                    # Alaska Statutes (abbreviated)
+        r'\bAlaska\s*Admin\.\s*Code\s*tit\.\s*\d+', # Alaska Administrative Code
+        
+        # Vermont
+        r'\bVt\.\s*Stat\.\s*(?:Ann\.)?\s*tit\.\s*\d+', # Vermont Statutes
+        r'\bV\.S\.A\.\s*tit\.\s*\d+',              # Vermont Statutes Annotated (abbreviated)
+        r'\bVt\.\s*Code\s*R\.\s*§?\s*\d+',         # Vermont Code of Rules
+        
+        # Wyoming
+        r'\bWyo\.\s*Stat\.\s*(?:Ann\.)?\s*§?\s*\d+', # Wyoming Statutes
+        r'\bW\.S\.\s*§?\s*\d+',                    # Wyoming Statutes (abbreviated)
+        r'\bWyo\.\s*Code\s*R\.\s*§?\s*\d+',        # Wyoming Code of Rules
+        
+        # District of Columbia
+        r'\bD\.C\.\s*(?:Code|Official\s*Code)\s*(?:Ann\.)?\s*§?\s*\d+', # DC Code
+        r'\bD\.C\.M\.R\.\s*§?\s*\d+',              # DC Municipal Regulations
+        
+        # Generic statutory terms (these should come after specific state patterns)
+        r'\bstatute[s]?', r'\bregulation[s]?', r'\bcode\s+section[s]?',
+        r'\bminimum\s+standards?', r'\brequirements?', r'\bmust\s+meet',
+        r'\bstandards?.*regulat', r'\bcomposition.*conduct',
+        r'\bpolicies.*record[- ]keeping', r'\bmandatory\s+(?:standards?|requirements?)',
+        r'\bshall\s+(?:meet|comply|maintain)', r'\bmust\s+(?:include|contain|provide)',
+        r'\brequired\s+(?:by\s+law|under|pursuant\s+to)',
+        r'\bregulatory\s+(?:standards?|requirements?|compliance)',
+        r'\bstatutory\s+(?:mandate|requirement|provision)',
+        r'\blegal\s+(?:standards?|requirements?|obligations?)',
+        r'\bcompliance\s+with.*(?:statute|regulation|code)',
+        r'\badministrative\s+(?:rule[s]?|regulation[s]?|code)',
+    ]
     
-    def create_user_container(self, user_id: str) -> str:
-        container_id = hashlib.sha256(user_id.encode()).hexdigest()[:16]
-        container_path = os.path.join(self.base_path, container_id)
-        os.makedirs(container_path, exist_ok=True)
-        
-        # Ensure embeddings are available
-        if not self.embeddings:
-            self._initialize_embeddings()
-        
-        if not self.embeddings:
-            raise Exception("No embeddings model available for container creation")
-        
-        user_db = Chroma(
-            collection_name=f"user_{container_id}",
-            embedding_function=self.embeddings,
-            persist_directory=container_path
-        )
-        
-        logger.info(f"Created container for user {user_id}: {container_id}")
-        return container_id
-    
-    def get_user_database(self, user_id: str) -> Optional[Chroma]:
-        container_id = self.get_container_id(user_id)
-        container_path = os.path.join(self.base_path, container_id)
-        
-        if not os.path.exists(container_path):
-            logger.warning(f"Container not found for user {user_id}")
-            return None
-        
-        # Ensure embeddings are available
-        if not self.embeddings:
-            self._initialize_embeddings()
-        
-        if not self.embeddings:
-            logger.error("No embeddings model available for database access")
-            return None
-        
-        return Chroma(
-            collection_name=f"user_{container_id}",
-            embedding_function=self.embeddings,
-            persist_directory=container_path
-        )
-    
-    def get_user_database_safe(self, user_id: str) -> Optional[Chroma]:
-        """Get user database with enhanced error handling and recovery"""
-        try:
-            container_id = self.get_container_id(user_id)
-            container_path = os.path.join(self.base_path, container_id)
-            
-            if not os.path.exists(container_path):
-                logger.warning(f"Container not found for user {user_id}, creating new one")
-                self.create_user_container(user_id)
-            
-            # Ensure embeddings are available
-            if not self.embeddings:
-                self._initialize_embeddings()
-            
-            if not self.embeddings:
-                logger.error("No embeddings model available for safe database access")
-                return None
-            
-            return Chroma(
-                collection_name=f"user_{container_id}",
-                embedding_function=self.embeddings,
-                persist_directory=container_path
-            )
-            
-        except Exception as e:
-            logger.error(f"Error getting user database for {user_id}: {e}")
-            try:
-                logger.info(f"Attempting to recover by creating new container for {user_id}")
-                self.create_user_container(user_id)
-                container_id = self.get_container_id(user_id)
-                container_path = os.path.join(self.base_path, container_id)
-                
-                if not self.embeddings:
-                    self._initialize_embeddings()
-                
-                if not self.embeddings:
-                    logger.error("No embeddings model available for recovery")
-                    return None
-                
-                return Chroma(
-                    collection_name=f"user_{container_id}",
-                    embedding_function=self.embeddings,
-                    persist_directory=container_path
-                )
-            except Exception as recovery_error:
-                logger.error(f"Recovery failed for user {user_id}: {recovery_error}")
-                return None
-    
-    def get_container_id(self, user_id: str) -> str:
-        return hashlib.sha256(user_id.encode()).hexdigest()[:16]
-    
-    def add_document_to_container(self, user_id: str, document_text: str, metadata: Dict, file_id: str = None) -> bool:
-        try:
-            user_db = self.get_user_database_safe(user_id)
-            if not user_db:
-                container_id = self.create_user_container(user_id)
-                user_db = self.get_user_database_safe(user_id)
-            
-            # Smart document type detection - lowered threshold
-            bill_count = len(re.findall(r'\b(?:HB|SB|SHB|SSB|ESHB|ESSB)\s+\d+', document_text))
-            is_legislative = bill_count > 1  # Lowered from 2 to 1 - even 1-2 bills = legislative
-            
-            if is_legislative:
-                # Legislative document: Bill-aware chunking
-                logger.info(f"Detected legislative document with {bill_count} bills - using bill-aware chunking")
-                text_splitter = RecursiveCharacterTextSplitter(
-                    chunk_size=2000,
-                    chunk_overlap=500,
-                    length_function=len,
-                    separators=["\n\n", "\nHB ", "\nSB ", "\nSHB ", "\nSSB ", "\nESHB ", "\nESSB ", "\n", " "]
-                )
-                chunking_method = 'bill_aware_chunking'
-            else:
-                # Regular document: Standard semantic chunking
-                logger.info(f"Detected regular document ({bill_count} bills found) - using standard chunking")
-                text_splitter = RecursiveCharacterTextSplitter(
-                    chunk_size=1500,
-                    chunk_overlap=300,
-                    length_function=len,
-                    separators=["\n\n", "\n", ". ", " ", ""]  # Natural breakpoints
-                )
-                chunking_method = 'semantic_chunking'
-            
-            chunks = text_splitter.split_text(document_text)
-            logger.info(f"Created {len(chunks)} chunks using {chunking_method}")
-            
-            # Adjust batch size based on chunk size
-            batch_size = 25 if is_legislative else 50
-            total_batches = (len(chunks) + batch_size - 1) // batch_size
-            
-            for batch_num in range(total_batches):
-                start_idx = batch_num * batch_size
-                end_idx = min(start_idx + batch_size, len(chunks))
-                batch_chunks = chunks[start_idx:end_idx]
-                
-                logger.info(f"Processing batch {batch_num + 1}/{total_batches} ({len(batch_chunks)} chunks)")
-                
-                documents = []
-                for i, chunk in enumerate(batch_chunks):
-                    doc_metadata = metadata.copy()
-                    doc_metadata['chunk_index'] = start_idx + i
-                    doc_metadata['total_chunks'] = len(chunks)
-                    doc_metadata['user_id'] = user_id
-                    doc_metadata['upload_timestamp'] = datetime.utcnow().isoformat()
-                    doc_metadata['chunk_size'] = len(chunk)
-                    doc_metadata['chunking_method'] = chunking_method
-                    doc_metadata['document_type'] = 'legislative' if is_legislative else 'general'
-                    
-                    # Extract bill numbers for legislative docs only
-                    if is_legislative:
-                        bill_numbers = re.findall(r'\b(?:HB|SB|SHB|SSB|ESHB|ESSB)\s+\d+', chunk)
-                        if bill_numbers:
-                            doc_metadata['contains_bills'] = ', '.join(bill_numbers)
-                            logger.info(f"Chunk {start_idx + i} contains bills: {bill_numbers}")
-                    
-                    if file_id:
-                        doc_metadata['file_id'] = file_id
-                    
-                    # Clean metadata for ChromaDB
-                    clean_metadata = {}
-                    for key, value in doc_metadata.items():
-                        if isinstance(value, (str, int, float, bool)):
-                            clean_metadata[key] = value
-                        elif isinstance(value, list):
-                            clean_metadata[key] = str(value)
-                        elif value is None:
-                            clean_metadata[key] = ""
-                        else:
-                            clean_metadata[key] = str(value)
-                    
-                    documents.append(Document(
-                        page_content=chunk,
-                        metadata=clean_metadata
-                    ))
-                
-                # Add batch to ChromaDB
-                try:
-                    user_db.add_documents(documents)
-                    logger.info(f"✅ Added batch {batch_num + 1} ({len(documents)} chunks)")
-                except Exception as batch_error:
-                    logger.error(f"❌ Batch {batch_num + 1} failed: {batch_error}")
-                    return False
-            
-            logger.info(f"✅ Successfully added ALL {len(chunks)} chunks for document {file_id or 'unknown'}")
+    for pattern in statutory_indicators:
+        if re.search(pattern, question, re.IGNORECASE):
             return True
-            
-        except Exception as e:
-            logger.error(f"❌ Error in add_document_to_container: {e}")
-            logger.error(f"Error type: {type(e).__name__}")
-            import traceback
-            logger.error(f"Full traceback: {traceback.format_exc()}")
-            return False
-    
-    def search_user_container(self, user_id: str, query: str, k: int = 5, document_id: str = None) -> List[Tuple]:
-        """Search with timeout protection"""
-        return self.search_user_container_safe(user_id, query, k, document_id)
-    
-    def search_user_container_safe(self, user_id: str, query: str, k: int = 5, document_id: str = None) -> List[Tuple]:
-        """Search with enhanced error handling and timeout protection"""
-        try:
-            user_db = self.get_user_database_safe(user_id)
-            if not user_db:
-                logger.warning(f"No database available for user {user_id}")
-                return []
-            
-            filter_dict = None
-            if document_id:
-                filter_dict = {"file_id": document_id}
-            
-            try:
-                results = user_db.similarity_search_with_score(query, k=k, filter=filter_dict)
-                return results
-            except Exception as search_error:
-                logger.warning(f"Search failed for user {user_id}: {search_error}")
-                return []
-                
-        except Exception as e:
-            logger.error(f"Error in safe container search for user {user_id}: {e}")
-            return []
-    
-    def enhanced_search_user_container(self, user_id: str, query: str, conversation_context: str, k: int = 12, document_id: str = None) -> List[Tuple]:
-        """Enhanced search with timeout protection and bill-specific optimization"""
-        try:
-            user_db = self.get_user_database_safe(user_id)
-            if not user_db:
-                return []
-            
-            filter_dict = None
-            if document_id:
-                filter_dict = {"file_id": document_id}
-            
-            try:
-                # Check if this is a bill-specific query
-                bill_match = re.search(r"\b(HB|SB|SSB|ESSB|SHB|ESHB)\s+(\d+)\b", query, re.IGNORECASE)
-                
-                if bill_match:
-                    bill_number = f"{bill_match.group(1)} {bill_match.group(2)}"
-                    logger.info(f"Bill-specific search for: {bill_number}")
-                    
-                    # First, try to find chunks that contain this specific bill
-                    try:
-                        all_docs = user_db.get()
-                        bill_specific_chunks = []
-                        
-                        for i, (doc_id, metadata, content) in enumerate(zip(all_docs['ids'], all_docs['metadatas'], all_docs['documents'])):
-                            if metadata and 'contains_bills' in metadata:
-                                if bill_number in metadata['contains_bills']:
-                                    # Create a document object for this chunk
-                                    from langchain.docstore.document import Document
-                                    doc_obj = Document(page_content=content, metadata=metadata)
-                                    # Use a high relevance score since we found exact bill match
-                                    bill_specific_chunks.append((doc_obj, 0.95))  # High relevance for exact matches
-                                    logger.info(f"Found {bill_number} in chunk {metadata.get('chunk_index')} with boosted score")
-                        
-                        if bill_specific_chunks:
-                            logger.info(f"Using {len(bill_specific_chunks)} bill-specific chunks with high relevance")
-                            # Get additional context chunks with lower threshold
-                            regular_results = user_db.similarity_search_with_score(query, k=k, filter=filter_dict)
-                            
-                            # Combine bill-specific (high score) with regular results
-                            all_results = bill_specific_chunks + regular_results
-                            return remove_duplicate_documents(all_results)[:k]
-                    except Exception as bill_search_error:
-                        logger.warning(f"Bill-specific search failed, falling back to regular search: {bill_search_error}")
-                        # Fall through to regular search
-                
-                # Fallback to regular search
-                direct_results = user_db.similarity_search_with_score(query, k=k, filter=filter_dict)
-                expanded_query = f"{query} {conversation_context}"
-                expanded_results = user_db.similarity_search_with_score(expanded_query, k=k, filter=filter_dict)
-                
-                sub_query_results = []
-                if nlp:
-                    doc = nlp(query)
-                    for ent in doc.ents:
-                        if ent.label_ in ["ORG", "PERSON", "LAW", "DATE"]:
-                            sub_results = user_db.similarity_search_with_score(f"What is {ent.text}?", k=3, filter=filter_dict)
-                            sub_query_results.extend(sub_results)
-                
-                all_results = direct_results + expanded_results + sub_query_results
-                return remove_duplicate_documents(all_results)[:k]
-                
-            except Exception as search_error:
-                logger.warning(f"Enhanced search failed for user {user_id}: {search_error}")
-                return []
-            
-        except Exception as e:
-            logger.error(f"Error in enhanced user container search: {e}")
-            return []
+    return False
 
-# Global State - Initialize after models are loaded
-conversations: Dict[str, Dict] = {}
-uploaded_files: Dict[str, Dict] = {}
-user_sessions: Dict[str, User] = {}
+def create_statutory_prompt(context_text: str, question: str, conversation_context: str, 
+                          sources_searched: list, retrieval_method: str, document_id: str = None) -> str:
+    """Create an enhanced prompt specifically for statutory analysis"""
+    
+    return f"""You are a legal research assistant specializing in statutory analysis. Your job is to extract COMPLETE, SPECIFIC information from legal documents.
 
-# External databases
-external_databases = {
-    "lexisnexis": LexisNexisInterface(),
-    "westlaw": WestlawInterface()
-}
+STRICT SOURCE REQUIREMENTS:
+- Answer ONLY based on the retrieved documents provided in the context
+- Do NOT use general legal knowledge, training data, assumptions, or inferences beyond what's explicitly stated
+- If information is not in the provided documents, state: "This information is not available in the provided documents"
 
-# Load NLP Models - Enhanced with powerful legal-focused models
-nlp = None
-sentence_model = None
-embeddings = None
-sentence_model_name = None
+🔴 CRITICAL: You MUST extract actual numbers, durations, and specific requirements. NEVER use placeholders like "[duration not specified]" or "[requirements not listed]".
 
-# Legal-specific and powerful models to try in order of preference
-EMBEDDING_MODELS = [
-    # Legal-specific models (best for legal documents)
-    "nlpaueb/legal-bert-base-uncased",
-    "law-ai/InCaseLawBERT", 
-    
-    # High-performance general models
-    "sentence-transformers/all-mpnet-base-v2",  # Much better than MiniLM
-    "sentence-transformers/all-roberta-large-v1",
-    "microsoft/DialoGPT-medium",
-    
-    # Fallback models
-    "sentence-transformers/all-MiniLM-L12-v2",  # Better than L6
-    "all-MiniLM-L6-v2"  # Last resort
-]
+MANDATORY EXTRACTION RULES:
+1. 📖 READ EVERY WORD of the provided context before claiming anything is missing
+2. 🔢 EXTRACT ALL NUMBERS: durations (60 minutes), quantities (25 people), percentages, dollar amounts
+3. 📝 QUOTE EXACT LANGUAGE: Use quotation marks for statutory text
+4. 📋 LIST ALL REQUIREMENTS: Number each requirement found (1., 2., 3., etc.)
+5. 🎯 BE SPECIFIC: Include section numbers, subsection letters, paragraph numbers
+6. ⚠️ ONLY claim information is "missing" after thorough analysis of ALL provided text
 
-try:
-    nlp = spacy.load("en_core_web_sm")
-    logger.info("✅ spaCy model loaded successfully")
-except Exception as e:
-    logger.error(f"Failed to load spaCy model: {e}")
-    nlp = None
+INSTRUCTIONS FOR THOROUGH ANALYSIS:
+1. **READ CAREFULLY**: Scan the entire context for information that answers the user's question
+2. **EXTRACT COMPLETELY**: When extracting requirements, include FULL details (e.g., "60 minutes" not just "minimum of")
+3. **QUOTE VERBATIM**: For statutory standards, use exact quotes: `"[Exact Text]" (Source)`
+4. **ENUMERATE EXPLICITLY**: Present listed requirements as numbered points with full quotes
+5. **CITE SOURCES**: Reference the document name for each fact
+6. **BE COMPLETE**: Explicitly note missing standards: "Documents lack full subsection [X]"
+7. **USE DECISIVE PHRASING**: State facts directly ("The statute requires...") - NEVER "documents indicate"
 
-# Try to load the most powerful available sentence transformer
-sentence_model_name = None
-for model_name in EMBEDDING_MODELS:
-    try:
-        sentence_model = SentenceTransformer(model_name)
-        sentence_model_name = model_name
-        logger.info(f"✅ Loaded powerful sentence model: {model_name}")
-        break
-    except Exception as e:
-        logger.warning(f"Failed to load {model_name}: {e}")
-        continue
+SOURCES SEARCHED: {', '.join(sources_searched)}
+RETRIEVAL METHOD: {retrieval_method}
+{f"DOCUMENT FILTER: Specific document {document_id}" if document_id else "DOCUMENT SCOPE: All available documents"}
 
-if sentence_model is None:
-    logger.error("❌ Failed to load any sentence transformer model")
-    sentence_model_name = "none"
+RESPONSE FORMAT REQUIRED FOR STATUTORY QUESTIONS:
 
-# Load embeddings with the same powerful model
-try:
-    if sentence_model_name and sentence_model_name != "none":
-        # Use the same model for consistency
-        embeddings = HuggingFaceEmbeddings(model_name=sentence_model_name)
-        logger.info(f"✅ Loaded embeddings with: {sentence_model_name}")
-    else:
-        # Fallback
-        embeddings = HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2")
-        logger.info("⚠️ Using fallback embeddings: all-MiniLM-L6-v2")
-except Exception as e:
-    logger.error(f"Failed to load embeddings: {e}")
-    embeddings = None
+## SPECIFIC REQUIREMENTS FOUND:
+[List each requirement with exact quotes and citations]
 
-# Initialize container manager AFTER models are loaded
-container_manager = UserContainerManager(USER_CONTAINERS_PATH)
+## NUMERICAL STANDARDS:
+[Extract ALL numbers, durations, thresholds, limits]
 
-# Authentication
-def get_current_user(credentials: Optional[HTTPAuthorizationCredentials] = Depends(security)) -> User:
-    if credentials is None:
-        default_user_id = "debug_user"
-        if default_user_id not in user_sessions:
-            user_sessions[default_user_id] = User(
-                user_id=default_user_id,
-                container_id=container_manager.get_container_id(default_user_id),
-                subscription_tier="free"
-            )
-        return user_sessions[default_user_id]
-    
-    token = credentials.credentials
-    user_id = f"user_{token[:8]}"
-    
-    if user_id not in user_sessions:
-        user_sessions[user_id] = User(
-            user_id=user_id,
-            container_id=container_manager.get_container_id(user_id),
-            subscription_tier="free"
-        )
-    
-    return user_sessions[user_id]
+## PROCEDURAL RULES:
+[Detail composition, conduct, attendance, record-keeping rules]
 
-# Enhanced RAG Functions with BERT-based semantic chunking
-def parse_multiple_questions(query_text: str) -> List[str]:
-    questions = []
-    
-    if ';' in query_text:
-        parts = query_text.split(';')
-        for part in parts:
-            part = part.strip()
-            if part:
-                questions.append(part)
-    elif '?' in query_text and query_text.count('?') > 1:
-        parts = query_text.split('?')
-        for part in parts:
-            part = part.strip()
-            if part:
-                questions.append(part + '?')
-    else:
-        final_question = query_text
-        if not final_question.endswith('?') and '?' not in final_question:
-            final_question += '?'
-        questions = [final_question]
-    
-    return questions
+## ROLES AND RESPONSIBILITIES:
+[Define each party's specific duties with citations]
 
-def semantic_chunking_with_bert(text: str, max_chunk_size: int = 1500, overlap: int = 300) -> List[str]:
-    """Advanced semantic chunking with powerful BERT models for legal documents"""
-    try:
-        if sentence_model is None:
-            logger.warning("No sentence model available, using basic chunking")
-            return basic_text_chunking(text, max_chunk_size, overlap)
-        
-        logger.info(f"Using semantic chunking with model: {sentence_model_name}")
-        
-        # For legal documents, split on legal sections and paragraphs
-        # Look for common legal document patterns
-        legal_patterns = [
-            r'\n\s*SECTION\s+\d+',
-            r'\n\s*\d+\.\s+',  # Numbered sections
-            r'\n\s*\([a-z]\)',  # Subsections (a), (b), etc.
-            r'\n\s*WHEREAS',
-            r'\n\s*NOW, THEREFORE',
-            r'\n\s*Article\s+[IVX\d]+',
-        ]
-        
-        # Split text into meaningful sections first
-        sections = []
-        current_pos = 0
-        
-        # Find legal section breaks
-        import re
-        for pattern in legal_patterns:
-            matches = list(re.finditer(pattern, text, re.IGNORECASE))
-            for match in matches:
-                if match.start() > current_pos:
-                    section_text = text[current_pos:match.start()].strip()
-                    if section_text:
-                        sections.append(section_text)
-                current_pos = match.start()
-        
-        # Add remaining text
-        if current_pos < len(text):
-            remaining_text = text[current_pos:].strip()
-            if remaining_text:
-                sections.append(remaining_text)
-        
-        # If no legal patterns found, fall back to paragraph splitting
-        if not sections:
-            sections = [p.strip() for p in text.split('\n\n') if p.strip()]
-        
-        if not sections:
-            sections = [text]
-        
-        # If document is small enough, return as single chunk
-        if len(text) <= max_chunk_size:
-            return [text]
-        
-        # Calculate embeddings for sections (batch processing for efficiency)
-        try:
-            section_embeddings = sentence_model.encode(sections, batch_size=32, show_progress_bar=False)
-        except Exception as e:
-            logger.warning(f"Embedding calculation failed: {e}, using basic chunking")
-            return basic_text_chunking(text, max_chunk_size, overlap)
-        
-        # Advanced semantic grouping using cosine similarity
-        chunks = []
-        current_chunk = []
-        current_chunk_size = 0
-        
-        for i, section in enumerate(sections):
-            section_size = len(section)
-            
-            # If adding this section would exceed chunk size
-            if current_chunk_size + section_size > max_chunk_size and current_chunk:
-                
-                # For legal documents, try to find natural breaking points
-                if len(current_chunk) > 1:
-                    # Calculate semantic similarity to decide on best split point
-                    chunk_text = '\n\n'.join(current_chunk)
-                    chunks.append(chunk_text)
-                    
-                    # Intelligent overlap: keep semantically similar content
-                    if i > 0:
-                        # Use similarity to determine overlap
-                        prev_embedding = section_embeddings[i-1:i]
-                        curr_embedding = section_embeddings[i:i+1]
-                        
-                        try:
-                            similarity = np.dot(prev_embedding[0], curr_embedding[0])
-                            if similarity > 0.7:  # High similarity - include more overlap
-                                overlap_sections = current_chunk[-2:] if len(current_chunk) > 1 else current_chunk[-1:]
-                            else:
-                                overlap_sections = current_chunk[-1:] if current_chunk else []
-                            
-                            current_chunk = overlap_sections + [section]
-                            current_chunk_size = sum(len(s) for s in current_chunk)
-                        except:
-                            # Fallback to simple overlap
-                            current_chunk = [current_chunk[-1], section] if current_chunk else [section]
-                            current_chunk_size = sum(len(s) for s in current_chunk)
-                    else:
-                        current_chunk = [section]
-                        current_chunk_size = section_size
-                else:
-                    # Single large section - need to split it
-                    if section_size > max_chunk_size:
-                        # Split large section into smaller parts
-                        large_section_chunks = basic_text_chunking(section, max_chunk_size, overlap)
-                        chunks.extend(large_section_chunks[:-1])  # Add all but last
-                        current_chunk = [large_section_chunks[-1]]  # Keep last for next iteration
-                        current_chunk_size = len(large_section_chunks[-1])
-                    else:
-                        chunks.append(section)
-                        current_chunk = []
-                        current_chunk_size = 0
-            else:
-                current_chunk.append(section)
-                current_chunk_size += section_size
-        
-        # Add remaining chunk
-        if current_chunk:
-            chunk_text = '\n\n'.join(current_chunk)
-            chunks.append(chunk_text)
-        
-        # Ensure we have at least one chunk
-        if not chunks:
-            chunks = [text[:max_chunk_size]]
-        
-        logger.info(f"Semantic chunking created {len(chunks)} chunks from {len(sections)} sections")
-        return chunks
-        
-    except Exception as e:
-        logger.error(f"Advanced semantic chunking failed: {e}, falling back to basic chunking")
-        return basic_text_chunking(text, max_chunk_size, overlap)
+## INFORMATION NOT FOUND:
+[Only list what is genuinely absent after thorough review]
 
-def basic_text_chunking(text: str, max_chunk_size: int = 1500, overlap: int = 300) -> List[str]:
-    """Basic text chunking fallback"""
-    if len(text) <= max_chunk_size:
-        return [text]
-    
-    chunks = []
-    start = 0
-    
-    while start < len(text):
-        end = start + max_chunk_size
-        
-        if end >= len(text):
-            chunks.append(text[start:])
-            break
-        
-        # Try to break at a sentence boundary
-        chunk = text[start:end]
-        last_period = chunk.rfind('.')
-        last_newline = chunk.rfind('\n')
-        
-        # Find the best breaking point
-        break_point = max(last_period, last_newline)
-        if break_point > start + max_chunk_size // 2:  # Only if break point is reasonable
-            end = start + break_point + 1
-        
-        chunks.append(text[start:end])
-        start = end - overlap  # Add overlap
-    
-    return chunks
+EXAMPLES OF WHAT YOU MUST DO:
 
-def remove_duplicate_documents(results_with_scores: List[Tuple]) -> List[Tuple]:
-    if not results_with_scores:
-        return []
-    
-    unique_results = []
-    seen_content = set()
-    
-    for doc, score in results_with_scores:
-        content_hash = hash(doc.page_content[:100])
-        if content_hash not in seen_content:
-            seen_content.add(content_hash)
-            unique_results.append((doc, score))
-    
-    unique_results.sort(key=lambda x: x[1], reverse=True)
-    return unique_results
+❌ WRONG: "The victim impact panel should be a minimum of [duration not specified]."
+✅ RIGHT: "The statute requires victim impact panels to be 'a minimum of sixty (60) minutes in duration' (RCW 10.01.230(3)(a))."
 
-def enhanced_retrieval_v2(db, query_text: str, conversation_history_context: str, k: int = 12, document_filter: Dict = None) -> Tuple[List, str]:
-    logger.info(f"[ENHANCED_RETRIEVAL] Original query: '{query_text}'")
-    
-    try:
-        direct_results = db.similarity_search_with_score(query_text, k=k, filter=document_filter)
-        logger.info(f"[ENHANCED_RETRIEVAL] Direct search returned {len(direct_results)} results")
-        
-        expanded_query = f"{query_text} {conversation_history_context}"
-        expanded_results = db.similarity_search_with_score(expanded_query, k=k, filter=document_filter)
-        logger.info(f"[ENHANCED_RETRIEVAL] Expanded search returned {len(expanded_results)} results")
-        
-        sub_queries = []
-        if nlp:
-            doc = nlp(query_text)
-            for ent in doc.ents:
-                if ent.label_ in ["ORG", "PERSON", "LAW", "DATE"]:
-                    sub_queries.append(f"What is {ent.text}?")
-        
-        if not sub_queries:
-            question_words = ["what", "who", "when", "where", "why", "how"]
-            for word in question_words:
-                if word in query_text.lower():
-                    sub_queries.append(f"{word.capitalize()} {query_text.lower().replace(word, '').strip()}?")
-        
-        sub_query_results = []
-        for sq in sub_queries[:3]:
-            sq_results = db.similarity_search_with_score(sq, k=3, filter=document_filter)
-            sub_query_results.extend(sq_results)
-        
-        logger.info(f"[ENHANCED_RETRIEVAL] Sub-query search returned {len(sub_query_results)} results")
-        
-        all_results = direct_results + expanded_results + sub_query_results
-        unique_results = remove_duplicate_documents(all_results)
-        top_results = unique_results[:k]
-        
-        logger.info(f"[ENHANCED_RETRIEVAL] Final results after deduplication: {len(top_results)}")
-        return top_results, "enhanced_retrieval_v2"
-        
-    except Exception as e:
-        logger.error(f"[ENHANCED_RETRIEVAL] Error in enhanced retrieval: {e}")
-        basic_results = db.similarity_search_with_score(query_text, k=k, filter=document_filter)
-        return basic_results, "basic_fallback"
+❌ WRONG: "Specific details on composition are not available"
+✅ RIGHT: "Panel composition requirements include: (1) 'at least two victim impact speakers' (RCW 10.01.230(2)(a)), (2) 'one trained facilitator' (RCW 10.01.230(2)(b)), (3) 'maximum of twenty-five participants per session' (RCW 10.01.230(2)(c))."
 
-def calculate_confidence_score(results_with_scores: List[Tuple], response_length: int) -> float:
-    try:
-        if not results_with_scores:
-            return 0.2
-        
-        scores = [score for _, score in results_with_scores]
-        avg_relevance = np.mean(scores)
-        doc_factor = min(1.0, len(results_with_scores) / 5.0)
-        
-        if len(scores) > 1:
-            score_std = np.std(scores)
-            consistency_factor = max(0.5, 1.0 - score_std)
-        else:
-            consistency_factor = 0.7
-            
-        completeness_factor = min(1.0, response_length / 500.0)
-        
-        confidence = (
-            avg_relevance * 0.4 +
-            doc_factor * 0.3 +
-            consistency_factor * 0.2 +
-            completeness_factor * 0.1
-        )
-        
-        confidence = max(0.0, min(1.0, confidence))
-        return confidence
-    
-    except Exception as e:
-        logger.error(f"Error calculating confidence score: {e}")
-        return 0.5
+❌ WRONG: "The facilitator's role is not specified"
+✅ RIGHT: "The designated facilitator must: (1) 'maintain order during presentations' (RCW 10.01.230(4)(a)), (2) 'ensure compliance with attendance policies' (RCW 10.01.230(4)(b)), (3) 'submit quarterly reports to the Traffic Safety Commission' (RCW 10.01.230(4)(c))."
 
-# Comprehensive Analysis Processor
-class ComprehensiveAnalysisProcessor:
-    def __init__(self):
-        self.analysis_prompts = {
-            "document_summary": "Analyze this document and provide a comprehensive summary including document type, purpose, main parties, key terms, important dates, and financial obligations.",
-            "key_clauses": "Extract and analyze key legal clauses including termination, indemnification, liability, governing law, confidentiality, payment terms, and dispute resolution. For each clause, provide specific text references and implications.",
-            "risk_assessment": "Identify and assess legal risks including unilateral rights, broad indemnification, unlimited liability, vague obligations, and unfavorable terms. Rate each risk (High/Medium/Low) and suggest mitigation strategies.",
-            "timeline_deadlines": "Extract all time-related information including start/end dates, payment deadlines, notice periods, renewal terms, performance deadlines, and warranty periods. Present chronologically.",
-            "party_obligations": "List all obligations for each party including what must be done, deadlines, conditions, performance standards, and consequences of non-compliance. Organize by party.",
-            "missing_clauses": "Identify commonly expected clauses that may be missing such as force majeure, limitation of liability, dispute resolution, severability, assignment restrictions, and notice provisions. Explain the importance and risks of each missing clause."
-        }
-    
-    def process_comprehensive_analysis(self, request: ComprehensiveAnalysisRequest) -> StructuredAnalysisResponse:
-        start_time = time.time()
-        
-        try:
-            search_results, sources_searched, retrieval_method = self._enhanced_document_specific_search(
-                request.user_id, 
-                request.document_id, 
-                "comprehensive legal document analysis",
-                k=20
-            )
-            
-            if not search_results:
-                return StructuredAnalysisResponse(
-                    warnings=["No relevant documents found for analysis"],
-                    processing_time=time.time() - start_time,
-                    retrieval_method="no_documents_found"
-                )
-            
-            context_text, source_info = format_context_for_llm(search_results, max_length=8000)
-            
-            response = StructuredAnalysisResponse()
-            response.sources_by_section = {}
-            response.confidence_scores = {}
-            response.retrieval_method = retrieval_method
-            
-            if AnalysisType.COMPREHENSIVE in request.analysis_types:
-                comprehensive_prompt = self._create_comprehensive_prompt(context_text)
-                
-                try:
-                    analysis_result = call_openrouter_api(comprehensive_prompt, OPENROUTER_API_KEY, OPENAI_API_BASE)
-                    parsed_sections = self._parse_comprehensive_response(analysis_result)
-                    
-                    response.document_summary = parsed_sections.get("summary", "")
-                    response.key_clauses = parsed_sections.get("clauses", "")
-                    response.risk_assessment = parsed_sections.get("risks", "")
-                    response.timeline_deadlines = parsed_sections.get("timeline", "")
-                    response.party_obligations = parsed_sections.get("obligations", "")
-                    response.missing_clauses = parsed_sections.get("missing", "")
-                    
-                    response.overall_confidence = self._calculate_comprehensive_confidence(parsed_sections, len(search_results))
-                    
-                    for section in ["summary", "clauses", "risks", "timeline", "obligations", "missing"]:
-                        response.sources_by_section[section] = source_info
-                        response.confidence_scores[section] = response.overall_confidence
-                    
-                except Exception as e:
-                    logger.error(f"Comprehensive analysis failed: {e}")
-                    response.warnings.append(f"Comprehensive analysis failed: {str(e)}")
-                    response.overall_confidence = 0.1
-            
-            else:
-                for analysis_type in request.analysis_types:
-                    section_result = self._process_individual_analysis(analysis_type, context_text, source_info)
-                    
-                    if analysis_type == AnalysisType.SUMMARY:
-                        response.document_summary = section_result["content"]
-                    elif analysis_type == AnalysisType.CLAUSES:
-                        response.key_clauses = section_result["content"]
-                    elif analysis_type == AnalysisType.RISKS:
-                        response.risk_assessment = section_result["content"]
-                    elif analysis_type == AnalysisType.TIMELINE:
-                        response.timeline_deadlines = section_result["content"]
-                    elif analysis_type == AnalysisType.OBLIGATIONS:
-                        response.party_obligations = section_result["content"]
-                    elif analysis_type == AnalysisType.MISSING_CLAUSES:
-                        response.missing_clauses = section_result["content"]
-                    
-                    response.confidence_scores[analysis_type.value] = section_result["confidence"]
-                    response.sources_by_section[analysis_type.value] = source_info
-                
-                confidences = list(response.confidence_scores.values())
-                response.overall_confidence = sum(confidences) / len(confidences) if confidences else 0.0
-            
-            response.processing_time = time.time() - start_time
-            logger.info(f"Comprehensive analysis completed in {response.processing_time:.2f}s with confidence {response.overall_confidence:.2f}")
-            
-            return response
-            
-        except Exception as e:
-            logger.error(f"Comprehensive analysis processing failed: {e}")
-            return StructuredAnalysisResponse(
-                warnings=[f"Analysis processing failed: {str(e)}"],
-                processing_time=time.time() - start_time,
-                overall_confidence=0.0,
-                retrieval_method="error"
-            )
-    
-    def _enhanced_document_specific_search(self, user_id: str, document_id: Optional[str], query: str, k: int = 15) -> Tuple[List, List[str], str]:
-        all_results = []
-        sources_searched = []
-        retrieval_method = "enhanced_document_specific"
-        
-        try:
-            if document_id:
-                user_results = container_manager.enhanced_search_user_container(
-                    user_id, query, "", k=k, document_id=document_id
-                )
-                sources_searched.append(f"document_{document_id}")
-                logger.info(f"Document-specific search for {document_id}: {len(user_results)} results")
-            else:
-                user_results = container_manager.enhanced_search_user_container(
-                    user_id, query, "", k=k
-                )
-                sources_searched.append("all_user_documents")
-                logger.info(f"All documents search: {len(user_results)} results")
-            
-            for doc, score in user_results:
-                doc.metadata['source_type'] = 'user_container'
-                doc.metadata['search_scope'] = 'document_specific' if document_id else 'all_user_docs'
-                all_results.append((doc, score))
-            
-            return all_results[:k], sources_searched, retrieval_method
-            
-        except Exception as e:
-            logger.error(f"Error in document-specific search: {e}")
-            return [], [], "error"
-    
-    def _create_comprehensive_prompt(self, context_text: str) -> str:
-        return f"""You are a legal document analyst. Analyze the provided legal document and provide a comprehensive analysis with the following structured sections.
+CONVERSATION HISTORY:
+{conversation_context}
 
-LEGAL DOCUMENT CONTEXT:
+DOCUMENT CONTEXT TO ANALYZE WORD-BY-WORD:
 {context_text}
 
-Please provide your analysis in the following format with clear section headers:
+USER QUESTION REQUIRING COMPLETE EXTRACTION:
+{question}
 
-## DOCUMENT SUMMARY
-Provide a comprehensive summary including document type, purpose, main parties, key terms, important dates, and financial obligations.
+MANDATORY STEPS FOR YOUR RESPONSE:
+1. 🔍 Scan the ENTIRE context for specific numbers, requirements, and procedures
+2. 📊 Extract ALL quantitative information (minutes, hours, numbers of people, etc.)
+3. 📜 Quote the exact statutory language for each requirement
+4. 🏷️ Provide specific citations (section, subsection, paragraph)
+5. 📝 Organize information clearly with headers and numbered lists
+6. ⚠️ Only claim information is missing if it's truly not in the provided text
 
-## KEY CLAUSES ANALYSIS
-Extract and analyze important legal clauses including termination, indemnification, liability, governing law, confidentiality, payment terms, and dispute resolution.
+BEGIN THOROUGH STATUTORY ANALYSIS:
 
-## RISK ASSESSMENT
-Identify potential legal risks including unilateral rights, broad indemnification, unlimited liability, vague obligations, and unfavorable terms. Rate each risk (High/Medium/Low).
-
-## TIMELINE & DEADLINES
-Extract all time-related information including start/end dates, payment deadlines, notice periods, renewal terms, performance deadlines, and warranty periods.
-
-## PARTY OBLIGATIONS
-List all obligations for each party including what must be done, deadlines, conditions, performance standards, and consequences of non-compliance.
-
-## MISSING CLAUSES ANALYSIS
-Identify commonly expected clauses that may be missing such as force majeure, limitation of liability, dispute resolution, severability, assignment restrictions, and notice provisions.
-
-INSTRUCTIONS:
-- Base your analysis ONLY on the provided document context
-- Provide specific references to document text where possible
-- Use clear, professional language suitable for legal professionals
-- If information is insufficient for any section, state this clearly
+ADDITIONAL GUIDANCE:
+- After fully answering based solely on the provided documents, if relevant key legal principles under Washington state law, any other U.S. state law, or U.S. federal law are not found in the sources, you may add a clearly labeled general legal principles disclaimer.
+- This disclaimer must clearly state it is NOT based on the provided documents but represents general background knowledge of applicable Washington state, other state, and federal law.
+- Do NOT use this disclaimer to answer the user's question directly; it serves only as supplementary context.
+- This disclaimer must explicitly state that these principles are not found in the provided documents but are usually relevant legal background.
+- Format this disclaimer distinctly at the end of the response under a heading such as "GENERAL LEGAL PRINCIPLES DISCLAIMER."
 
 RESPONSE:"""
-    
-    def _parse_comprehensive_response(self, response_text: str) -> Dict[str, str]:
-        sections = {}
-        section_markers = {
-            "summary": ["## DOCUMENT SUMMARY", "# DOCUMENT SUMMARY"],
-            "clauses": ["## KEY CLAUSES ANALYSIS", "# KEY CLAUSES ANALYSIS", "## KEY CLAUSES"],
-            "risks": ["## RISK ASSESSMENT", "# RISK ASSESSMENT", "## RISKS"],
-            "timeline": ["## TIMELINE & DEADLINES", "# TIMELINE & DEADLINES", "## TIMELINE"],
-            "obligations": ["## PARTY OBLIGATIONS", "# PARTY OBLIGATIONS", "## OBLIGATIONS"],
-            "missing": ["## MISSING CLAUSES ANALYSIS", "# MISSING CLAUSES ANALYSIS", "## MISSING CLAUSES"]
-        }
-        
-        lines = response_text.split('\n')
-        current_section = None
-        current_content = []
-        
-        for line in lines:
-            line_strip = line.strip()
-            
-            section_found = None
-            for section_key, markers in section_markers.items():
-                if any(line_strip.startswith(marker) for marker in markers):
-                    section_found = section_key
-                    break
-            
-            if section_found:
-                if current_section and current_content:
-                    sections[current_section] = '\n'.join(current_content).strip()
-                
-                current_section = section_found
-                current_content = []
-            else:
-                if current_section:
-                    current_content.append(line)
-        
-        if current_section and current_content:
-            sections[current_section] = '\n'.join(current_content).strip()
-        
-        for section_key in section_markers.keys():
-            if section_key not in sections or not sections[section_key]:
-                sections[section_key] = f"No {section_key.replace('_', ' ').title()} information found in the analysis."
-        
-        return sections
-    
-    def _process_individual_analysis(self, analysis_type: AnalysisType, context_text: str, source_info: List[Dict]) -> Dict:
-        try:
-            prompt = self.analysis_prompts.get(analysis_type.value, "Analyze this legal document.")
-            full_prompt = f"{prompt}\n\nLEGAL DOCUMENT CONTEXT:\n{context_text}\n\nPlease provide a detailed analysis based ONLY on the provided context."
-            
-            result = call_openrouter_api(full_prompt, OPENROUTER_API_KEY, OPENAI_API_BASE)
-            
-            return {
-                "content": result,
-                "confidence": 0.7,
-                "sources": source_info
-            }
-        except Exception as e:
-            logger.error(f"Individual analysis failed for {analysis_type}: {e}")
-            return {
-                "content": f"Analysis failed for {analysis_type.value}: {str(e)}",
-                "confidence": 0.1,
-                "sources": []
-            }
-    
-    def _calculate_comprehensive_confidence(self, parsed_sections: Dict[str, str], num_sources: int) -> float:
-        try:
-            successful_sections = sum(1 for content in parsed_sections.values() 
-                                    if content and not content.startswith("No ") and len(content) > 50)
-            section_factor = successful_sections / len(parsed_sections)
-            
-            avg_length = sum(len(content) for content in parsed_sections.values()) / len(parsed_sections)
-            length_factor = min(1.0, avg_length / 200)
-            
-            source_factor = min(1.0, num_sources / 5)
-            
-            confidence = (section_factor * 0.5 + length_factor * 0.3 + source_factor * 0.2)
-            return max(0.1, min(1.0, confidence))
-            
-        except Exception as e:
-            logger.error(f"Error calculating confidence: {e}")
-            return 0.5
 
-# Utility Functions
-def load_database():
-    try:
-        if not os.path.exists(DEFAULT_CHROMA_PATH):
-            logger.warning(f"Default database path does not exist: {DEFAULT_CHROMA_PATH}")
-            return None
-        
-        embedding_function = HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2")
-        db = Chroma(
-            collection_name="default",
-            embedding_function=embedding_function,
-            persist_directory=DEFAULT_CHROMA_PATH
-        )
-        logger.debug("Default database loaded successfully")
-        return db
-    except Exception as e:
-        logger.error(f"Failed to load default database: {e}")
-        raise
+def create_regular_prompt(context_text: str, question: str, conversation_context: str, 
+                         sources_searched: list, retrieval_method: str, document_id: str = None, 
+                         instruction: str = "balanced") -> str:
+    """Create the regular prompt for non-statutory questions"""
+    
+    return f"""You are a legal research assistant. Provide thorough, accurate responses based on the provided documents.
 
-def search_external_databases(query: str, databases: List[str], user: User) -> List[Dict]:
-    results = []
-    
-    for db_name in databases:
-        if db_name not in user.external_db_access:
-            logger.warning(f"User {user.user_id} does not have access to {db_name}")
-            continue
-        
-        if db_name in external_databases:
-            db_interface = external_databases[db_name]
-            try:
-                db_results = db_interface.search(query)
-                for result in db_results:
-                    result['source_database'] = db_name
-                    results.extend(db_results)
-            except Exception as e:
-                logger.error(f"Error searching {db_name}: {e}")
-    
-    return results
+STRICT SOURCE REQUIREMENTS:
+- Answer ONLY based on the retrieved documents provided in the context
+- Do NOT use general legal knowledge, training data, assumptions, or inferences beyond what's explicitly stated
+- If information is not in the provided documents, state: "This information is not available in the provided documents"
 
-def combined_search(query: str, user_id: Optional[str], search_scope: str, conversation_context: str, use_enhanced: bool = True, k: int = 10, document_id: str = None) -> Tuple[List, List[str], str]:
-    all_results = []
-    sources_searched = []
-    retrieval_method = "basic"
-    
-    if search_scope in ["all", "default_only"]:
-        try:
-            default_db = load_database()
-            if default_db:
-                if use_enhanced:
-                    default_results, method = enhanced_retrieval_v2(default_db, query, conversation_context, k=k)
-                    retrieval_method = method
-                else:
-                    default_results = default_db.similarity_search_with_score(query, k=k)
-                    retrieval_method = "basic_search"
-                
-                for doc, score in default_results:
-                    doc.metadata['source_type'] = 'default_database'
-                    all_results.append((doc, score))
-                sources_searched.append("default_database")
-        except Exception as e:
-            logger.error(f"Error searching default database: {e}")
-    
-    if user_id and search_scope in ["all", "user_only"]:
-        try:
-            if use_enhanced:
-                user_results = container_manager.enhanced_search_user_container(user_id, query, conversation_context, k=k, document_id=document_id)
-            else:
-                user_results = container_manager.search_user_container(user_id, query, k=k, document_id=document_id)
-            
-            for doc, score in user_results:
-                doc.metadata['source_type'] = 'user_container'
-                all_results.append((doc, score))
-            if user_results:
-                sources_searched.append("user_container")
-        except Exception as e:
-            logger.error(f"Error searching user container: {e}")
-    
-    if use_enhanced:
-        all_results = remove_duplicate_documents(all_results)
-    else:
-        all_results.sort(key=lambda x: x[1], reverse=True)
-    
-    return all_results[:k], sources_searched, retrieval_method
+SOURCES SEARCHED: {', '.join(sources_searched)}
+RETRIEVAL METHOD: {retrieval_method}
+{f"DOCUMENT FILTER: Specific document {document_id}" if document_id else "DOCUMENT SCOPE: All available documents"}
 
-def add_to_conversation(session_id: str, role: str, content: str, sources: Optional[List] = None):
-    if session_id not in conversations:
-        conversations[session_id] = {
-            'messages': [],
-            'created_at': datetime.utcnow(),
-            'last_accessed': datetime.utcnow()
-        }
-    
-    message = {
-        'role': role,
-        'content': content,
-        'timestamp': datetime.utcnow().isoformat(),
-        'sources': sources or []
-    }
-    
-    conversations[session_id]['messages'].append(message)
-    conversations[session_id]['last_accessed'] = datetime.utcnow()
+HALLUCINATION CHECK - Before responding, verify:
+1. Is each claim supported by the retrieved documents?
+2. Am I adding information not present in the sources?
+3. If uncertain, default to "information not available"
 
-def get_conversation_context(session_id: str, max_length: int = 2000) -> str:
-    if session_id not in conversations:
-        return ""
-    
-    messages = conversations[session_id]['messages']
-    context_parts = []
-    recent_messages = messages[-4:]
-    
-    for msg in recent_messages:
-        role = msg['role'].upper()
-        content = msg['content']
-        if len(content) > 800:
-            content = content[:800] + "..."
-        context_parts.append(f"{role}: {content}")
-    
-    if context_parts:
-        return "Previous conversation:\n" + "\n".join(context_parts)
-    return ""
+INSTRUCTIONS FOR THOROUGH ANALYSIS:
+1. **READ CAREFULLY**: Scan the entire context for information that answers the user's question
+2. **EXTRACT COMPLETELY**: When extracting requirements, include FULL details (e.g., "60 minutes" not just "minimum of")
+3. **QUOTE VERBATIM**: For statutory standards, use exact quotes: `"[Exact Text]" (Source)`
+4. **ENUMERATE EXPLICITLY**: Present listed requirements as numbered points with full quotes
+5. **CITE SOURCES**: Reference the document name for each fact
+6. **BE COMPLETE**: Explicitly note missing standards: "Documents lack full subsection [X]"
+7. **USE DECISIVE PHRASING**: State facts directly ("The statute requires...") - NEVER "documents indicate"
 
-def cleanup_expired_conversations():
-    now = datetime.utcnow()
-    expired_sessions = [
-        session_id for session_id, data in conversations.items()
-        if now - data['last_accessed'] > timedelta(hours=1)
-    ]
-    for session_id in expired_sessions:
-        del conversations[session_id]
-    if expired_sessions:
-        logger.info(f"Cleaned up {len(expired_sessions)} expired conversations")
+RESPONSE STYLE: {instruction}
 
-def format_context_for_llm(results_with_scores: List[Tuple], max_length: int = 3000) -> Tuple[str, List]:
-    context_parts = []
-    source_info = []
-    
-    total_length = 0
-    for i, (doc, score) in enumerate(results_with_scores):
-        if total_length >= max_length:
-            break
-            
-        content = doc.page_content.strip()
-        metadata = doc.metadata
-        
-        source_path = metadata.get('source', 'unknown_source')
-        page = metadata.get('page', None)
-        source_type = metadata.get('source_type', 'unknown')
-        
-        display_source = os.path.basename(source_path)
-        page_info = f" (Page {page})" if page is not None else ""
-        source_prefix = f"[{source_type.upper()}]" if source_type != 'unknown' else ""
-        
-        if len(content) > 800:
-            content = content[:800] + "... [truncated]"
-            
-        context_part = f"{source_prefix} [{display_source}{page_info}] (Relevance: {score:.2f}): {content}"
-        context_parts.append(context_part)
-        
-        source_info.append({
-            'id': i+1,
-            'file_name': display_source,
-            'page': page,
-            'relevance': score,
-            'full_path': source_path,
-            'source_type': source_type
-        })
-        
-        total_length += len(context_part)
-    
-    context_text = "\n\n".join(context_parts)
-    return context_text, source_info
+CONVERSATION HISTORY:
+{conversation_context}
 
-def call_openrouter_api(prompt: str, api_key: str, api_base: str = "https://openrouter.ai/api/v1") -> str:
-    headers = {
-        "Authorization": f"Bearer {api_key}",
-        "Content-Type": "application/json",
-        "HTTP-Referer": "http://localhost:8000",
-        "X-Title": "Legal Assistant"
-    }
-    
-    models_to_try = [
-        "moonshotai/kimi-k2:free",
-        "deepseek/deepseek-chat",
-        "microsoft/phi-3-mini-128k-instruct:free",
-        "meta-llama/llama-3.2-3b-instruct:free",
-        "google/gemma-2-9b-it:free",
-        "mistralai/mistral-7b-instruct:free",
-        "openchat/openchat-7b:free"
-    ]
-    
-    for model in models_to_try:
-        try:
-            payload = {
-                "model": model,
-                "messages": [{"role": "user", "content": prompt}],
-                "temperature": 0.5,
-                "max_tokens": 2000
-            }
-            
-            response = requests.post(api_base + "/chat/completions", headers=headers, json=payload, timeout=60)
-            response.raise_for_status()
-            
-            result = response.json()
-            if 'choices' in result and len(result['choices']) > 0:
-                logger.info(f"✅ Successfully used model: {model}")
-                return result['choices'][0]['message']['content'].strip()
-                
-        except Exception as e:
-            logger.error(f"Error with model {model}: {e}")
-            continue
-    
-    return "I apologize, but I'm experiencing technical difficulties. Please try again."
+DOCUMENT CONTEXT (ANALYZE THOROUGHLY):
+{context_text}
 
-# Helper Functions for Enhanced Information Extraction
-def extract_bill_information(context_text: str, bill_number: str) -> Dict[str, str]:
-    """Pre-extract bill information using regex patterns"""
-    extracted_info = {}
-    
-    # Enhanced pattern to find bill information with more context
-    bill_patterns = [
-        rf"{bill_number}[^\n]*(?:\n(?:[^\n]*(?:sponsors?|final\s+status|enables|authorizes|establishes)[^\n]*\n?)*)",
-        rf"{bill_number}.*?(?=\n\s*[A-Z]{{2,}}|\n\s*[A-Z]{{1,3}}\s+\d+|\Z)",
-        rf"{bill_number}[^\n]*\n(?:[^\n]+\n?){{0,5}}"
-    ]
-    
-    for pattern in bill_patterns:
-        bill_match = re.search(pattern, context_text, re.DOTALL | re.IGNORECASE)
-        if bill_match:
-            bill_text = bill_match.group(0)
-            logger.info(f"Found bill text for {bill_number}: {bill_text[:200]}...")
-            
-            # Extract sponsors with multiple patterns
-            sponsor_patterns = [
-                rf"Sponsors?\s*:\s*([^\n]+)",
-                rf"Sponsor\s*:\s*([^\n]+)",
-                rf"(?:Rep\.|Sen\.)\s+([^,\n]+(?:,\s*[^,\n]+)*)"
-            ]
-            
-            for sponsor_pattern in sponsor_patterns:
-                sponsor_match = re.search(sponsor_pattern, bill_text, re.IGNORECASE)
-                if sponsor_match:
-                    extracted_info["sponsors"] = sponsor_match.group(1).strip()
-                    break
-            
-            # Extract final status with multiple patterns
-            status_patterns = [
-                rf"Final Status\s*:\s*([^\n]+)",
-                rf"Status\s*:\s*([^\n]+)",
-                rf"(?:C\s+\d+\s+L\s+\d+)"
-            ]
-            
-            for status_pattern in status_patterns:
-                status_match = re.search(status_pattern, bill_text, re.IGNORECASE)
-                if status_match:
-                    extracted_info["final_status"] = status_match.group(1).strip()
-                    break
-            
-            # Extract description - everything after bill number until next bill or section
-            desc_patterns = [
-                rf"{bill_number}[^\n]*\n([^\n]+(?:\n[^\n]+)*?)(?=\n\s*[A-Z]{{2,}}|\n\s*[A-Z]{{1,3}}\s+\d+|\Z)",
-                rf"{bill_number}[^\n]*\n([^\n]+)"
-            ]
-            
-            for desc_pattern in desc_patterns:
-                desc_match = re.search(desc_pattern, bill_text, re.IGNORECASE)
-                if desc_match:
-                    description = desc_match.group(1).strip()
-                    # Clean up description
-                    description = re.sub(r'\s+', ' ', description)
-                    extracted_info["description"] = description
-                    break
-            
-            logger.info(f"Extracted info for {bill_number}: {extracted_info}")
-            return extracted_info
-    
-    logger.warning(f"No bill information found for {bill_number}")
-    return extracted_info
+USER QUESTION:
+{question}
 
-def extract_universal_information(context_text: str, question: str) -> Dict[str, Any]:
-    """Universal information extraction that works for any document type"""
-    extracted_info = {
-        "key_entities": [],
-        "numbers_and_dates": [],
-        "relationships": []
-    }
-    
-    try:
-        # Extract names (people, organizations, bills, cases, etc.)
-        name_patterns = [
-            r"\b[A-Z][a-z]+(?:\s+[A-Z][a-z]+)*",  # Names
-            r"(?:HB|SB|SSB|ESSB|SHB|ESHB)\s*\d+",  # Bill numbers
-        ]
-        
-        for pattern in name_patterns:
-            matches = re.findall(pattern, context_text)
-            extracted_info["key_entities"].extend(matches[:10])  # Limit to prevent overflow
-        
-        # Extract numbers, dates, amounts
-        number_patterns = [
-            r"\$[\d,]+(?:\.\d{2})?",  # Dollar amounts
-            r"\b\d{1,2}[/-]\d{1,2}[/-]\d{2,4}",  # Dates
-            r"\b(?:January|February|March|April|May|June|July|August|September|October|November|December)\s+\d{1,2},?\s+\d{4}",  # Written dates
-        ]
-        
-        for pattern in number_patterns:
-            matches = re.findall(pattern, context_text, re.IGNORECASE)
-            extracted_info["numbers_and_dates"].extend(matches[:10])
-        
-        # Extract relationships
-        relationship_patterns = [
-            r"(?:sponsors?|authored?\s+by):\s*([^.\n]+)",
-            r"(?:final\s+status|status):\s*([^.\n]+)",
-        ]
-        
-        for pattern in relationship_patterns:
-            matches = re.findall(pattern, context_text, re.IGNORECASE)
-            extracted_info["relationships"].extend(matches[:5])
-    
-    except Exception as e:
-        logger.warning(f"Error in universal extraction: {e}")
-    
-    return extracted_info
+RESPONSE APPROACH:
+- **FIRST**: Identify what specific information the user is asking for. Do not reference any statute, case law, or principle unless it appears verbatim in the context.
+- **SECOND**: Search the context thoroughly for that information  
+- **THIRD**: Present any information found clearly and completely. At the end of your response, list all facts provided and their source documents for verification.
+- **FOURTH**: Note what information is not available (if any)
+- **ALWAYS**: Cite the source document for each fact provided
 
-# Main Query Processing
-def process_query(question: str, session_id: str, user_id: Optional[str], search_scope: str, response_style: str = "balanced", use_enhanced_rag: bool = True, document_id: str = None) -> QueryResponse:
+ADDITIONAL GUIDANCE:
+- After fully answering based solely on the provided documents, if relevant key legal principles under Washington state law, any other U.S. state law, or U.S. federal law are not found in the sources, you may add a clearly labeled general legal principles disclaimer.
+- This disclaimer must clearly state it is NOT based on the provided documents but represents general background knowledge of applicable Washington state, other state, and federal law.
+- Do NOT use this disclaimer to answer the user's question directly; it serves only as supplementary context.
+- This disclaimer must explicitly state that these principles are not found in the provided documents but are usually relevant legal background.
+- Format this disclaimer distinctly at the end of the response under a heading such as "GENERAL LEGAL PRINCIPLES DISCLAIMER."
+
+RESPONSE:"""
+
+def process_query(question: str, session_id: str, user_id: Optional[str], search_scope: str, 
+                 response_style: str = "balanced", use_enhanced_rag: bool = True, 
+                 document_id: str = None) -> QueryResponse:
+    """Main query processing function with enhanced statutory handling"""
     try:
         logger.info(f"Processing query - Question: '{question}', User: {user_id}, Scope: {search_scope}, Enhanced: {use_enhanced_rag}, Document: {document_id}")
+        
+        # Check if this is a statutory question
+        is_statutory = detect_statutory_question(question)
+        if is_statutory:
+            logger.info("🏛️ Detected statutory/regulatory question - using enhanced extraction")
         
         if any(phrase in question.lower() for phrase in ["comprehensive analysis", "complete analysis", "full analysis"]):
             logger.info("Detected comprehensive analysis request")
@@ -1825,12 +518,16 @@ def process_query(question: str, session_id: str, user_id: Optional[str], search
         
         conversation_context = get_conversation_context(session_id)
         
+        # For statutory questions, get more context
+        search_k = 15 if is_statutory else 10
+        
         retrieved_results, sources_searched, retrieval_method = combined_search(
             combined_query, 
             user_id, 
             search_scope, 
             conversation_context,
             use_enhanced=use_enhanced_rag,
+            k=search_k,
             document_id=document_id
         )
         
@@ -1846,11 +543,13 @@ def process_query(question: str, session_id: str, user_id: Optional[str], search
                 retrieval_method=retrieval_method
             )
         
-        # Format context for LLM
-        context_text, source_info = format_context_for_llm(retrieved_results)
+        # Format context for LLM - more context for statutory questions
+        max_context_length = 6000 if is_statutory else 3000
+        context_text, source_info = format_context_for_llm(retrieved_results, max_length=max_context_length)
         
-        # NEW: Enhanced information extraction
+        # Enhanced information extraction
         bill_match = re.search(r"(HB|SB|SSB|ESSB|SHB|ESHB)\s*(\d+)", question, re.IGNORECASE)
+        statute_match = re.search(r"(RCW|USC|CFR|WAC)\s+(\d+\.\d+\.\d+|\d+)", question, re.IGNORECASE)
         extracted_info = {}
 
         if bill_match:
@@ -1874,6 +573,11 @@ def process_query(question: str, session_id: str, user_id: Optional[str], search
                 retrieved_results = retrieved_results[:len(retrieved_results)]
             
             extracted_info = extract_bill_information(context_text, bill_number)
+        elif statute_match:
+            # Statute-specific extraction
+            statute_citation = f"{statute_match.group(1)} {statute_match.group(2)}"
+            logger.info(f"🏛️ Searching for statute: {statute_citation}")
+            extracted_info = extract_statutory_information(context_text, statute_citation)
         else:
             # Universal extraction for any document type
             extracted_info = extract_universal_information(context_text, question)
@@ -1899,82 +603,19 @@ def process_query(question: str, session_id: str, user_id: Optional[str], search
         
         instruction = style_instructions.get(response_style, style_instructions["balanced"])
         
-        prompt = f"""You are a legal research assistant. Provide thorough, accurate responses based on the provided documents.
-
-STRICT SOURCE REQUIREMENTS:
-- Answer ONLY based on the retrieved documents provided in the context
-- Do NOT use general legal knowledge, training data, assumptions, or inferences beyond what's explicitly stated
-- If information is not in the provided documents, state: "This information is not available in the provided documents"
-
-SOURCES SEARCHED: {', '.join(sources_searched)}
-RETRIEVAL METHOD: {retrieval_method}
-{f"DOCUMENT FILTER: Specific document {document_id}" if document_id else "DOCUMENT SCOPE: All available documents"}
-
-HALLUCINATION CHECK - Before responding, verify:
-1. Is each claim supported by the retrieved documents?
-2. Am I adding information not present in the sources?
-3. If any fact or phrase cannot be traced to a source document, it must not appear in the response.
-
-# INSTRUCTIONS FOR THOROUGH ANALYSIS (Modified)
-1. **READ CAREFULLY**: Scan the entire context for information that answers the user's question
-2. **EXTRACT COMPLETELY**: When extracting requirements, include FULL details (e.g., "60 minutes" not just "minimum of"). 
-3. **QUOTE VERBATIM**: For statutory standards, use exact quotes: `\"[Exact Text]\" (Source)` 
-4. **ENUMERATE EXPLICITLY**: Present listed requirements as numbered points with full quotes 
-5. **CITE SOURCES**: Reference the document name for each fact 
-6. **BE COMPLETE**: Explicitly note missing standards: "Documents lack full subsection [X]" 
-7. **USE DECISIVE PHRASING**: State facts directly ("The statute requires...") - NEVER "documents indicate" 
-
-LEGAL ANALYSIS MODES:
-1. **BASIC LEGAL RESEARCH** - For factual questions about legislation/statutes/regulations
-   - Extract statutory/regulatory information, sponsors, dates, provisions
-   
-2. **COMPREHENSIVE LEGAL ANALYSIS** - For thorough analysis requiring multiple sources
-   - Analyze legal implications, compliance obligations, practical impacts
-   - Note ambiguities requiring clarification
-   
-3. **CASE LAW ANALYSIS** - When precedent needed but unavailable, state:
-   "This analysis would benefit from relevant case law not available in the current documents."
-
-HANDLING CONFLICTS:
-- If documents contain conflicting information, present both views with citations
-- Note the conflict explicitly: "Document A states X, while Document B states Y"
-
-WHEN INFORMATION IS MISSING:
-"Based on the provided documents, I cannot provide a complete answer. To provide thorough analysis, I would need documents containing: [specific missing elements]"
-
-RESPONSE STYLE: {instruction}
-
-CONVERSATION HISTORY:
-{conversation_context}
-
-DOCUMENT CONTEXT (ANALYZE THOROUGHLY):
-{context_text}
-
-USER QUESTION:
-{questions}
-
-RESPONSE APPROACH:
-- **FIRST**: Identify what specific information the user is asking for. Do not reference any statute, case law, or principle unless it appears verbatim in the context.
-- **SECOND**: Search the context thoroughly for that information  
-- **THIRD**: Present any information found clearly and completely. At the end of your response, list all facts provided and their source documents for verification.
-- **FOURTH**: Note what information is not available (if any)
-- **ALWAYS**: Cite the source document for each fact provided
-
-ADDITIONAL GUIDANCE:
-- After fully answering based solely on the provided documents, if relevant key legal principles under Washington state law, any other U.S. state law, or U.S. federal law are not found in the sources, you may add a clearly labeled general legal principles disclaimer.
-- This disclaimer must clearly state it is NOT based on the provided documents but represents general background knowledge of applicable Washington state, other state, and federal law.
-- Do NOT use this disclaimer to answer the user’s question directly; it serves only as supplementary context.
-- This disclaimer must explicitly state that these principles are not found in the provided documents but are usually relevant legal background.
-- Format this disclaimer distinctly at the end of the response under a heading such as "GENERAL LEGAL PRINCIPLES DISCLAIMER."
-
-RESPONSE:"""
+        # Choose the appropriate prompt based on question type
+        if is_statutory:
+            prompt = create_statutory_prompt(context_text, question, conversation_context, 
+                                           sources_searched, retrieval_method, document_id)
+        else:
+            prompt = create_regular_prompt(context_text, question, conversation_context, 
+                                         sources_searched, retrieval_method, document_id, instruction)
         
-        if AI_ENABLED and OPENROUTER_API_KEY:
-            response_text = call_openrouter_api(prompt, OPENROUTER_API_KEY, OPENAI_API_BASE)
+        if FeatureFlags.AI_ENABLED and OPENROUTER_API_KEY:
+            response_text = call_openrouter_api(prompt, OPENROUTER_API_KEY)
         else:
             response_text = f"Based on the retrieved documents:\n\n{context_text}\n\nPlease review this information to answer your question."
         
-        MIN_RELEVANCE_SCORE = 0.15  # Lowered from 0.25 to include more sources
         relevant_sources = [s for s in source_info if s['relevance'] >= MIN_RELEVANCE_SCORE]
         
         if relevant_sources:
@@ -2015,1053 +656,38 @@ RESPONSE:"""
             retrieval_method="error"
         )
 
-# API Endpoints
-
-@app.post("/comprehensive-analysis", response_model=StructuredAnalysisResponse)
-async def comprehensive_document_analysis(
-    request: ComprehensiveAnalysisRequest,
-    current_user: User = Depends(get_current_user)
-):
-    """Comprehensive document analysis endpoint"""
-    logger.info(f"Comprehensive analysis request: user={request.user_id}, doc={request.document_id}, types={request.analysis_types}")
-    
-    try:
-        if request.user_id != current_user.user_id:
-            raise HTTPException(status_code=403, detail="Cannot analyze documents for different user")
-        
-        processor = ComprehensiveAnalysisProcessor()
-        result = processor.process_comprehensive_analysis(request)
-        
-        logger.info(f"Comprehensive analysis completed: confidence={result.overall_confidence:.2f}, time={result.processing_time:.2f}s")
-        return result
-        
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Comprehensive analysis endpoint failed: {e}")
-        raise HTTPException(status_code=500, detail=f"Analysis failed: {str(e)}")
-
-@app.post("/quick-analysis/{document_id}")
-async def quick_document_analysis(
-    document_id: str,
-    analysis_type: AnalysisType = AnalysisType.COMPREHENSIVE,
-    current_user: User = Depends(get_current_user)
-):
-    """Quick analysis endpoint for single documents"""
-    try:
-        request = ComprehensiveAnalysisRequest(
-            document_id=document_id,
-            analysis_types=[analysis_type],
-            user_id=current_user.user_id,
-            response_style="detailed"
-        )
-        
-        processor = ComprehensiveAnalysisProcessor()
-        result = processor.process_comprehensive_analysis(request)
-        
-        return {
-            "success": True,
-            "analysis": result,
-            "message": f"Analysis completed with {result.overall_confidence:.1%} confidence"
-        }
-        
-    except Exception as e:
-        logger.error(f"Quick analysis failed: {e}")
-        return {
-            "success": False,
-            "error": str(e),
-            "message": "Analysis failed"
-        }
-
-@app.post("/ask", response_model=QueryResponse)
-async def ask_question(query: Query, current_user: Optional[User] = Depends(get_current_user)):
-    """Enhanced ask endpoint with comprehensive analysis detection"""
-    logger.info(f"Received ask request: {query}")
-    
-    cleanup_expired_conversations()
-    
-    session_id = query.session_id or str(uuid.uuid4())
-    user_id = query.user_id or (current_user.user_id if current_user else None)
-    
-    if session_id not in conversations:
-        conversations[session_id] = {
-            "messages": [],
-            "created_at": datetime.utcnow(),
-            "last_accessed": datetime.utcnow()
-        }
-    else:
-        conversations[session_id]["last_accessed"] = datetime.utcnow()
-    
-    user_question = query.question.strip()
-    if not user_question:
-        return QueryResponse(
-            response=None,
-            error="Question cannot be empty.",
-            context_found=False,
-            sources=[],
-            session_id=session_id,
-            confidence_score=0.0,
-            sources_searched=[]
-        )
-    
-    response = process_query(
-        user_question, 
-        session_id, 
-        user_id,
-        query.search_scope or "all",
-        query.response_style or "balanced",
-        query.use_enhanced_rag if query.use_enhanced_rag is not None else True,
-        query.document_id
-    )
-    return response
-
-@app.get("/conversation/{session_id}", response_model=ConversationHistory)
-async def get_conversation(session_id: str):
-    """Get the conversation history for a session"""
-    if session_id not in conversations:
-        raise HTTPException(status_code=404, detail="Session not found")
-    
-    return ConversationHistory(
-        session_id=session_id,
-        messages=conversations[session_id]['messages']
-    )
-
-@app.post("/user/upload", response_model=DocumentUploadResponse)
-async def upload_user_document(
-    file: UploadFile = File(...),
-    current_user: User = Depends(get_current_user)
-):
-    """Enhanced upload endpoint with file_id tracking and timeout handling"""
-    start_time = datetime.utcnow()
-    
-    try:
-        # Check file size first (before reading)
-        file.file.seek(0, 2)
-        file_size = file.file.tell()
-        file.file.seek(0)
-        
-        if file_size > MAX_FILE_SIZE:
-            raise HTTPException(
-                status_code=400, 
-                detail=f"File too large. Maximum size is {MAX_FILE_SIZE//1024//1024}MB. Your file: {file_size//1024//1024}MB"
-            )
-        
-        file_ext = os.path.splitext(file.filename)[1].lower()
-        if file_ext not in LEGAL_EXTENSIONS:
-            raise HTTPException(status_code=400, detail=f"Unsupported file type. Supported: {LEGAL_EXTENSIONS}")
-        
-        logger.info(f"Processing upload: {file.filename} ({file_size//1024}KB) for user {current_user.user_id}")
-        
-        # Process document with timeout protection
-        try:
-            content, pages_processed, warnings = SafeDocumentProcessor.process_document_safe(file)
-        except Exception as doc_error:
-            logger.error(f"Document processing failed: {doc_error}")
-            raise HTTPException(
-                status_code=422, 
-                detail=f"Failed to process document: {str(doc_error)}"
-            )
-        
-        if not content or len(content.strip()) < 50:
-            raise HTTPException(
-                status_code=422,
-                detail="Document appears to be empty or could not be processed properly"
-            )
-        
-        file_id = str(uuid.uuid4())
-        metadata = {
-            'source': file.filename,
-            'file_id': file_id,
-            'upload_date': datetime.utcnow().isoformat(),
-            'user_id': current_user.user_id,
-            'file_type': file_ext,
-            'pages': pages_processed,
-            'file_size': file_size,
-            'content_length': len(content),
-            'processing_warnings': warnings
-        }
-        
-        logger.info(f"Adding document to container: {len(content)} chars, {pages_processed} pages")
-        
-        # Add to container with timeout protection
-        try:
-            success = container_manager.add_document_to_container(
-                current_user.user_id,
-                content,
-                metadata,
-                file_id
-            )
-        except Exception as container_error:
-            logger.error(f"Container operation failed: {container_error}")
-            raise HTTPException(
-                status_code=500,
-                detail=f"Failed to store document: {str(container_error)}"
-            )
-        
-        if not success:
-            raise HTTPException(status_code=500, detail="Failed to add document to user container")
-        
-        session_id = str(uuid.uuid4())
-        uploaded_files[file_id] = {
-            'filename': file.filename,
-            'user_id': current_user.user_id,
-            'container_id': current_user.container_id,
-            'pages_processed': pages_processed,
-            'uploaded_at': datetime.utcnow(),
-            'session_id': session_id,
-            'file_size': file_size,
-            'content_length': len(content)
-        }
-        
-        processing_time = (datetime.utcnow() - start_time).total_seconds()
-        
-        logger.info(f"Upload successful: {file.filename} processed in {processing_time:.2f}s")
-        
-        return DocumentUploadResponse(
-            message=f"Document {file.filename} uploaded successfully ({pages_processed} pages, {len(content)} chars)",
-            file_id=file_id,
-            pages_processed=pages_processed,
-            processing_time=processing_time,
-            warnings=warnings,
-            session_id=session_id,
-            user_id=current_user.user_id,
-            container_id=current_user.container_id or ""
-        )
-        
-    except HTTPException:
-        raise
-    except Exception as e:
-        processing_time = (datetime.utcnow() - start_time).total_seconds()
-        logger.error(f"Error uploading user document after {processing_time:.2f}s: {e}")
-        traceback.print_exc()
-        raise HTTPException(
-            status_code=500, 
-            detail=f"Upload failed after {processing_time:.2f}s: {str(e)}"
-        )
-
-@app.get("/user/documents")
-async def list_user_documents(current_user: User = Depends(get_current_user)):
-    """ENHANCED: List all documents in user's container with better error handling"""
-    try:
-        user_documents = []
-        
-        # Add timeout and better error handling
-        for file_id, file_data in uploaded_files.items():
-            try:
-                if file_data.get('user_id') == current_user.user_id:
-                    # Handle both datetime objects and strings
-                    uploaded_at_str = file_data['uploaded_at']
-                    if hasattr(uploaded_at_str, 'isoformat'):
-                        uploaded_at_str = uploaded_at_str.isoformat()
-                    elif not isinstance(uploaded_at_str, str):
-                        uploaded_at_str = str(uploaded_at_str)
-                    
-                    user_documents.append({
-                        'file_id': file_id,
-                        'filename': file_data['filename'],
-                        'uploaded_at': uploaded_at_str,
-                        'pages_processed': file_data.get('pages_processed', 0),
-                        'file_size': file_data.get('file_size', 0)
-                    })
-            except Exception as e:
-                logger.warning(f"Error processing file {file_id}: {e}")
-                continue
-        
-        logger.info(f"Retrieved {len(user_documents)} documents for user {current_user.user_id}")
-        
-        return {
-            'user_id': current_user.user_id,
-            'container_id': current_user.container_id,
-            'documents': user_documents,
-            'total_documents': len(user_documents)
-        }
-        
-    except Exception as e:
-        logger.error(f"Error listing user documents: {e}")
-        # Return empty list instead of failing completely
-        return {
-            'user_id': current_user.user_id,
-            'container_id': current_user.container_id or "unknown",
-            'documents': [],
-            'total_documents': 0,
-            'error': str(e)
-        }
-
-@app.delete("/user/documents/{file_id}")
-async def delete_user_document(
-    file_id: str,
-    current_user: User = Depends(get_current_user)
-):
-    """Delete a document from user's container"""
-    if file_id not in uploaded_files:
-        raise HTTPException(status_code=404, detail="Document not found")
-    
-    file_data = uploaded_files[file_id]
-    if file_data.get('user_id') != current_user.user_id:
-        raise HTTPException(status_code=403, detail="Unauthorized to delete this document")
-    
-    del uploaded_files[file_id]
-    return {"message": "Document deleted successfully", "file_id": file_id}
-
-@app.post("/external/search")
-async def search_external_databases_endpoint(
-    query: str = Form(...),
-    databases: List[str] = Form(...),
-    current_user: User = Depends(get_current_user)
-):
-    """Search external legal databases (requires premium subscription)"""
-    if current_user.subscription_tier not in ["premium", "enterprise"]:
-        raise HTTPException(
-            status_code=403, 
-            detail="External database access requires premium subscription"
-        )
-    
-    results = search_external_databases(query, databases, current_user)
-    
-    return {
-        "query": query,
-        "databases_searched": databases,
-        "results": results,
-        "total_results": len(results)
-    }
-
-@app.get("/subscription/status")
-async def get_subscription_status(current_user: User = Depends(get_current_user)):
-    """Get user's subscription status and available features"""
-    features = {
-        "free": {
-            "default_database_access": True,
-            "user_container": True,
-            "max_documents": 10,
-            "external_databases": [],
-            "ai_analysis": True,
-            "api_calls_per_month": 100,
-            "enhanced_rag": True,
-            "comprehensive_analysis": True
-        },
-        "premium": {
-            "default_database_access": True,
-            "user_container": True,
-            "max_documents": 100,
-            "external_databases": ["lexisnexis", "westlaw"],
-            "ai_analysis": True,
-            "api_calls_per_month": 1000,
-            "priority_support": True,
-            "enhanced_rag": True,
-            "comprehensive_analysis": True,
-            "document_specific_analysis": True
-        },
-        "enterprise": {
-            "default_database_access": True,
-            "user_container": True,
-            "max_documents": "unlimited",
-            "external_databases": ["lexisnexis", "westlaw", "bloomberg_law"],
-            "ai_analysis": True,
-            "api_calls_per_month": "unlimited",
-            "priority_support": True,
-            "custom_integrations": True,
-            "enhanced_rag": True,
-            "comprehensive_analysis": True,
-            "document_specific_analysis": True,
-            "bulk_analysis": True
-        }
+def extract_statutory_information(context_text: str, statute_citation: str) -> dict:
+    """Extract specific information from statutory text"""
+    extracted_info = {
+        "requirements": [],
+        "durations": [],
+        "numbers": [],
+        "procedures": []
     }
     
-    return {
-        "user_id": current_user.user_id,
-        "subscription_tier": current_user.subscription_tier,
-        "features": features.get(current_user.subscription_tier, features["free"]),
-        "external_db_access": current_user.external_db_access
-    }
-
-@app.post("/ask-debug", response_model=QueryResponse)
-async def ask_question_debug(query: Query):
-    """Debug version of ask endpoint without authentication"""
-    logger.info(f"Debug ask request received: {query}")
+    # Look for duration patterns
+    duration_patterns = [
+        r"minimum of (\d+) (?:minutes?|hours?)",
+        r"at least (\d+) (?:minutes?|hours?)",
+        r"(\d+)-(?:minute|hour) (?:minimum|maximum)",
+        r"(?:shall|must) be (\d+) (?:minutes?|hours?)"
+    ]
     
-    cleanup_expired_conversations()
+    for pattern in duration_patterns:
+        matches = re.findall(pattern, context_text, re.IGNORECASE)
+        for match in matches:
+            extracted_info["durations"].append(f"{match} minutes/hours")
     
-    session_id = query.session_id or str(uuid.uuid4())
-    user_id = query.user_id or "debug_user"
+    # Look for numerical requirements
+    number_patterns = [
+        r"(?:maximum|minimum) of (\d+) (?:participants?|people|individuals?)",
+        r"at least (\d+) (?:speakers?|facilitators?|members?)",
+        r"no more than (\d+) (?:participants?|attendees?)"
+    ]
     
-    if session_id not in conversations:
-        conversations[session_id] = {
-            "messages": [],
-            "created_at": datetime.utcnow(),
-            "last_accessed": datetime.utcnow()
-        }
-    else:
-        conversations[session_id]["last_accessed"] = datetime.utcnow()
+    for pattern in number_patterns:
+        matches = re.findall(pattern, context_text, re.IGNORECASE)
+        for match in matches:
+            extracted_info["numbers"].append(match)
     
-    user_question = query.question.strip()
-    if not user_question:
-        return QueryResponse(
-            response=None,
-            error="Question cannot be empty.",
-            context_found=False,
-            sources=[],
-            session_id=session_id,
-            confidence_score=0.0,
-            sources_searched=[]
-        )
-    
-    response = process_query(
-        user_question, 
-        session_id, 
-        user_id,
-        query.search_scope or "all",
-        query.response_style or "balanced",
-        query.use_enhanced_rag if query.use_enhanced_rag is not None else True,
-        query.document_id
-    )
-    return response
-
-@app.get("/debug/test-bill-search")
-async def debug_bill_search_get(
-    bill_number: str,
-    user_id: str
-):
-    """Debug bill-specific search functionality (GET version for browser testing)"""
-    
-    try:
-        # Get user database
-        user_db = container_manager.get_user_database_safe(user_id)
-        if not user_db:
-            return {"error": "No user database found"}
-        
-        # Get all documents and check metadata
-        all_docs = user_db.get()
-        found_chunks = []
-        
-        logger.info(f"Debugging search for bill: {bill_number}")
-        logger.info(f"Total documents in database: {len(all_docs.get('ids', []))}")
-        
-        for i, (doc_id, metadata, content) in enumerate(zip(
-            all_docs.get('ids', []), 
-            all_docs.get('metadatas', []), 
-            all_docs.get('documents', [])
-        )):
-            if metadata:
-                chunk_index = metadata.get('chunk_index', 'unknown')
-                contains_bills = metadata.get('contains_bills', '')
-                
-                if bill_number in contains_bills:
-                    found_chunks.append({
-                        'chunk_index': chunk_index,
-                        'contains_bills': contains_bills,
-                        'content_preview': content[:200] + "..." if len(content) > 200 else content
-                    })
-                    logger.info(f"Found {bill_number} in chunk {chunk_index}")
-        
-        # Also test direct text search
-        direct_search = [content for content in all_docs.get('documents', []) if bill_number in content]
-        
-        return {
-            "bill_number": bill_number,
-            "user_id": user_id,
-            "total_chunks": len(all_docs.get('ids', [])),
-            "chunks_with_bill_metadata": found_chunks,
-            "chunks_with_bill_in_text": len(direct_search),
-            "text_search_preview": direct_search[0][:300] + "..." if direct_search else "Not found in text",
-            "sample_metadata": all_docs.get('metadatas', [])[:2] if all_docs.get('metadatas') else []
-        }
-        
-    except Exception as e:
-        logger.error(f"Debug bill search failed: {e}")
-        return {"error": str(e)}
-
-@app.post("/debug/test-bill-search")
-async def debug_bill_search(
-    bill_number: str = Form(...),
-    user_id: str = Form(...),
-    current_user: User = Depends(get_current_user)
-):
-    """Debug bill-specific search functionality"""
-    
-    try:
-        # Get user database
-        user_db = container_manager.get_user_database_safe(user_id)
-        if not user_db:
-            return {"error": "No user database found"}
-        
-        # Get all documents and check metadata
-        all_docs = user_db.get()
-        found_chunks = []
-        
-        logger.info(f"Debugging search for bill: {bill_number}")
-        logger.info(f"Total documents in database: {len(all_docs.get('ids', []))}")
-        
-        for i, (doc_id, metadata, content) in enumerate(zip(
-            all_docs.get('ids', []), 
-            all_docs.get('metadatas', []), 
-            all_docs.get('documents', [])
-        )):
-            if metadata:
-                chunk_index = metadata.get('chunk_index', 'unknown')
-                contains_bills = metadata.get('contains_bills', '')
-                
-                if bill_number in contains_bills:
-                    found_chunks.append({
-                        'chunk_index': chunk_index,
-                        'contains_bills': contains_bills,
-                        'content_preview': content[:200] + "..." if len(content) > 200 else content
-                    })
-                    logger.info(f"Found {bill_number} in chunk {chunk_index}")
-        
-        # Also test direct text search
-        direct_search = [content for content in all_docs.get('documents', []) if bill_number in content]
-        
-        return {
-            "bill_number": bill_number,
-            "total_chunks": len(all_docs.get('ids', [])),
-            "chunks_with_bill_metadata": found_chunks,
-            "chunks_with_bill_in_text": len(direct_search),
-            "text_search_preview": direct_search[0][:300] + "..." if direct_search else "Not found in text"
-        }
-        
-    except Exception as e:
-        logger.error(f"Debug bill search failed: {e}")
-        return {"error": str(e)}
-async def debug_test_extraction(
-    question: str = Form(...),
-    user_id: str = Form(...),
-    current_user: User = Depends(get_current_user)
-):
-    """Test information extraction for any question"""
-    
-    try:
-        # Search user's documents
-        user_results = container_manager.enhanced_search_user_container(user_id, question, "", k=5)
-        
-        if user_results:
-            # Get context
-            context_text, source_info = format_context_for_llm(user_results, max_length=3000)
-            
-            # Test extraction
-            bill_match = re.search(r"(HB|SB|SSB|ESSB|SHB|ESHB)\s*(\d+)", question, re.IGNORECASE)
-            if bill_match:
-                bill_number = f"{bill_match.group(1)} {bill_match.group(2)}"
-                extracted_info = extract_bill_information(context_text, bill_number)
-            else:
-                extracted_info = extract_universal_information(context_text, question)
-            
-            return {
-                "question": question,
-                "context_preview": context_text[:500] + "...",
-                "extracted_info": extracted_info,
-                "sources_found": len(user_results)
-            }
-        else:
-            return {
-                "question": question,
-                "error": "No relevant documents found"
-            }
-            
-    except Exception as e:
-        return {"error": str(e)}
-
-# Container cleanup and document health endpoints
-@app.post("/admin/cleanup-containers")
-async def cleanup_orphaned_containers():
-    """Clean up orphaned files in containers that are no longer tracked"""
-    cleanup_results = {
-        "containers_checked": 0,
-        "orphaned_documents_found": 0,
-        "cleanup_performed": False,
-        "errors": []
-    }
-    
-    try:
-        if not os.path.exists(USER_CONTAINERS_PATH):
-            return cleanup_results
-        
-        container_dirs = [d for d in os.listdir(USER_CONTAINERS_PATH) 
-                         if os.path.isdir(os.path.join(USER_CONTAINERS_PATH, d))]
-        
-        cleanup_results["containers_checked"] = len(container_dirs)
-        tracked_file_ids = set(uploaded_files.keys())
-        
-        logger.info(f"Checking {len(container_dirs)} containers against {len(tracked_file_ids)} tracked files")
-        
-        for container_dir in container_dirs:
-            try:
-                container_path = os.path.join(USER_CONTAINERS_PATH, container_dir)
-                
-                try:
-                    embedding_function = HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2")
-                    db = Chroma(
-                        collection_name=f"user_{container_dir}",
-                        embedding_function=embedding_function,
-                        persist_directory=container_path
-                    )
-                    
-                    logger.info(f"Container {container_dir} loaded successfully")
-                    
-                except Exception as e:
-                    logger.warning(f"Could not load container {container_dir}: {e}")
-                    cleanup_results["errors"].append(f"Container {container_dir}: {str(e)}")
-                    continue
-                    
-            except Exception as e:
-                logger.error(f"Error processing container {container_dir}: {e}")
-                cleanup_results["errors"].append(f"Container {container_dir}: {str(e)}")
-        
-        return cleanup_results
-        
-    except Exception as e:
-        logger.error(f"Error during container cleanup: {e}")
-        cleanup_results["errors"].append(str(e))
-        return cleanup_results
-
-@app.post("/admin/sync-document-tracking")
-async def sync_document_tracking():
-    """Sync the uploaded_files tracking with what's actually in the containers"""
-    sync_results = {
-        "tracked_files": len(uploaded_files),
-        "containers_found": 0,
-        "sync_performed": False,
-        "recovered_files": 0,
-        "errors": []
-    }
-    
-    try:
-        if not os.path.exists(USER_CONTAINERS_PATH):
-            return sync_results
-        
-        container_dirs = [d for d in os.listdir(USER_CONTAINERS_PATH) 
-                         if os.path.isdir(os.path.join(USER_CONTAINERS_PATH, d))]
-        
-        sync_results["containers_found"] = len(container_dirs)
-        
-        logger.info(f"Syncing document tracking: {len(uploaded_files)} tracked files, {len(container_dirs)} containers")
-        
-        return sync_results
-        
-    except Exception as e:
-        logger.error(f"Error during document tracking sync: {e}")
-        sync_results["errors"].append(str(e))
-        return sync_results
-
-@app.get("/admin/document-health")
-async def check_document_health():
-    """Check the health of document tracking and containers"""
-    health_info = {
-        "timestamp": datetime.utcnow().isoformat(),
-        "uploaded_files_count": len(uploaded_files),
-        "container_directories": 0,
-        "users_with_containers": 0,
-        "orphaned_files": [],
-        "container_errors": [],
-        "recommendations": []
-    }
-    
-    try:
-        # Check container directories
-        if os.path.exists(USER_CONTAINERS_PATH):
-            container_dirs = [d for d in os.listdir(USER_CONTAINERS_PATH) 
-                             if os.path.isdir(os.path.join(USER_CONTAINERS_PATH, d))]
-            health_info["container_directories"] = len(container_dirs)
-            
-            # Check which users have containers
-            user_ids_with_files = set()
-            for file_data in uploaded_files.values():
-                if 'user_id' in file_data:
-                    user_ids_with_files.add(file_data['user_id'])
-            
-            health_info["users_with_containers"] = len(user_ids_with_files)
-            
-            # Check for potential issues
-            if len(container_dirs) > len(user_ids_with_files):
-                health_info["recommendations"].append("Some containers may be orphaned - consider running cleanup")
-            
-            if len(uploaded_files) == 0 and len(container_dirs) > 0:
-                health_info["recommendations"].append("Containers exist but no files are tracked - may need sync")
-        
-        # Check for files with missing metadata
-        for file_id, file_data in uploaded_files.items():
-            if not file_data.get('user_id'):
-                health_info["orphaned_files"].append(file_id)
-        
-        if health_info["orphaned_files"]:
-            health_info["recommendations"].append(f"{len(health_info['orphaned_files'])} files have missing user_id")
-        
-        logger.info(f"Document health check: {health_info['uploaded_files_count']} files, {health_info['container_directories']} containers")
-        
-        return health_info
-        
-    except Exception as e:
-        logger.error(f"Error during document health check: {e}")
-        health_info["container_errors"].append(str(e))
-        return health_info
-
-@app.post("/admin/emergency-clear-tracking")
-async def emergency_clear_document_tracking():
-    """EMERGENCY: Clear all document tracking"""
-    try:
-        global uploaded_files
-        backup_count = len(uploaded_files)
-        uploaded_files.clear()
-        
-        logger.warning(f"EMERGENCY: Cleared tracking for {backup_count} files")
-        
-        return {
-            "status": "completed",
-            "cleared_files": backup_count,
-            "warning": "All document tracking has been cleared. Users will need to re-upload documents.",
-            "timestamp": datetime.utcnow().isoformat()
-        }
-        
-    except Exception as e:
-        logger.error(f"Error during emergency clear: {e}")
-        return {
-            "status": "failed",
-            "error": str(e)
-        }
-
-@app.get("/health")
-def health_check():
-    """Enhanced system health check with comprehensive analysis capabilities"""
-    db_exists = os.path.exists(DEFAULT_CHROMA_PATH)
-    
-    return {
-        "status": "healthy",
-        "version": "10.0.0-SmartRAG-ComprehensiveAnalysis",
-        "timestamp": datetime.utcnow().isoformat(),
-        "ai_enabled": AI_ENABLED,
-        "openrouter_api_configured": bool(OPENROUTER_API_KEY),
-        "components": {
-            "default_database": {
-                "exists": db_exists,
-                "path": DEFAULT_CHROMA_PATH
-            },
-            "user_containers": {
-                "enabled": True,
-                "base_path": USER_CONTAINERS_PATH,
-                "active_containers": len(os.listdir(USER_CONTAINERS_PATH)) if os.path.exists(USER_CONTAINERS_PATH) else 0,
-                "document_specific_retrieval": True,
-                "file_id_tracking": True
-            },
-            "external_databases": {
-                "lexisnexis": {
-                    "configured": bool(os.environ.get("LEXISNEXIS_API_KEY")),
-                    "status": "ready" if bool(os.environ.get("LEXISNEXIS_API_KEY")) else "not_configured"
-                },
-                "westlaw": {
-                    "configured": bool(os.environ.get("WESTLAW_API_KEY")),
-                    "status": "ready" if bool(os.environ.get("WESTLAW_API_KEY")) else "not_configured"
-                }
-            },
-            "comprehensive_analysis": {
-                "enabled": True,
-                "analysis_types": [
-                    "comprehensive",
-                    "document_summary", 
-                    "key_clauses",
-                    "risk_assessment",
-                    "timeline_deadlines", 
-                    "party_obligations",
-                    "missing_clauses"
-                ],
-                "structured_output": True,
-                "document_specific": True,
-                "confidence_scoring": True,
-                "single_api_call": True
-            },
-            "enhanced_rag": {
-                "enabled": True,
-                "features": [
-                    "multi_query_strategies",
-                    "query_expansion",
-                    "entity_extraction",
-                    "sub_query_decomposition",
-                    "confidence_scoring",
-                    "duplicate_removal",
-                    "document_specific_filtering"
-                ],
-                "nlp_model": nlp is not None,
-                "sentence_model": sentence_model is not None,
-                "sentence_model_name": sentence_model_name if sentence_model else "none",
-                "embedding_model": getattr(embeddings, 'model_name', 'unknown') if embeddings else "none"
-            },
-            "document_processing": {
-                "pdf_support": PYMUPDF_AVAILABLE or PDFPLUMBER_AVAILABLE,
-                "pymupdf_available": PYMUPDF_AVAILABLE,
-                "pdfplumber_available": PDFPLUMBER_AVAILABLE,
-                "unstructured_available": UNSTRUCTURED_AVAILABLE,
-                "docx_support": True,
-                "txt_support": True,
-                "safe_document_processor": True,
-                "enhanced_page_estimation": True,
-                "bert_semantic_chunking": sentence_model is not None,
-                "advanced_legal_chunking": True,
-                "embedding_model": sentence_model_name if sentence_model else "none"
-            }
-        },
-        "new_endpoints": [
-            "POST /comprehensive-analysis - Full structured analysis",
-            "POST /quick-analysis/{document_id} - Quick single document analysis", 
-            "Enhanced /ask - Detects comprehensive analysis requests",
-            "Enhanced /user/upload - Stores file_id for targeting",
-            "GET /admin/document-health - Check system health",
-            "POST /admin/cleanup-containers - Clean orphaned containers",
-            "POST /admin/emergency-clear-tracking - Reset document tracking"
-        ],
-        "features": [
-            "✅ User-specific document containers",
-            "✅ Enhanced RAG with multi-query strategies",
-            "✅ Combined search across all sources",
-            "✅ External legal database integration (ready)",
-            "✅ Subscription tier management",
-            "✅ Document access control",
-            "✅ Source attribution (default/user/external)",
-            "✅ Dynamic confidence scoring",
-            "✅ Query expansion and decomposition",
-            "✅ SafeDocumentProcessor for file handling",
-            "🔧 Optional authentication for debugging",
-            "🆕 Comprehensive multi-analysis in single API call",
-            "🆕 Document-specific analysis targeting",
-            "🆕 Structured analysis responses with sections",
-            "🆕 Enhanced confidence scoring per section",
-            "🆕 File ID tracking for precise document retrieval",
-            "🆕 Automatic comprehensive analysis detection",
-            "🆕 Container cleanup and health monitoring",
-            "🆕 Enhanced error handling and recovery",
-            "🆕 Fixed page estimation with content analysis",
-            "🆕 Unstructured.io integration for advanced processing",
-            "🆕 BERT-based semantic chunking for better retrieval",
-            "🆕 Enhanced information extraction (bills, sponsors, etc.)",
-            "🆕 Legal-specific BERT models (InCaseLawBERT, legal-bert-base-uncased)",
-            "🆕 Advanced semantic similarity for intelligent chunking",
-            "🆕 Legal document pattern recognition for better segmentation"
-        ],
-        # Frontend compatibility fields
-        "unified_mode": True,
-        "enhanced_rag": True,
-        "database_exists": db_exists,
-        "database_path": DEFAULT_CHROMA_PATH,
-        "api_key_configured": bool(OPENROUTER_API_KEY),
-        "active_conversations": len(conversations)
-    }
-
-@app.get("/", response_class=HTMLResponse)
-def get_interface():
-    """Web interface with updated documentation for comprehensive analysis"""
-    return """
-    <!DOCTYPE html>
-    <html>
-    <head>
-        <title>Legal Assistant - Complete Multi-Analysis Edition [FIXED]</title>
-        <style>
-            body { font-family: Arial, sans-serif; margin: 40px; background: #f8f9fa; }
-            .container { max-width: 1200px; margin: 0 auto; }
-            h1 { color: #2c3e50; }
-            .feature-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 20px; margin: 30px 0; }
-            .feature-card { background: #fff; border: 1px solid #dee2e6; border-radius: 8px; padding: 20px; }
-            .endpoint { background: #f1f3f4; padding: 10px; margin: 10px 0; border-radius: 5px; font-family: monospace; }
-            .status { padding: 5px 10px; border-radius: 15px; font-size: 12px; }
-            .status-active { background: #d4edda; color: #155724; }
-            .status-ready { background: #cce5ff; color: #004085; }
-            .status-fixed { background: #28a745; color: white; }
-            .badge-fixed { background: #dc3545; color: white; padding: 2px 8px; border-radius: 10px; font-size: 11px; margin-left: 5px; }
-            .code-example { background: #f8f9fa; border: 1px solid #e9ecef; border-radius: 5px; padding: 15px; margin: 10px 0; font-family: monospace; font-size: 12px; }
-        </style>
-    </head>
-    <body>
-        <div class="container">
-            <h1>⚖️ Legal Assistant API v10.0 <span class="badge-fixed">FULLY FIXED</span></h1>
-            <p>Complete Multi-User Platform with Enhanced RAG, Comprehensive Analysis, and Container Management</p>
-            <div class="status status-fixed">🔧 All syntax errors fixed, complete functionality restored!</div>
-            
-            <div class="feature-grid">
-                <div class="feature-card">
-                    <h3>✅ Corruption Fixed</h3>
-                    <p>All broken code sections have been repaired</p>
-                    <ul>
-                        <li>✅ SafeDocumentProcessor properly structured</li>
-                        <li>✅ All API endpoints complete</li>
-                        <li>✅ Syntax errors resolved</li>
-                        <li>✅ Missing functions restored</li>
-                    </ul>
-                </div>
-                
-                <div class="feature-card">
-                    <h3>🚀 Comprehensive Analysis</h3>
-                    <p>All analysis types in a single efficient API call</p>
-                    <ul>
-                        <li>✅ Document summary</li>
-                        <li>✅ Key clauses extraction</li>
-                        <li>✅ Risk assessment</li>
-                        <li>✅ Timeline & deadlines</li>
-                        <li>✅ Party obligations</li>
-                        <li>✅ Missing clauses detection</li>
-                    </ul>
-                </div>
-                
-                <div class="feature-card">
-                    <h3>🛠️ Enhanced Error Handling</h3>
-                    <p>Robust container management with auto-recovery</p>
-                    <ul>
-                        <li>✅ Timeout protection</li>
-                        <li>✅ Container auto-recovery</li>
-                        <li>✅ Graceful degradation</li>
-                        <li>✅ Health monitoring</li>
-                    </ul>
-                </div>
-                
-                <div class="feature-card">
-                    <h3>🔧 Admin Tools</h3>
-                    <p>Debug and maintenance endpoints</p>
-                    <div class="endpoint">GET /admin/document-health</div>
-                    <div class="endpoint">POST /admin/cleanup-containers</div>
-                    <div class="endpoint">POST /admin/emergency-clear-tracking</div>
-                </div>
-                
-                <div class="feature-card">
-                    <h3>⚡ Quick Analysis</h3>
-                    <p>One-click document analysis</p>
-                    <div class="endpoint">POST /quick-analysis/{document_id}</div>
-                    <p>Perfect for frontend "Analyze" buttons</p>
-                </div>
-                
-                <div class="feature-card">
-                    <h3>🎯 Document-Specific Targeting</h3>
-                    <p>Analyze specific documents with precision</p>
-                    <ul>
-                        <li>File ID tracking</li>
-                        <li>Document filtering</li>
-                        <li>Precise retrieval</li>
-                        <li>Source attribution</li>
-                    </ul>
-                </div>
-            </div>
-            
-            <h2>🔧 What Was Fixed</h2>
-            <div class="feature-grid">
-                <div class="feature-card">
-                    <h4>❌ Original Issues</h4>
-                    <ul>
-                        <li>Broken SafeDocumentProcessor class</li>
-                        <li>Missing large code sections</li>
-                        <li>Syntax errors and malformed structure</li>
-                        <li>Incomplete file ending abruptly</li>
-                        <li>Missing API endpoints</li>
-                    </ul>
-                </div>
-                
-                <div class="feature-card">
-                    <h4>✅ Fixed Issues</h4>
-                    <ul>
-                        <li>Complete SafeDocumentProcessor class</li>
-                        <li>All functions and classes restored</li>
-                        <li>Proper syntax and indentation</li>
-                        <li>Complete file with all endpoints</li>
-                        <li>Full API functionality</li>
-                    </ul>
-                </div>
-            </div>
-            
-            <h2>📡 Complete API Reference</h2>
-            <div class="feature-grid">
-                <div class="feature-card">
-                    <h4>Core Endpoints</h4>
-                    <div class="endpoint">POST /ask - Enhanced chat with auto-detection</div>
-                    <div class="endpoint">POST /user/upload - Enhanced upload with file_id</div>
-                    <div class="endpoint">GET /user/documents - Robust document listing</div>
-                </div>
-                
-                <div class="feature-card">
-                    <h4>Analysis Endpoints</h4>
-                    <div class="endpoint">POST /comprehensive-analysis - Full analysis</div>
-                    <div class="endpoint">POST /quick-analysis/{id} - One-click analysis</div>
-                </div>
-                
-                <div class="feature-card">
-                    <h4>Admin Endpoints</h4>
-                    <div class="endpoint">GET /admin/document-health - System health</div>
-                    <div class="endpoint">POST /admin/cleanup-containers - Cleanup</div>
-                    <div class="endpoint">POST /admin/emergency-clear-tracking - Reset</div>
-                </div>
-                
-                <div class="feature-card">
-                    <h4>Debug Endpoints</h4>
-                    <div class="endpoint">POST /ask-debug - No auth required</div>
-                    <div class="endpoint">GET /health - System status</div>
-                </div>
-            </div>
-            
-            <h2>🚀 Ready to Deploy</h2>
-            <div class="feature-grid">
-                <div class="feature-card">
-                    <h4>Installation</h4>
-                    <div class="code-example">
-pip install fastapi uvicorn langchain-chroma 
-pip install langchain-huggingface spacy 
-pip install sentence-transformers numpy requests
-pip install PyMuPDF pdfplumber python-docx
-                    </div>
-                </div>
-                
-                <div class="feature-card">
-                    <h4>Environment Setup</h4>
-                    <div class="code-example">
-export OPENAI_API_KEY="your-openrouter-key"
-export OPENAI_API_BASE="https://openrouter.ai/api/v1"
-                    </div>
-                </div>
-                
-                <div class="feature-card">
-                    <h4>Run Server</h4>
-                    <div class="code-example">
-python enhanced_backend.py
-# Should show:
-# ✅ PyMuPDF available
-# 🚀 Starting Complete Enhanced Legal Assistant
-# Version: 10.0.0-SmartRAG-ComprehensiveAnalysis
-                    </div>
-                </div>
-                
-                <div class="feature-card">
-                    <h4>Test Health</h4>
-                    <div class="code-example">
-curl http://localhost:8000/health
-# Should return version with "SmartRAG"
-curl http://localhost:8000/admin/document-health
-# Check system status
-                    </div>
-                </div>
-            </div>
-            
-            <h2>✅ Verification Checklist</h2>
-            <ul>
-                <li><strong>✅ No syntax errors:</strong> All Python code properly formatted</li>
-                <li><strong>✅ Complete classes:</strong> SafeDocumentProcessor, UserContainerManager, etc.</li>
-                <li><strong>✅ All endpoints:</strong> upload, analysis, admin, debug endpoints</li>
-                <li><strong>✅ Error handling:</strong> Timeout protection and graceful failures</li>
-                <li><strong>✅ Frontend compatibility:</strong> SmartRAG version detection</li>
-                <li><strong>✅ Container management:</strong> Auto-recovery and cleanup tools</li>
-                <li><strong>✅ Comprehensive analysis:</strong> Multi-analysis in single API call</li>
-                <li><strong>✅ Document targeting:</strong> File ID tracking and filtering</li>
-            </ul>
-            
-            <p style="text-align: center; color: #7f8c8d; margin-top: 30px;">
-                🎉 Fully Fixed & Complete Enhanced Legal Assistant Backend 🎉
-                <br>Version 10.0.0-SmartRAG-ComprehensiveAnalysis
-                <br>All corruption repaired - ready for production deployment!
-            </p>
-        </div>
-    </body>
-    </html>
-    """
-
-if __name__ == "__main__":
-    import uvicorn
-    port = int(os.environ.get("PORT", 8000))
-    logger.info(f"🚀 Starting FULLY FIXED Enhanced Legal Assistant on port {port}")
-    logger.info(f"ChromaDB Path: {DEFAULT_CHROMA_PATH}")
-    logger.info(f"User Containers Path: {USER_CONTAINERS_PATH}")
-    logger.info(f"AI Status: {'ENABLED with Kimi-K2' if AI_ENABLED else 'DISABLED - Set OPENAI_API_KEY to enable'}")
-    logger.info(f"PDF processing: PyMuPDF={PYMUPDF_AVAILABLE}, pdfplumber={PDFPLUMBER_AVAILABLE}")
-    logger.info(f"Features: Comprehensive analysis, document-specific targeting, container cleanup, enhanced error handling")
-    logger.info(f"Version: 10.0.0-SmartRAG-ComprehensiveAnalysis")
-    logger.info("✅ ALL CORRUPTION FIXED - Backend ready for deployment!")
-    uvicorn.run(app, host="0.0.0.0", port=port)
+    return extracted_info
