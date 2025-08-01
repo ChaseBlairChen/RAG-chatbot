@@ -1,4 +1,4 @@
-# 1. Update api/routers/documents.py for async processing
+# legal_assistant/api/routers/documents.py
 """Document management endpoints with async processing"""
 import os
 import uuid
@@ -144,3 +144,71 @@ async def get_document_status(
         'processing_time': file_data.get('processing_time', 0),
         'errors': status.get('errors', [])
     }
+
+@router.get("/user/documents")
+async def get_user_documents(
+    current_user: User = Depends(get_current_user)
+):
+    """Get all documents for the current user"""
+    try:
+        user_docs = []
+        
+        # Get documents from uploaded_files storage
+        for file_id, file_data in uploaded_files.items():
+            if file_data.get('user_id') == current_user.user_id:
+                user_docs.append({
+                    'file_id': file_id,
+                    'filename': file_data['filename'],
+                    'uploaded_at': file_data['uploaded_at'].isoformat() if hasattr(file_data['uploaded_at'], 'isoformat') else str(file_data['uploaded_at']),
+                    'pages_processed': file_data.get('pages_processed', 0),
+                    'status': file_data.get('status', 'completed'),
+                    'file_size': file_data.get('file_size', 0),
+                    'chunks_created': file_data.get('chunks_created', 0)
+                })
+        
+        # Sort by upload date (newest first)
+        user_docs.sort(key=lambda x: x['uploaded_at'], reverse=True)
+        
+        return {
+            'documents': user_docs,
+            'total': len(user_docs)
+        }
+        
+    except Exception as e:
+        logger.error(f"Error fetching user documents: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to fetch documents: {str(e)}")
+
+@router.delete("/user/documents/{file_id}")
+async def delete_user_document(
+    file_id: str,
+    current_user: User = Depends(get_current_user)
+):
+    """Delete a user's document"""
+    try:
+        if file_id not in uploaded_files:
+            raise HTTPException(status_code=404, detail="Document not found")
+        
+        file_data = uploaded_files[file_id]
+        if file_data.get('user_id') != current_user.user_id:
+            raise HTTPException(status_code=403, detail="Unauthorized")
+        
+        # Remove from storage
+        del uploaded_files[file_id]
+        
+        # Also remove from processing status if exists
+        if file_id in document_processing_status:
+            del document_processing_status[file_id]
+        
+        # TODO: Also remove from vector database
+        # container_manager = get_container_manager()
+        # container_manager.remove_document(current_user.user_id, file_id)
+        
+        logger.info(f"Document {file_id} deleted by user {current_user.user_id}")
+        
+        return {"message": "Document deleted successfully"}
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error deleting document: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to delete document: {str(e)}")
