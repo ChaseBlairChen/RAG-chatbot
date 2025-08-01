@@ -11,7 +11,7 @@ langchain-huggingface==0.0.3
 # Vector database
 chromadb==0.4.17
 
-# Embeddings and ML (CPU-only, minimal)
+# Embeddings and ML
 sentence-transformers==2.6.1
 huggingface-hub==0.23.1
 
@@ -47,12 +47,3 @@ Pillow==10.1.0
 
 # Hybrid search
 rank-bm25==0.2.2
-
-# NOTE: Unstructured removed due to onnxruntime version conflict
-# If you need unstructured, install it separately:
-# pip install unstructured==0.10.15 (older version that might work)
-
-# Post-install commands:
-# sudo apt-get install tesseract-ocr
-# python -m spacy download en_core_web_sm
-# python -c "import nltk; nltk.download('punkt'); nltk.download('stopwords')"
