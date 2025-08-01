@@ -8,8 +8,8 @@ langchain-community
 langchain-chroma==0.1.4
 langchain-huggingface==0.0.3
 
-# Vector database
-chromadb==0.4.17
+# Vector database - using compatible version
+chromadb==0.4.15
 
 # Embeddings and ML (CPU-only, minimal)
 sentence-transformers==2.6.1
@@ -51,8 +51,11 @@ Pillow==10.1.0
 # Hybrid search
 rank-bm25==0.2.2
 
-# Advanced document processing 
-unstructured[pdf]==0.10.30
+# Advanced document processing - using compatible version
+unstructured==0.10.25
+
+# Force compatible ONNX runtime version
+onnxruntime>=1.14.1,<1.16
 
 # Additional NLP data and models (install with post-install script)
 # Run after pip install: python -m spacy download en_core_web_sm
