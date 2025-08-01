@@ -3,7 +3,7 @@ import os
 import io
 import logging
 import tempfile
-from typing import Tuple, List
+from typing import Tuple, List, Dict
 import hashlib
 from ..config import FeatureFlags
 from ..core.exceptions import DocumentProcessingError
@@ -69,6 +69,145 @@ class SafeDocumentProcessor:
         
         logger.info(f"Final result: {len(content)} chars, {pages_processed} pages, {len(warnings)} warnings")
         return content, pages_processed, warnings
+    
+    @staticmethod
+    def quick_validate(file_content: bytes, file_ext: str) -> Tuple[str, int, List[str]]:
+        """Quick validation to check if document can be processed"""
+        warnings = []
+        
+        try:
+            logger.info(f"Quick validating {file_ext} file, size: {len(file_content)} bytes")
+            
+            if file_ext == '.txt':
+                content = file_content.decode('utf-8', errors='ignore')
+                pages_estimated = max(1, len(content) // 2000)  # Quick estimation
+                return content[:1000], pages_estimated, warnings
+                
+            elif file_ext == '.pdf':
+                # Just try to extract first page
+                if FeatureFlags.PYMUPDF_AVAILABLE:
+                    try:
+                        import fitz
+                        doc = fitz.open(stream=file_content, filetype="pdf")
+                        total_pages = len(doc)
+                        
+                        if total_pages > 0:
+                            first_page = doc.load_page(0)
+                            content = first_page.get_text()
+                            doc.close()
+                            
+                            if not content.strip():
+                                warnings.append("First page appears to be empty - may need OCR")
+                                
+                            return content[:1000], total_pages, warnings
+                        else:
+                            warnings.append("PDF has no pages")
+                            return "", 0, warnings
+                            
+                    except Exception as e:
+                        warnings.append(f"PDF validation failed: {str(e)}")
+                        return "", 0, warnings
+                else:
+                    warnings.append("PDF processing not available")
+                    return "", 0, warnings
+                    
+            elif file_ext == '.docx':
+                # Try basic extraction
+                try:
+                    from docx import Document
+                    doc = Document(io.BytesIO(file_content))
+                    paragraphs = []
+                    
+                    # Check first few paragraphs
+                    for i, para in enumerate(doc.paragraphs):
+                        if i > 5:  # Just check first few paragraphs
+                            break
+                        if para.text.strip():
+                            paragraphs.append(para.text)
+                    
+                    content = '\n'.join(paragraphs)
+                    pages_estimated = max(1, len(content) // 2000)
+                    return content[:1000], pages_estimated, warnings
+                    
+                except ImportError:
+                    warnings.append("python-docx not available")
+                    return "", 0, warnings
+                except Exception as e:
+                    warnings.append(f"DOCX validation failed: {str(e)}")
+                    return "", 0, warnings
+            else:
+                # Try as plain text
+                try:
+                    content = file_content.decode('utf-8', errors='ignore')
+                    pages_estimated = max(1, len(content) // 2000)
+                    warnings.append(f"Unknown file type {file_ext} - treating as plain text")
+                    return content[:1000], pages_estimated, warnings
+                except Exception as e:
+                    warnings.append(f"Cannot process file type {file_ext}: {str(e)}")
+                    return "", 0, warnings
+                    
+        except Exception as e:
+            logger.error(f"Quick validation error: {e}")
+            warnings.append(f"Validation error: {str(e)}")
+            return "", 0, warnings
+    
+    @staticmethod
+    def process_document_from_bytes(file_content: bytes, filename: str, file_ext: str) -> Tuple[str, int, List[str]]:
+        """Process document from bytes (for background processing)"""
+        warnings = []
+        
+        try:
+            logger.info(f"Processing document from bytes: {filename}, extension: {file_ext}, size: {len(file_content)} bytes")
+            
+            if file_ext == '.txt':
+                content = file_content.decode('utf-8', errors='ignore')
+                pages_processed = SafeDocumentProcessor._estimate_pages_from_text(content)
+                logger.info(f"Text processed: {len(content)} chars, {pages_processed} pages")
+                
+            elif file_ext == '.pdf':
+                content, pages_processed = SafeDocumentProcessor._process_pdf_multi_method(file_content, warnings)
+                logger.info(f"PDF processed: {len(content)} chars, {pages_processed} pages")
+                
+            elif file_ext == '.docx':
+                content, pages_processed = SafeDocumentProcessor._process_docx_enhanced(file_content, warnings)
+                logger.info(f"DOCX processed: {len(content)} chars, {pages_processed} pages")
+                
+            else:
+                # Handle unknown file types
+                try:
+                    content = file_content.decode('utf-8', errors='ignore')
+                    pages_processed = SafeDocumentProcessor._estimate_pages_from_text(content)
+                    warnings.append(f"File type {file_ext} processed as plain text")
+                    logger.info(f"Unknown type processed as text: {len(content)} chars, {pages_processed} pages")
+                except Exception as e:
+                    warnings.append(f"Could not process file: {str(e)}")
+                    content = "Unable to process this file type"
+                    pages_processed = 0
+                    logger.error(f"Failed to process unknown file type: {e}")
+            
+            # Validate extraction quality
+            if content and not SafeDocumentProcessor._validate_extraction(content, filename):
+                warnings.append("Low quality extraction detected - may need manual review")
+                logger.warning(f"Low quality extraction for {filename}")
+            
+            logger.info(f"Background processing complete: {len(content)} chars, {pages_processed} pages, {len(warnings)} warnings")
+            return content, pages_processed, warnings
+            
+        except Exception as e:
+            logger.error(f"Error processing document from bytes: {e}", exc_info=True)
+            return "", 0, [f"Processing failed: {str(e)}"]
+    
+    @staticmethod
+    def get_processing_capabilities() -> Dict[str, bool]:
+        """Return current processing capabilities for different methods"""
+        return {
+            'unstructured_available': FeatureFlags.UNSTRUCTURED_AVAILABLE,
+            'pymupdf_available': FeatureFlags.PYMUPDF_AVAILABLE,
+            'pdfplumber_available': FeatureFlags.PDFPLUMBER_AVAILABLE,
+            'ocr_available': FeatureFlags.OCR_AVAILABLE,
+            'docx_available': True,  # Usually available
+            'supported_formats': ['.txt', '.pdf', '.docx']
+        }
     
     @staticmethod
     def _validate_extraction(text: str, filename: str) -> bool:
