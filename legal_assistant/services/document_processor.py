@@ -28,14 +28,19 @@ class SafeDocumentProcessor:
             file_ext = os.path.splitext(filename)[1].lower()
             file_content = file.file.read()
             
+            logger.info(f"Processing file: {filename}, extension: {file_ext}, size: {len(file_content)} bytes")
+            
             if file_ext == '.txt':
                 content = file_content.decode('utf-8', errors='ignore')
                 pages_processed = SafeDocumentProcessor._estimate_pages_from_text(content)
+                logger.info(f"Text file processed: {len(content)} chars, {pages_processed} pages")
             elif file_ext == '.pdf':
                 # Enhanced PDF processing with multiple fallbacks
                 content, pages_processed = SafeDocumentProcessor._process_pdf_multi_method(file_content, warnings)
+                logger.info(f"PDF processed: {len(content)} chars, {pages_processed} pages")
             elif file_ext == '.docx':
                 content, pages_processed = SafeDocumentProcessor._process_docx_enhanced(file_content, warnings)
+                logger.info(f"DOCX processed: {len(content)} chars, {pages_processed} pages")
             else:
                 try:
                     content = file_content.decode('utf-8', errors='ignore')
@@ -46,17 +51,23 @@ class SafeDocumentProcessor:
                     content = "Unable to process this file type"
                     pages_processed = 0
             
+            # Log extraction quality
+            logger.info(f"Content preview: {content[:200]}..." if len(content) > 200 else f"Content: {content}")
+            
             # Validate extraction quality
             if not SafeDocumentProcessor._validate_extraction(content, filename):
                 warnings.append("Low quality extraction detected - may need manual review")
+                logger.warning(f"Low quality extraction for {filename}")
             
             file.file.seek(0)
             
         except Exception as e:
+            logger.error(f"Error processing document: {str(e)}", exc_info=True)
             warnings.append(f"Error processing document: {str(e)}")
             content = "Error processing document"
             pages_processed = 0
         
+        logger.info(f"Final result: {len(content)} chars, {pages_processed} pages, {len(warnings)} warnings")
         return content, pages_processed, warnings
     
     @staticmethod
@@ -85,41 +96,42 @@ class SafeDocumentProcessor:
         # Method 1: Try Unstructured.io first (best quality)
         if FeatureFlags.UNSTRUCTURED_AVAILABLE:
             try:
-                result = SafeDocumentProcessor._process_pdf_unstructured(file_content, warnings)
-                if result[0] and len(result[0]) > 100:
+                content, pages = SafeDocumentProcessor._process_pdf_unstructured(file_content, warnings)
+                if content and len(content) > 100:
                     logger.info("✅ PDF processed with Unstructured.io")
-                    return result
+                    return content, pages
             except Exception as e:
                 warnings.append(f"Unstructured.io failed: {str(e)}")
         
         # Method 2: Try PyMuPDF with layout preservation
         if FeatureFlags.PYMUPDF_AVAILABLE:
             try:
-                result = SafeDocumentProcessor._process_pdf_pymupdf_enhanced(file_content, warnings)
-                if result[0] and len(result[0]) > 100:
+                content, pages = SafeDocumentProcessor._process_pdf_pymupdf_enhanced(file_content, warnings)
+                if content and len(content) > 100:
                     logger.info("✅ PDF processed with PyMuPDF")
-                    return result
+                    return content, pages
             except Exception as e:
                 warnings.append(f"PyMuPDF failed: {str(e)}")
         
         # Method 3: Try pdfplumber
         if FeatureFlags.PDFPLUMBER_AVAILABLE:
             try:
-                result = SafeDocumentProcessor._process_pdf_pdfplumber(file_content, warnings)
-                if result[0] and len(result[0]) > 100:
+                content, pages = SafeDocumentProcessor._process_pdf_pdfplumber(file_content, warnings)
+                if content and len(content) > 100:
                     logger.info("✅ PDF processed with pdfplumber")
-                    return result
+                    return content, pages
             except Exception as e:
                 warnings.append(f"pdfplumber failed: {str(e)}")
         
         # Method 4: OCR fallback for scanned PDFs
-        try:
-            result = SafeDocumentProcessor._process_pdf_with_ocr(file_content, warnings)
-            if result[0] and len(result[0]) > 100:
-                logger.info("✅ PDF processed with OCR")
-                return result
-        except Exception as e:
-            warnings.append(f"OCR failed: {str(e)}")
+        if FeatureFlags.OCR_AVAILABLE:
+            try:
+                content, pages = SafeDocumentProcessor._process_pdf_with_ocr(file_content, warnings)
+                if content and len(content) > 100:
+                    logger.info("✅ PDF processed with OCR")
+                    return content, pages
+            except Exception as e:
+                warnings.append(f"OCR failed: {str(e)}")
         
         warnings.append("All PDF processing methods failed")
         return "PDF processing failed - please try a different format", 0
@@ -132,8 +144,9 @@ class SafeDocumentProcessor:
             
             doc = fitz.open(stream=file_content, filetype="pdf")
             all_text = []
+            page_count = len(doc)  # Get actual page count
             
-            for page_num in range(len(doc)):
+            for page_num in range(page_count):
                 page = doc.load_page(page_num)
                 
                 # Try different extraction methods
@@ -153,7 +166,10 @@ class SafeDocumentProcessor:
                 all_text.append(f"\n--- Page {page_num + 1} ---\n{page_text}")
             
             doc.close()
-            return "\n".join(all_text), len(all_text), warnings
+            
+            # Join all text
+            final_text = "\n".join(all_text)
+            return final_text, page_count
             
         except Exception as e:
             warnings.append(f"PyMuPDF enhanced extraction failed: {str(e)}")
@@ -214,7 +230,7 @@ class SafeDocumentProcessor:
             if not all_text:
                 raise ValueError("No text extracted with OCR")
                 
-            return "\n".join(all_text), len(images), warnings
+            return "\n".join(all_text), len(images)
             
         except ImportError:
             warnings.append("OCR libraries not installed. Install pytesseract and pdf2image")
@@ -265,7 +281,7 @@ class SafeDocumentProcessor:
                     if text.strip():
                         all_text.append(f"\n--- Page {i + 1} ---\n{text}")
                 
-                return "\n".join(all_text), len(pdf.pages), warnings
+                return "\n".join(all_text), len(pdf.pages)
                 
         except Exception as e:
             warnings.append(f"pdfplumber failed: {str(e)}")
@@ -301,7 +317,7 @@ class SafeDocumentProcessor:
                 if page_count == 0:
                     page_count = SafeDocumentProcessor._estimate_pages_from_text(final_text)
                 
-                return final_text, page_count, warnings
+                return final_text, page_count
                 
             except Exception as e:
                 os.unlink(temp_file_path)
@@ -314,7 +330,8 @@ class SafeDocumentProcessor:
     @staticmethod
     def _estimate_pages_from_text(text: str) -> int:
         """Fixed page estimation based on content analysis"""
-        if not text:
+        if not text or len(text.strip()) == 0:
+            logger.warning("Empty text provided for page estimation")
             return 0
         
         # Enhanced page estimation logic
@@ -335,6 +352,11 @@ class SafeDocumentProcessor:
         estimates = [pages_by_words, pages_by_chars, pages_by_lines]
         estimates.sort()
         estimated_pages = estimates[1]  # median
+        
+        # Log the estimation for debugging
+        logger.debug(f"Page estimation: words={word_count}, chars={char_count}, lines={line_count}")
+        logger.debug(f"Estimates: by_words={pages_by_words}, by_chars={pages_by_chars}, by_lines={pages_by_lines}")
+        logger.debug(f"Final estimate: {estimated_pages} pages")
         
         # Ensure reasonable bounds
         return max(1, min(estimated_pages, 1000))
