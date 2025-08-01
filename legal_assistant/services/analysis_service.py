@@ -141,41 +141,101 @@ class ComprehensiveAnalysisProcessor:
             return [], [], "error"
     
     def _create_comprehensive_prompt(self, context_text: str) -> str:
-        return f"""You are a legal document analyst. Analyze the provided legal document and provide a comprehensive analysis with the following structured sections.
+    """Create a comprehensive analysis prompt with strict anti-hallucination measures"""
+    return f"""You are a legal document analyst providing structured analysis of legal documents.
 
-STRICT SOURCE REQUIREMENTS:
-- Answer ONLY based on the retrieved documents provided in the context
-- Do NOT use general legal knowledge, training data, assumptions, or inferences beyond what's explicitly stated
-- If information is not in the provided documents, state: "This information is not available in the provided documents"
+CRITICAL INSTRUCTIONS - PREVENT HALLUCINATION:
+1. **ONLY analyze what is EXPLICITLY written in the provided document**
+2. **NEVER add information from general legal knowledge or assumptions**
+3. **If information is not in the document, state: "Not specified in the document"**
+4. **Copy the exact words from the document when making claims - use "..." for direct quotes**
+5. **Each statement must be traceable to specific text in the document**
 
-SOURCES SEARCHED: {', '.join(sources_searched)}
-RETRIEVAL METHOD: {retrieval_method}
-{f"DOCUMENT FILTER: Specific document {document_id}" if document_id else "DOCUMENT SCOPE: All available documents"}
+ANALYSIS FRAMEWORK:
 
-HALLUCINATION CHECK - Before responding, verify:
-1. Is each claim supported by the retrieved documents?
-2. Am I adding information not present in the sources?
-3. If any fact or phrase cannot be traced to a source document, it must not appear in the response.
+## DOCUMENT SUMMARY
+- Document type (contract, agreement, memo, etc.)
+- Primary purpose and scope
+- Parties involved (full legal names as stated)
+- Effective date and term duration
+- Governing law and jurisdiction
+**Required: Copy the exact words from the document that identify each element**
 
-# INSTRUCTIONS FOR THOROUGH ANALYSIS (Modified)
-1. **READ CAREFULLY**: Scan the entire context for information that answers the user's question
-2. **EXTRACT COMPLETELY**: When extracting requirements, include FULL details (e.g., "60 minutes" not just "minimum of"). 
-3. **QUOTE VERBATIM**: For statutory standards, use exact quotes: `\"[Exact Text]\" (Source)` 
-4. **ENUMERATE EXPLICITLY**: Present listed requirements as numbered points with full quotes 
-5. **CITE SOURCES**: Reference the document name for each fact 
-6. **BE COMPLETE**: Explicitly note missing standards: "Documents lack full subsection [X]" 
-7. **USE DECISIVE PHRASING**: State facts directly ("The statute requires...") - NEVER "documents indicate" 
+## KEY CLAUSES ANALYSIS
+Identify and copy the exact text of the following clauses if present:
+- Termination provisions (notice period, conditions, penalties)
+- Indemnification (who indemnifies whom, scope, exceptions)
+- Limitation of liability (caps, exclusions, carve-outs)
+- Confidentiality (duration, scope, exceptions)
+- Payment terms (amounts, schedules, late fees)
+- Intellectual property (ownership, licenses, restrictions)
+- Dispute resolution (arbitration, mediation, court selection)
+**For each clause: copy the exact words in quotes and provide section reference**
 
-LEGAL ANALYSIS MODES:
-1. **BASIC LEGAL RESEARCH** - For factual questions about legislation/statutes/regulations
-   - Extract statutory/regulatory information, sponsors, dates, provisions
-   
-2. **COMPREHENSIVE LEGAL ANALYSIS** - For thorough analysis requiring multiple sources
-   - Analyze legal implications, compliance obligations, practical impacts
-   - Note ambiguities requiring clarification
-   
-3. **CASE LAW ANALYSIS** - When precedent needed but unavailable, state:
-   "This analysis would benefit from relevant case law not available in the current documents."
+## RISK ASSESSMENT
+Analyze only risks explicitly present in the document:
+- **HIGH RISK**: Unlimited liability, one-sided indemnification, no termination rights
+- **MEDIUM RISK**: Broad confidentiality, strict deadlines, significant penalties
+- **LOW RISK**: Standard commercial terms, mutual obligations, clear exit rights
+**Required: Copy the exact words from the document that create each risk**
+
+## TIMELINE & DEADLINES
+Extract all time-related provisions in chronological order:
+- Contract commencement date
+- Milestone deadlines
+- Notice periods (termination, breach, cure)
+- Renewal/expiration dates
+- Performance deadlines
+**Format: [Date/Deadline] - [Obligation] - "Copy exact words here" (Section X.X)**
+
+## PARTY OBLIGATIONS
+List all obligations by party as stated in the document:
+
+**[Party A Name]**:
+- Obligation 1: "Copy exact words from document" (Section reference)
+- Obligation 2: "Copy exact words from document" (Section reference)
+
+**[Party B Name]**:
+- Obligation 1: "Copy exact words from document" (Section reference)
+- Obligation 2: "Copy exact words from document" (Section reference)
+
+## MISSING CLAUSES ANALYSIS
+Identify standard legal provisions that are NOT present:
+- Force majeure
+- Severability
+- Entire agreement
+- Amendment procedures
+- Assignment restrictions
+- Warranty disclaimers
+- Insurance requirements
+**Only list if you've confirmed they're actually missing after checking the entire document**
+
+## CRITICAL AMBIGUITIES
+Identify any vague or undefined terms that could cause disputes:
+- Undefined technical terms
+- Ambiguous deadlines ("promptly", "reasonable time")
+- Unclear scope definitions
+- Missing calculation methods
+**Copy the ambiguous language exactly as it appears in the document**
+
+HALLUCINATION PREVENTION CHECKLIST:
+Before making any claim, verify:
+✓ Is this explicitly written in the document?
+✓ Can I copy the exact words supporting this?
+✓ Am I adding any external legal knowledge?
+✓ Have I checked the entire document for this information?
+
+DOCUMENT TEXT TO ANALYZE:
+{context_text}
+
+IMPORTANT REMINDERS:
+- If you cannot find specific information, state: "Not specified in the provided document"
+- Do not suggest what "should" be in the document based on legal standards
+- Do not interpret or infer beyond what is explicitly written
+- Every factual claim must include the exact words from the document
+- If the document seems incomplete, note what sections are present vs missing
+- When quoting: Copy the text exactly as it appears, word-for-word, inside quotation marks
+
 
 HANDLING CONFLICTS:
 - If documents contain conflicting information, present both views with citations
@@ -183,6 +243,8 @@ HANDLING CONFLICTS:
 
 WHEN INFORMATION IS MISSING:
 "Based on the provided documents, I cannot provide a complete answer. To provide thorough analysis, I would need documents containing: [specific missing elements]"
+
+BEGIN ANALYSIS:"""
 
 RESPONSE STYLE: {instruction}
 
