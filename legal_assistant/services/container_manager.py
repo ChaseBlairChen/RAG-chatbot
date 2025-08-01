@@ -19,47 +19,6 @@ from ..utils.text_processing import remove_duplicate_documents
 
 logger = logging.getLogger(__name__)
 
-def hybrid_search_user_container(self, user_id: str, query: str, k: int = 10, document_id: str = None) -> List[Tuple]:
-        """Perform hybrid search combining keyword and semantic search"""
-        try:
-            user_db = self.get_user_database_safe(user_id)
-            if not user_db:
-                logger.warning(f"No database available for user {user_id}")
-                return []
-            
-            # Import hybrid searcher
-            from .hybrid_search import get_hybrid_searcher
-            searcher = get_hybrid_searcher()
-            
-            # Prepare filter
-            filter_dict = None
-            if document_id:
-                filter_dict = {"file_id": document_id}
-            
-            # Perform hybrid search
-            results = searcher.hybrid_search(
-                query=query,
-                vector_store=user_db,
-                k=k,
-                keyword_weight=0.3,
-                semantic_weight=0.7,
-                rerank=True,
-                filter_dict=filter_dict
-            )
-            
-            logger.info(f"Hybrid search returned {len(results)} results for query: '{query}'")
-            
-            # Log top results for debugging
-            for i, (doc, score) in enumerate(results[:3]):
-                logger.debug(f"Result {i+1}: Score={score:.3f}, Content preview: {doc.page_content[:100]}...")
-            
-            return results
-            
-        except Exception as e:
-            logger.error(f"Hybrid search failed, falling back to semantic search: {e}")
-            # Fall back to enhanced semantic search
-            return self.enhanced_search_user_container(user_id, query, "", k, document_id)
-
 class UserContainerManager:
     """Manages user-specific document containers with powerful embeddings"""
     
@@ -195,221 +154,6 @@ class UserContainerManager:
                 return None
     
     def add_document_to_container(self, user_id: str, document_text: str, metadata: Dict, file_id: str = None) -> bool:
-        """Add document to user's container"""
-        try:
-            user_db = self.get_user_database_safe(user_id)
-            if not user_db:
-                container_id = self.create_user_container(user_id)
-                user_db = self.get_user_database_safe(user_id)
-            
-            # Smart document type detection - lowered threshold
-            bill_count = len(re.findall(r'\b(?:HB|SB|SHB|SSB|ESHB|ESSB)\s+\d+', document_text))
-            is_legislative = bill_count > 1  # Lowered from 2 to 1 - even 1-2 bills = legislative
-            
-            if is_legislative:
-                # Legislative document: Bill-aware chunking
-                logger.info(f"Detected legislative document with {bill_count} bills - using bill-aware chunking")
-                text_splitter = RecursiveCharacterTextSplitter(
-                    chunk_size=2000,
-                    chunk_overlap=500,
-                    length_function=len,
-                    separators=["\n\n", "\nHB ", "\nSB ", "\nSHB ", "\nSSB ", "\nESHB ", "\nESSB ", "\n", " "]
-                )
-                chunking_method = 'bill_aware_chunking'
-            else:
-                # Regular document: Standard semantic chunking
-                logger.info(f"Detected regular document ({bill_count} bills found) - using standard chunking")
-                text_splitter = RecursiveCharacterTextSplitter(
-                    chunk_size=1500,
-                    chunk_overlap=300,
-                    length_function=len,
-                    separators=["\n\n", "\n", ". ", " ", ""]  # Natural breakpoints
-                )
-                chunking_method = 'semantic_chunking'
-            
-            chunks = text_splitter.split_text(document_text)
-            logger.info(f"Created {len(chunks)} chunks using {chunking_method}")
-            
-            # Adjust batch size based on chunk size
-            batch_size = 25 if is_legislative else 50
-            total_batches = (len(chunks) + batch_size - 1) // batch_size
-            
-            for batch_num in range(total_batches):
-                start_idx = batch_num * batch_size
-                end_idx = min(start_idx + batch_size, len(chunks))
-                batch_chunks = chunks[start_idx:end_idx]
-                
-                logger.info(f"Processing batch {batch_num + 1}/{total_batches} ({len(batch_chunks)} chunks)")
-                
-                documents = []
-                for i, chunk in enumerate(batch_chunks):
-                    doc_metadata = metadata.copy()
-                    doc_metadata['chunk_index'] = start_idx + i
-                    doc_metadata['total_chunks'] = len(chunks)
-                    doc_metadata['user_id'] = user_id
-                    doc_metadata['upload_timestamp'] = datetime.utcnow().isoformat()
-                    doc_metadata['chunk_size'] = len(chunk)
-                    doc_metadata['chunking_method'] = chunking_method
-                    doc_metadata['document_type'] = 'legislative' if is_legislative else 'general'
-                    
-                    # Extract bill numbers for legislative docs only
-                    if is_legislative:
-                        bill_numbers = re.findall(r'\b(?:HB|SB|SHB|SSB|ESHB|ESSB)\s+\d+', chunk)
-                        if bill_numbers:
-                            doc_metadata['contains_bills'] = ', '.join(bill_numbers)
-                            logger.info(f"Chunk {start_idx + i} contains bills: {bill_numbers}")
-                    
-                    if file_id:
-                        doc_metadata['file_id'] = file_id
-                    
-                    # Clean metadata for ChromaDB
-                    clean_metadata = {}
-                    for key, value in doc_metadata.items():
-                        if isinstance(value, (str, int, float, bool)):
-                            clean_metadata[key] = value
-                        elif isinstance(value, list):
-                            clean_metadata[key] = str(value)
-                        elif value is None:
-                            clean_metadata[key] = ""
-                        else:
-                            clean_metadata[key] = str(value)
-                    
-                    documents.append(Document(
-                        page_content=chunk,
-                        metadata=clean_metadata
-                    ))
-                
-                # Add batch to ChromaDB
-                try:
-                    user_db.add_documents(documents)
-                    logger.info(f"✅ Added batch {batch_num + 1} ({len(documents)} chunks)")
-                except Exception as batch_error:
-                    logger.error(f"❌ Batch {batch_num + 1} failed: {batch_error}")
-                    return False
-            
-            logger.info(f"✅ Successfully added ALL {len(chunks)} chunks for document {file_id or 'unknown'}")
-            return True
-            
-        except Exception as e:
-            logger.error(f"❌ Error in add_document_to_container: {e}")
-            logger.error(f"Error type: {type(e).__name__}")
-            logger.error(f"Full traceback: {traceback.format_exc()}")
-            return False
-    
-    def search_user_container(self, user_id: str, query: str, k: int = 5, document_id: str = None) -> List[Tuple]:
-        """Search with timeout protection"""
-        return self.search_user_container_safe(user_id, query, k, document_id)
-    
-    def search_user_container_safe(self, user_id: str, query: str, k: int = 5, document_id: str = None) -> List[Tuple]:
-        """Search with enhanced error handling and timeout protection"""
-        try:
-            user_db = self.get_user_database_safe(user_id)
-            if not user_db:
-                logger.warning(f"No database available for user {user_id}")
-                return []
-            
-            filter_dict = None
-            if document_id:
-                filter_dict = {"file_id": document_id}
-            
-            try:
-                results = user_db.similarity_search_with_score(query, k=k, filter=filter_dict)
-                return results
-            except Exception as search_error:
-                logger.warning(f"Search failed for user {user_id}: {search_error}")
-                return []
-                
-        except Exception as e:
-            logger.error(f"Error in safe container search for user {user_id}: {e}")
-            return []
-    
-    def enhanced_search_user_container(self, user_id: str, query: str, conversation_context: str, k: int = 12, document_id: str = None) -> List[Tuple]:
-        """Enhanced search with timeout protection and bill-specific optimization"""
-        try:
-            user_db = self.get_user_database_safe(user_id)
-            if not user_db:
-                return []
-            
-            filter_dict = None
-            if document_id:
-                filter_dict = {"file_id": document_id}
-            
-            try:
-                # Check if this is a bill-specific query
-                bill_match = re.search(r"\b(HB|SB|SSB|ESSB|SHB|ESHB)\s+(\d+)\b", query, re.IGNORECASE)
-                
-                if bill_match:
-                    bill_number = f"{bill_match.group(1)} {bill_match.group(2)}"
-                    logger.info(f"Bill-specific search for: {bill_number}")
-                    
-                    # First, try to find chunks that contain this specific bill
-                    try:
-                        all_docs = user_db.get()
-                        bill_specific_chunks = []
-                        
-                        for i, (doc_id, metadata, content) in enumerate(zip(all_docs['ids'], all_docs['metadatas'], all_docs['documents'])):
-                            if metadata and 'contains_bills' in metadata:
-                                if bill_number in metadata['contains_bills']:
-                                    # Create a document object for this chunk
-                                    doc_obj = Document(page_content=content, metadata=metadata)
-                                    # Use a high relevance score since we found exact bill match
-                                    bill_specific_chunks.append((doc_obj, 0.95))  # High relevance for exact matches
-                                    logger.info(f"Found {bill_number} in chunk {metadata.get('chunk_index')} with boosted score")
-                        
-                        if bill_specific_chunks:
-                            logger.info(f"Using {len(bill_specific_chunks)} bill-specific chunks with high relevance")
-                            # Get additional context chunks with lower threshold
-                            regular_results = user_db.similarity_search_with_score(query, k=k, filter=filter_dict)
-                            
-                            # Combine bill-specific (high score) with regular results
-                            all_results = bill_specific_chunks + regular_results
-                            return remove_duplicate_documents(all_results)[:k]
-                    except Exception as bill_search_error:
-                        logger.warning(f"Bill-specific search failed, falling back to regular search: {bill_search_error}")
-                        # Fall through to regular search
-                
-                # Fallback to regular search
-                direct_results = user_db.similarity_search_with_score(query, k=k, filter=filter_dict)
-                expanded_query = f"{query} {conversation_context}"
-                expanded_results = user_db.similarity_search_with_score(expanded_query, k=k, filter=filter_dict)
-                
-                sub_query_results = []
-                nlp = get_nlp()
-                if nlp:
-                    doc = nlp(query)
-                    for ent in doc.ents:
-                        if ent.label_ in ["ORG", "PERSON", "LAW", "DATE"]:
-                            sub_results = user_db.similarity_search_with_score(f"What is {ent.text}?", k=3, filter=filter_dict)
-                            sub_query_results.extend(sub_results)
-                
-                all_results = direct_results + expanded_results + sub_query_results
-                return remove_duplicate_documents(all_results)[:k]
-                
-            except Exception as search_error:
-                logger.warning(f"Enhanced search failed for user {user_id}: {search_error}")
-                return []
-            
-        except Exception as e:
-            logger.error(f"Error in enhanced user container search: {e}")
-            return []
-
-# Global instance
-_container_manager = None
-
-def initialize_container_manager():
-    """Initialize the global container manager"""
-    global _container_manager
-    _container_manager = UserContainerManager(USER_CONTAINERS_PATH)
-    return _container_manager
-
-def get_container_manager() -> UserContainerManager:
-    """Get the global container manager instance"""
-    if _container_manager is None:
-        return initialize_container_manager()
-    return _container_manager
-
-
-def add_document_to_container(self, user_id: str, document_text: str, metadata: Dict, file_id: str = None) -> bool:
         """Add document to user's container with intelligent chunking"""
         try:
             user_db = self.get_user_database_safe(user_id)
@@ -480,9 +224,8 @@ def add_document_to_container(self, user_id: str, document_text: str, metadata: 
             logger.error(f"Error type: {type(e).__name__}")
             logger.error(f"Full traceback: {traceback.format_exc()}")
             return False
-
-
-def intelligent_chunking(self, text: str, metadata: Dict, doc_type: str = "general") -> List[Dict]:
+    
+    def intelligent_chunking(self, text: str, metadata: Dict, doc_type: str = "general") -> List[Dict]:
         """Intelligent chunking based on document structure with metadata preservation"""
         
         # Detect document type if not specified
@@ -772,4 +515,156 @@ def intelligent_chunking(self, text: str, metadata: Dict, doc_type: str = "gener
                 chunk['metadata']['next_context'] = next_text[:200] if len(next_text) > 200 else next_text
         
         return chunks
+    
+    def hybrid_search_user_container(self, user_id: str, query: str, k: int = 10, document_id: str = None) -> List[Tuple]:
+        """Perform hybrid search combining keyword and semantic search"""
+        try:
+            user_db = self.get_user_database_safe(user_id)
+            if not user_db:
+                logger.warning(f"No database available for user {user_id}")
+                return []
+            
+            # Import hybrid searcher
+            from .hybrid_search import get_hybrid_searcher
+            searcher = get_hybrid_searcher()
+            
+            # Prepare filter
+            filter_dict = None
+            if document_id:
+                filter_dict = {"file_id": document_id}
+            
+            # Perform hybrid search
+            results = searcher.hybrid_search(
+                query=query,
+                vector_store=user_db,
+                k=k,
+                keyword_weight=0.3,
+                semantic_weight=0.7,
+                rerank=True,
+                filter_dict=filter_dict
+            )
+            
+            logger.info(f"Hybrid search returned {len(results)} results for query: '{query}'")
+            
+            # Log top results for debugging
+            for i, (doc, score) in enumerate(results[:3]):
+                logger.debug(f"Result {i+1}: Score={score:.3f}, Content preview: {doc.page_content[:100]}...")
+            
+            return results
+            
+        except Exception as e:
+            logger.error(f"Hybrid search failed, falling back to semantic search: {e}")
+            # Fall back to enhanced semantic search
+            return self.enhanced_search_user_container(user_id, query, "", k, document_id)
+    
+    def search_user_container(self, user_id: str, query: str, k: int = 5, document_id: str = None) -> List[Tuple]:
+        """Search with timeout protection"""
+        return self.search_user_container_safe(user_id, query, k, document_id)
+    
+    def search_user_container_safe(self, user_id: str, query: str, k: int = 5, document_id: str = None) -> List[Tuple]:
+        """Search with enhanced error handling and timeout protection"""
+        try:
+            user_db = self.get_user_database_safe(user_id)
+            if not user_db:
+                logger.warning(f"No database available for user {user_id}")
+                return []
+            
+            filter_dict = None
+            if document_id:
+                filter_dict = {"file_id": document_id}
+            
+            try:
+                results = user_db.similarity_search_with_score(query, k=k, filter=filter_dict)
+                return results
+            except Exception as search_error:
+                logger.warning(f"Search failed for user {user_id}: {search_error}")
+                return []
+                
+        except Exception as e:
+            logger.error(f"Error in safe container search for user {user_id}: {e}")
+            return []
+    
+    def enhanced_search_user_container(self, user_id: str, query: str, conversation_context: str, k: int = 12, document_id: str = None) -> List[Tuple]:
+        """Enhanced search with timeout protection and bill-specific optimization"""
+        try:
+            user_db = self.get_user_database_safe(user_id)
+            if not user_db:
+                return []
+            
+            filter_dict = None
+            if document_id:
+                filter_dict = {"file_id": document_id}
+            
+            try:
+                # Check if this is a bill-specific query
+                bill_match = re.search(r"\b(HB|SB|SSB|ESSB|SHB|ESHB)\s+(\d+)\b", query, re.IGNORECASE)
+                
+                if bill_match:
+                    bill_number = f"{bill_match.group(1)} {bill_match.group(2)}"
+                    logger.info(f"Bill-specific search for: {bill_number}")
+                    
+                    # First, try to find chunks that contain this specific bill
+                    try:
+                        all_docs = user_db.get()
+                        bill_specific_chunks = []
+                        
+                        for i, (doc_id, metadata, content) in enumerate(zip(all_docs['ids'], all_docs['metadatas'], all_docs['documents'])):
+                            if metadata and 'contains_bills' in metadata:
+                                if bill_number in metadata['contains_bills']:
+                                    # Create a document object for this chunk
+                                    doc_obj = Document(page_content=content, metadata=metadata)
+                                    # Use a high relevance score since we found exact bill match
+                                    bill_specific_chunks.append((doc_obj, 0.95))  # High relevance for exact matches
+                                    logger.info(f"Found {bill_number} in chunk {metadata.get('chunk_index')} with boosted score")
+                        
+                        if bill_specific_chunks:
+                            logger.info(f"Using {len(bill_specific_chunks)} bill-specific chunks with high relevance")
+                            # Get additional context chunks with lower threshold
+                            regular_results = user_db.similarity_search_with_score(query, k=k, filter=filter_dict)
+                            
+                            # Combine bill-specific (high score) with regular results
+                            all_results = bill_specific_chunks + regular_results
+                            return remove_duplicate_documents(all_results)[:k]
+                    except Exception as bill_search_error:
+                        logger.warning(f"Bill-specific search failed, falling back to regular search: {bill_search_error}")
+                        # Fall through to regular search
+                
+                # Fallback to regular search
+                direct_results = user_db.similarity_search_with_score(query, k=k, filter=filter_dict)
+                expanded_query = f"{query} {conversation_context}"
+                expanded_results = user_db.similarity_search_with_score(expanded_query, k=k, filter=filter_dict)
+                
+                sub_query_results = []
+                nlp = get_nlp()
+                if nlp:
+                    doc = nlp(query)
+                    for ent in doc.ents:
+                        if ent.label_ in ["ORG", "PERSON", "LAW", "DATE"]:
+                            sub_results = user_db.similarity_search_with_score(f"What is {ent.text}?", k=3, filter=filter_dict)
+                            sub_query_results.extend(sub_results)
+                
+                all_results = direct_results + expanded_results + sub_query_results
+                return remove_duplicate_documents(all_results)[:k]
+                
+            except Exception as search_error:
+                logger.warning(f"Enhanced search failed for user {user_id}: {search_error}")
+                return []
+            
+        except Exception as e:
+            logger.error(f"Error in enhanced user container search: {e}")
+            return []
 
+# Global instance
+_container_manager = None
+
+def initialize_container_manager():
+    """Initialize the global container manager"""
+    global _container_manager
+    _container_manager = UserContainerManager(USER_CONTAINERS_PATH)
+    return _container_manager
+
+def get_container_manager() -> UserContainerManager:
+    """Get the global container manager instance"""
+    if _container_manager is None:
+        return initialize_container_manager()
+    return _container_manager
