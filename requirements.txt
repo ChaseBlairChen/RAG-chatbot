@@ -8,8 +8,8 @@ langchain-community
 langchain-chroma==0.1.4
 langchain-huggingface==0.0.3
 
-# Vector database - downgraded to avoid onnxruntime conflict
-chromadb==0.4.15
+# Vector database
+chromadb==0.4.17
 
 # Embeddings and ML (CPU-only, minimal)
 sentence-transformers==2.6.1
@@ -48,13 +48,11 @@ Pillow==10.1.0
 # Hybrid search
 rank-bm25==0.2.2
 
-# Advanced document processing - simplified version without extras
-unstructured==0.10.25
+# NOTE: Unstructured removed due to onnxruntime version conflict
+# If you need unstructured, install it separately:
+# pip install unstructured==0.10.15 (older version that might work)
 
-# Explicitly control onnxruntime version to resolve conflicts
-onnxruntime>=1.14.1,<1.16.0
-
-# Post-install commands to run:
+# Post-install commands:
 # sudo apt-get install tesseract-ocr
 # python -m spacy download en_core_web_sm
 # python -c "import nltk; nltk.download('punkt'); nltk.download('stopwords')"
