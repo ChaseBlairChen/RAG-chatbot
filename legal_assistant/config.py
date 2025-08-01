@@ -47,24 +47,37 @@ AI_MODELS = [
     "openchat/openchat-7b:free"
 ]
 
-# Chunk Sizes
-DEFAULT_CHUNK_SIZE = 1500
-LEGISLATIVE_CHUNK_SIZE = 2000
-DEFAULT_CHUNK_OVERLAP = 300
-LEGISLATIVE_CHUNK_OVERLAP = 500
+# Chunk Sizes - OPTIMIZED
+DEFAULT_CHUNK_SIZE = 1000     # Reduced from 1500
+LEGISLATIVE_CHUNK_SIZE = 1500 # Reduced from 2000
+DEFAULT_CHUNK_OVERLAP = 200   # Reduced from 300
+LEGISLATIVE_CHUNK_OVERLAP = 300  # Reduced from 500
 
-# Search Settings
-DEFAULT_SEARCH_K = 10
-ENHANCED_SEARCH_K = 12
-COMPREHENSIVE_SEARCH_K = 20
-MIN_RELEVANCE_SCORE = 0.15
+# Search Settings - IMPROVED
+DEFAULT_SEARCH_K = 15  # Increased from 10
+ENHANCED_SEARCH_K = 20  # Increased from 12
+COMPREHENSIVE_SEARCH_K = 30  # Increased from 20
+MIN_RELEVANCE_SCORE = 0.3  # Increased from 0.15 - much stricter!
 
-# Confidence Score Weights
+# Confidence Score Weights - REBALANCED
 CONFIDENCE_WEIGHTS = {
-    "relevance": 0.4,
-    "document_count": 0.3,
+    "relevance": 0.5,     # Increased weight on relevance
+    "document_count": 0.2, # Decreased weight on count
     "consistency": 0.2,
     "completeness": 0.1
+}
+
+# Add new search configuration
+SEARCH_CONFIG = {
+    "rerank_enabled": True,
+    "hybrid_search_enabled": True,
+    "keyword_weight": 0.3,
+    "semantic_weight": 0.7,
+    "max_results_to_rerank": 50,
+    "query_expansion_enabled": True,
+    "min_score_threshold": 0.3,
+    "boost_exact_matches": True,
+    "boost_factor": 1.5
 }
 
 # Feature Flags
