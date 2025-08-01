@@ -40,6 +40,7 @@ python-multipart==0.0.6
 
 # NLP dependencies
 spacy==3.7.2
+nltk==3.8.1
 numpy==1.26.4
 
 # OCR support
@@ -47,9 +48,11 @@ pytesseract==0.3.10
 pdf2image==1.16.3
 Pillow==10.1.0
 
-
 # Hybrid search
 rank-bm25==0.2.2
 
 # Advanced document processing 
 unstructured[pdf]==0.10.30
+
+# Additional NLP data and models (install with post-install script)
+# Run after pip install: python -m spacy download en_core_web_sm
