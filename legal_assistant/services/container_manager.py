@@ -657,3 +657,75 @@ def intelligent_chunking(self, text: str, metadata: Dict, doc_type: str = "gener
                 chunk['metadata']['next_context'] = next_text[:200] if len(next_text) > 200 else next_text
         
         return chunks
+
+def add_document_to_container(self, user_id: str, document_text: str, metadata: Dict, file_id: str = None) -> bool:
+        """Add document to user's container with intelligent chunking"""
+        try:
+            user_db = self.get_user_database_safe(user_id)
+            if not user_db:
+                container_id = self.create_user_container(user_id)
+                user_db = self.get_user_database_safe(user_id)
+            
+            # Use intelligent chunking
+            chunks_with_metadata = self.intelligent_chunking(document_text, metadata)
+            
+            logger.info(f"Created {len(chunks_with_metadata)} chunks using intelligent chunking")
+            
+            # Process in batches
+            batch_size = 25
+            total_batches = (len(chunks_with_metadata) + batch_size - 1) // batch_size
+            
+            for batch_num in range(total_batches):
+                start_idx = batch_num * batch_size
+                end_idx = min(start_idx + batch_size, len(chunks_with_metadata))
+                batch_chunks = chunks_with_metadata[start_idx:end_idx]
+                
+                logger.info(f"Processing batch {batch_num + 1}/{total_batches} ({len(batch_chunks)} chunks)")
+                
+                documents = []
+                for chunk_data in batch_chunks:
+                    # Merge metadata
+                    doc_metadata = chunk_data['metadata']
+                    doc_metadata['user_id'] = user_id
+                    doc_metadata['upload_timestamp'] = datetime.utcnow().isoformat()
+                    doc_metadata['chunk_size'] = len(chunk_data['text'])
+                    
+                    if file_id:
+                        doc_metadata['file_id'] = file_id
+                    
+                    # Generate chunk hash for deduplication
+                    doc_metadata['content_hash'] = hashlib.md5(chunk_data['text'].encode()).hexdigest()[:16]
+                    
+                    # Clean metadata for ChromaDB
+                    clean_metadata = {}
+                    for key, value in doc_metadata.items():
+                        if isinstance(value, (str, int, float, bool)):
+                            clean_metadata[key] = value
+                        elif isinstance(value, list):
+                            clean_metadata[key] = str(value)
+                        elif value is None:
+                            clean_metadata[key] = ""
+                        else:
+                            clean_metadata[key] = str(value)
+                    
+                    documents.append(Document(
+                        page_content=chunk_data['text'],
+                        metadata=clean_metadata
+                    ))
+                
+                # Add batch to ChromaDB
+                try:
+                    user_db.add_documents(documents)
+                    logger.info(f"✅ Added batch {batch_num + 1} ({len(documents)} chunks)")
+                except Exception as batch_error:
+                    logger.error(f"❌ Batch {batch_num + 1} failed: {batch_error}")
+                    return False
+            
+            logger.info(f"✅ Successfully added ALL {len(chunks_with_metadata)} chunks for document {file_id or 'unknown'}")
+            return True
+            
+        except Exception as e:
+            logger.error(f"❌ Error in add_document_to_container: {e}")
+            logger.error(f"Error type: {type(e).__name__}")
+            logger.error(f"Full traceback: {traceback.format_exc()}")
+            return False
