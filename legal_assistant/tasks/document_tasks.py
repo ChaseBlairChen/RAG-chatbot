@@ -1,0 +1,110 @@
+"""Background tasks for document processing"""
+import logging
+import time
+from datetime import datetime
+from typing import Dict, Any
+
+from ..services.document_processor import SafeDocumentProcessor
+from ..services.container_manager import get_container_manager
+from ..storage.managers import uploaded_files, document_processing_status
+
+logger = logging.getLogger(__name__)
+
+async def process_document_background(
+    file_id: str,
+    file_content: bytes,
+    file_ext: str,
+    filename: str,
+    user_id: str
+):
+    """Process document in background with progress updates"""
+    try:
+        # Update status
+        document_processing_status[file_id] = {
+            'status': 'extracting',
+            'progress': 10,
+            'message': 'Extracting text from document...',
+            'started_at': datetime.utcnow().isoformat()
+        }
+        
+        # Process document
+        start_time = time.time()
+        content, pages_processed, warnings = SafeDocumentProcessor.process_document_from_bytes(
+            file_content, filename, file_ext
+        )
+        
+        if not content or len(content.strip()) < 50:
+            raise ValueError("Document appears to be empty or could not be processed")
+        
+        # Update progress
+        document_processing_status[file_id] = {
+            'status': 'chunking',
+            'progress': 40,
+            'message': f'Creating searchable chunks from {pages_processed} pages...',
+            'pages': pages_processed
+        }
+        
+        # Prepare metadata
+        metadata = {
+            'source': filename,
+            'file_id': file_id,
+            'upload_date': datetime.utcnow().isoformat(),
+            'user_id': user_id,
+            'file_type': file_ext,
+            'pages': pages_processed,
+            'file_size': len(file_content),
+            'content_length': len(content),
+            'processing_warnings': warnings
+        }
+        
+        # Add to container with progress tracking
+        container_manager = get_container_manager()
+        
+        # Use async-friendly chunking
+        chunks_created = await container_manager.add_document_to_container_async(
+            user_id,
+            content,
+            metadata,
+            file_id,
+            progress_callback=lambda p: update_progress(file_id, p)
+        )
+        
+        processing_time = time.time() - start_time
+        
+        # Update final status
+        uploaded_files[file_id].update({
+            'status': 'completed',
+            'pages_processed': pages_processed,
+            'chunks_created': chunks_created,
+            'processing_time': processing_time,
+            'content_length': len(content)
+        })
+        
+        document_processing_status[file_id] = {
+            'status': 'completed',
+            'progress': 100,
+            'message': f'Successfully processed {pages_processed} pages into {chunks_created} searchable chunks',
+            'completed_at': datetime.utcnow().isoformat(),
+            'processing_time': processing_time
+        }
+        
+        logger.info(f"Document {file_id} processed successfully: {pages_processed} pages, {chunks_created} chunks in {processing_time:.2f}s")
+        
+    except Exception as e:
+        logger.error(f"Error processing document {file_id}: {e}", exc_info=True)
+        
+        # Update error status
+        uploaded_files[file_id]['status'] = 'failed'
+        document_processing_status[file_id] = {
+            'status': 'failed',
+            'progress': 0,
+            'message': f'Processing failed: {str(e)}',
+            'error': str(e),
+            'failed_at': datetime.utcnow().isoformat()
+        }
+
+def update_progress(file_id: str, progress: int):
+    """Update processing progress"""
+    if file_id in document_processing_status:
+        current_status = document_processing_status[file_id]
+        current_status['progress'] = min(40 + int(progress * 0.5), 90)  # 40-90% for chunking
