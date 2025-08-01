@@ -25,9 +25,19 @@ def call_openrouter_api(prompt: str, api_key: str = None, api_base: str = None) 
     
     for model in AI_MODELS:
         try:
+            # Create a fresh payload for each call - no state contamination
             payload = {
                 "model": model,
-                "messages": [{"role": "user", "content": prompt}],
+                "messages": [
+                    {
+                        "role": "system", 
+                        "content": "You are a legal assistant. Respond only to the current query."
+                    },
+                    {
+                        "role": "user", 
+                        "content": prompt
+                    }
+                ],
                 "temperature": 0.5,
                 "max_tokens": 2000
             }
@@ -44,4 +54,4 @@ def call_openrouter_api(prompt: str, api_key: str = None, api_base: str = None) 
             logger.error(f"Error with model {model}: {e}")
             continue
     
-    return "I apologize, but I'm experiencing technical difficulties. Please try again."
+    return "I'm experiencing technical difficulties. Please try again later."
