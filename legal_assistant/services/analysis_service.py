@@ -141,8 +141,8 @@ class ComprehensiveAnalysisProcessor:
             return [], [], "error"
     
     def _create_comprehensive_prompt(self, context_text: str) -> str:
-    """Create a comprehensive analysis prompt with strict anti-hallucination measures"""
-    return f"""You are a legal document analyst providing structured analysis of legal documents.
+        """Create a comprehensive analysis prompt with strict anti-hallucination measures"""
+        return f"""You are a legal document analyst providing structured analysis of legal documents.
 
 CRITICAL INSTRUCTIONS - PREVENT HALLUCINATION:
 1. **ONLY analyze what is EXPLICITLY written in the provided document**
@@ -236,42 +236,7 @@ IMPORTANT REMINDERS:
 - If the document seems incomplete, note what sections are present vs missing
 - When quoting: Copy the text exactly as it appears, word-for-word, inside quotation marks
 
-
-HANDLING CONFLICTS:
-- If documents contain conflicting information, present both views with citations
-- Note the conflict explicitly: "Document A states X, while Document B states Y"
-
-WHEN INFORMATION IS MISSING:
-"Based on the provided documents, I cannot provide a complete answer. To provide thorough analysis, I would need documents containing: [specific missing elements]"
-
 BEGIN ANALYSIS:"""
-
-RESPONSE STYLE: {instruction}
-
-CONVERSATION HISTORY:
-{conversation_context}
-
-DOCUMENT CONTEXT (ANALYZE THOROUGHLY):
-{context_text}
-
-USER QUESTION:
-{questions}
-
-RESPONSE APPROACH:
-- **FIRST**: Identify what specific information the user is asking for. Do not reference any statute, case law, or principle unless it appears verbatim in the context.
-- **SECOND**: Search the context thoroughly for that information  
-- **THIRD**: Present any information found clearly and completely. At the end of your response, list all facts provided and their source documents for verification.
-- **FOURTH**: Note what information is not available (if any)
-- **ALWAYS**: Cite the source document for each fact provided
-
-ADDITIONAL GUIDANCE:
-- After fully answering based solely on the provided documents, if relevant key legal principles under Washington state law, any other U.S. state law, or U.S. federal law are not found in the sources, you may add a clearly labeled general legal principles disclaimer.
-- This disclaimer must clearly state it is NOT based on the provided documents but represents general background knowledge of applicable Washington state, other state, and federal law.
-- Do NOT use this disclaimer to answer the user’s question directly; it serves only as supplementary context.
-- This disclaimer must explicitly state that these principles are not found in the provided documents but are usually relevant legal background.
-- Format this disclaimer distinctly at the end of the response under a heading such as "GENERAL LEGAL PRINCIPLES DISCLAIMER."
-
-RESPONSE:"""
     
     def _parse_comprehensive_response(self, response_text: str) -> Dict[str, str]:
         sections = {}
