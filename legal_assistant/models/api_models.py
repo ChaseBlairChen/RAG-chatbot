@@ -70,6 +70,7 @@ class DocumentUploadResponse(BaseModel):
     session_id: str
     user_id: str
     container_id: str
+    status: str = "completed"  # NEW: Add status field
 
 class ConversationHistory(BaseModel):
     session_id: str
