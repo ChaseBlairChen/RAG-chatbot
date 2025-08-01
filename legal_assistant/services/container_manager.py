@@ -366,3 +366,294 @@ def get_container_manager() -> UserContainerManager:
     if _container_manager is None:
         return initialize_container_manager()
     return _container_manager
+
+def intelligent_chunking(self, text: str, metadata: Dict, doc_type: str = "general") -> List[Dict]:
+        """Intelligent chunking based on document structure with metadata preservation"""
+        
+        # Detect document type if not specified
+        if doc_type == "general":
+            doc_type = self._detect_document_type(text)
+        
+        logger.info(f"Using {doc_type} chunking strategy")
+        
+        if doc_type == "legal":
+            return self._chunk_legal_document(text, metadata)
+        elif doc_type == "legislative":
+            return self._chunk_legislative_document(text, metadata)
+        else:
+            return self._chunk_general_document(text, metadata)
+    
+    def _detect_document_type(self, text: str) -> str:
+        """Detect document type based on content patterns"""
+        
+        # Legislative patterns
+        bill_count = len(re.findall(r'\b(?:HB|SB|SHB|SSB|ESHB|ESSB)\s+\d+', text))
+        if bill_count > 1:
+            return "legislative"
+        
+        # Legal document patterns
+        legal_patterns = [
+            r'\b(?:WHEREAS|NOW THEREFORE|AGREEMENT|CONTRACT|PARTY|PARTIES)\b',
+            r'\b(?:Section|Article|Clause)\s+\d+',
+            r'\b(?:shall|hereby|herein|thereof|whereof)\b'
+        ]
+        
+        legal_score = sum(len(re.findall(pattern, text, re.IGNORECASE)) for pattern in legal_patterns)
+        if legal_score > 10:
+            return "legal"
+        
+        return "general"
+    
+    def _chunk_legal_document(self, text: str, base_metadata: Dict) -> List[Dict]:
+        """Chunk legal documents preserving structure"""
+        chunks = []
+        
+        # Legal section patterns
+        section_patterns = [
+            (r'\n\s*(?:ARTICLE|Article)\s+([IVX\d]+)[^\n]*', 'article'),
+            (r'\n\s*(?:SECTION|Section)\s+(\d+(?:\.\d+)?)[^\n]*', 'section'),
+            (r'\n\s*(\d+)\.\s+[A-Z][^\n]*', 'numbered_section'),
+            (r'\n\s*\(([a-z])\)\s*', 'subsection'),
+        ]
+        
+        # Find all section boundaries
+        boundaries = []
+        for pattern, section_type in section_patterns:
+            for match in re.finditer(pattern, text):
+                boundaries.append({
+                    'pos': match.start(),
+                    'type': section_type,
+                    'label': match.group(1),
+                    'full_match': match.group(0)
+                })
+        
+        # Sort boundaries by position
+        boundaries.sort(key=lambda x: x['pos'])
+        
+        # Create chunks based on boundaries
+        current_pos = 0
+        current_section_hierarchy = []
+        
+        for i, boundary in enumerate(boundaries):
+            # Extract text before this boundary
+            chunk_text = text[current_pos:boundary['pos']].strip()
+            
+            if chunk_text and len(chunk_text) > 50:  # Minimum chunk size
+                chunk_metadata = base_metadata.copy()
+                chunk_metadata.update({
+                    'chunk_type': 'legal_section',
+                    'section_hierarchy': '/'.join(current_section_hierarchy),
+                    'section_type': boundaries[i-1]['type'] if i > 0 else 'preamble',
+                    'section_label': boundaries[i-1]['label'] if i > 0 else 'start',
+                })
+                
+                # Split if too large
+                if len(chunk_text) > 2000:
+                    sub_chunks = self._split_large_section(chunk_text, chunk_metadata)
+                    chunks.extend(sub_chunks)
+                else:
+                    chunks.append({
+                        'text': chunk_text,
+                        'metadata': chunk_metadata
+                    })
+            
+            # Update hierarchy
+            if boundary['type'] in ['article', 'section']:
+                current_section_hierarchy = [f"{boundary['type']}_{boundary['label']}"]
+            elif boundary['type'] == 'subsection':
+                if current_section_hierarchy:
+                    current_section_hierarchy.append(f"subsection_{boundary['label']}")
+            
+            current_pos = boundary['pos']
+        
+        # Don't forget the last chunk
+        if current_pos < len(text):
+            chunk_text = text[current_pos:].strip()
+            if chunk_text:
+                chunk_metadata = base_metadata.copy()
+                chunk_metadata.update({
+                    'chunk_type': 'legal_section',
+                    'section_hierarchy': '/'.join(current_section_hierarchy),
+                    'section_type': 'final',
+                })
+                chunks.append({
+                    'text': chunk_text,
+                    'metadata': chunk_metadata
+                })
+        
+        return self._add_chunk_relationships(chunks)
+    
+    def _chunk_legislative_document(self, text: str, base_metadata: Dict) -> List[Dict]:
+        """Chunk legislative documents preserving bill structure"""
+        chunks = []
+        
+        # Find all bills
+        bill_pattern = r'\b((?:HB|SB|SHB|SSB|ESHB|ESSB)\s+\d+)[^\n]*\n'
+        bill_matches = list(re.finditer(bill_pattern, text))
+        
+        if not bill_matches:
+            # No clear bill structure, fall back to general chunking
+            return self._chunk_general_document(text, base_metadata)
+        
+        # Chunk by bills
+        for i, match in enumerate(bill_matches):
+            start_pos = match.start()
+            end_pos = bill_matches[i + 1].start() if i + 1 < len(bill_matches) else len(text)
+            
+            bill_text = text[start_pos:end_pos].strip()
+            bill_number = match.group(1)
+            
+            # Extract bill metadata
+            bill_metadata = base_metadata.copy()
+            bill_metadata.update({
+                'chunk_type': 'legislative_bill',
+                'bill_number': bill_number,
+                'contains_bills': bill_number,
+            })
+            
+            # Extract additional bill info
+            sponsor_match = re.search(r'Sponsors?\s*:\s*([^\n]+)', bill_text)
+            if sponsor_match:
+                bill_metadata['bill_sponsors'] = sponsor_match.group(1).strip()
+            
+            status_match = re.search(r'Final Status\s*:\s*([^\n]+)', bill_text)
+            if status_match:
+                bill_metadata['bill_status'] = status_match.group(1).strip()
+            
+            # Split if too large
+            if len(bill_text) > 2000:
+                sub_chunks = self._split_large_section(bill_text, bill_metadata)
+                chunks.extend(sub_chunks)
+            else:
+                chunks.append({
+                    'text': bill_text,
+                    'metadata': bill_metadata
+                })
+        
+        return self._add_chunk_relationships(chunks)
+    
+    def _chunk_general_document(self, text: str, base_metadata: Dict) -> List[Dict]:
+        """Chunk general documents with sliding window and sentence boundaries"""
+        chunks = []
+        
+        # First try paragraph-based chunking
+        paragraphs = text.split('\n\n')
+        
+        if len(paragraphs) > 1:
+            current_chunk = []
+            current_size = 0
+            
+            for para in paragraphs:
+                para_size = len(para)
+                
+                if current_size + para_size > 1000 and current_chunk:
+                    # Save current chunk
+                    chunk_text = '\n\n'.join(current_chunk)
+                    chunk_metadata = base_metadata.copy()
+                    chunk_metadata['chunk_type'] = 'paragraph_based'
+                    
+                    chunks.append({
+                        'text': chunk_text,
+                        'metadata': chunk_metadata
+                    })
+                    
+                    # Start new chunk with overlap
+                    if len(current_chunk) > 1:
+                        current_chunk = [current_chunk[-1], para]
+                        current_size = len(current_chunk[-1]) + para_size
+                    else:
+                        current_chunk = [para]
+                        current_size = para_size
+                else:
+                    current_chunk.append(para)
+                    current_size += para_size
+            
+            # Add remaining
+            if current_chunk:
+                chunk_text = '\n\n'.join(current_chunk)
+                chunk_metadata = base_metadata.copy()
+                chunk_metadata['chunk_type'] = 'paragraph_based'
+                chunks.append({
+                    'text': chunk_text,
+                    'metadata': chunk_metadata
+                })
+        else:
+            # Fall back to sliding window
+            chunks = self._sliding_window_chunk(text, base_metadata, 1000, 200)
+        
+        return self._add_chunk_relationships(chunks)
+    
+    def _sliding_window_chunk(self, text: str, base_metadata: Dict, chunk_size: int, overlap: int) -> List[Dict]:
+        """Sliding window chunking with sentence boundaries"""
+        chunks = []
+        sentences = re.split(r'(?<=[.!?])\s+', text)
+        
+        current_chunk = []
+        current_size = 0
+        
+        for sentence in sentences:
+            sentence_size = len(sentence)
+            
+            if current_size + sentence_size > chunk_size and current_chunk:
+                # Save current chunk
+                chunk_text = ' '.join(current_chunk)
+                chunk_metadata = base_metadata.copy()
+                chunk_metadata['chunk_type'] = 'sliding_window'
+                
+                chunks.append({
+                    'text': chunk_text,
+                    'metadata': chunk_metadata
+                })
+                
+                # Calculate overlap
+                overlap_sentences = []
+                overlap_size = 0
+                
+                for s in reversed(current_chunk):
+                    if overlap_size + len(s) <= overlap:
+                        overlap_sentences.insert(0, s)
+                        overlap_size += len(s)
+                    else:
+                        break
+                
+                current_chunk = overlap_sentences + [sentence]
+                current_size = overlap_size + sentence_size
+            else:
+                current_chunk.append(sentence)
+                current_size += sentence_size
+        
+        # Add remaining
+        if current_chunk:
+            chunk_text = ' '.join(current_chunk)
+            chunk_metadata = base_metadata.copy()
+            chunk_metadata['chunk_type'] = 'sliding_window'
+            chunks.append({
+                'text': chunk_text,
+                'metadata': chunk_metadata
+            })
+        
+        return chunks
+    
+    def _split_large_section(self, text: str, metadata: Dict) -> List[Dict]:
+        """Split large sections while preserving context"""
+        return self._sliding_window_chunk(text, metadata, 1000, 300)
+    
+    def _add_chunk_relationships(self, chunks: List[Dict]) -> List[Dict]:
+        """Add relationship metadata between chunks"""
+        for i, chunk in enumerate(chunks):
+            chunk['metadata']['chunk_index'] = i
+            chunk['metadata']['total_chunks'] = len(chunks)
+            
+            if i > 0:
+                chunk['metadata']['previous_chunk_index'] = i - 1
+                # Add context from previous chunk
+                prev_text = chunks[i-1]['text']
+                chunk['metadata']['previous_context'] = prev_text[-200:] if len(prev_text) > 200 else prev_text
+            
+            if i < len(chunks) - 1:
+                chunk['metadata']['next_chunk_index'] = i + 1
+                # Add context from next chunk
+                next_text = chunks[i+1]['text']
+                chunk['metadata']['next_context'] = next_text[:200] if len(next_text) > 200 else next_text
+        
+        return chunks
