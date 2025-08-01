@@ -1,4 +1,4 @@
-"""Global state management"""
+"""Global state management with document processing status"""
 from typing import Dict, Optional, List, Any
 from datetime import datetime, timedelta
 import logging
@@ -9,6 +9,7 @@ logger = logging.getLogger(__name__)
 conversations: Dict[str, Dict] = {}
 uploaded_files: Dict[str, Dict] = {}
 user_sessions: Dict[str, Any] = {}
+document_processing_status: Dict[str, Dict] = {}  # ADD THIS LINE - NEW: Track processing status
 
 def add_to_conversation(session_id: str, role: str, content: str, sources: Optional[List] = None):
     """Add message to conversation"""
