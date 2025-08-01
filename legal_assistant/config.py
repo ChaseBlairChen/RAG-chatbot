@@ -75,3 +75,72 @@ class FeatureFlags:
     PYMUPDF_AVAILABLE: bool = False
     PDFPLUMBER_AVAILABLE: bool = False
     UNSTRUCTURED_AVAILABLE: bool = False
+    OCR_AVAILABLE: bool = False
+    HYBRID_SEARCH_AVAILABLE: bool = False
+
+def initialize_feature_flags():
+    """Initialize feature flags by checking for available dependencies"""
+    
+    # Check OCR
+    try:
+        import pytesseract
+        from pdf2image import convert_from_bytes
+        FeatureFlags.OCR_AVAILABLE = True
+        print("✅ OCR support available - can process scanned PDFs")
+    except ImportError:
+        FeatureFlags.OCR_AVAILABLE = False
+        print("⚠️ OCR not available - install pytesseract and pdf2image")
+
+    # Check hybrid search
+    try:
+        import rank_bm25
+        FeatureFlags.HYBRID_SEARCH_AVAILABLE = True
+        print("✅ Hybrid search available - better retrieval accuracy")
+    except ImportError:
+        FeatureFlags.HYBRID_SEARCH_AVAILABLE = False
+        print("⚠️ Hybrid search not available - install rank-bm25")
+    
+    # Check existing features
+    try:
+        import aiohttp
+        FeatureFlags.AIOHTTP_AVAILABLE = True
+        print("✅ Async HTTP support available")
+    except ImportError:
+        FeatureFlags.AIOHTTP_AVAILABLE = False
+        print("⚠️ Async HTTP not available - install aiohttp")
+    
+    try:
+        import spacy
+        import nltk
+        FeatureFlags.OPEN_SOURCE_NLP_AVAILABLE = True
+        print("✅ Open source NLP available")
+    except ImportError:
+        FeatureFlags.OPEN_SOURCE_NLP_AVAILABLE = False
+        print("⚠️ Open source NLP not available - install spacy and nltk")
+    
+    try:
+        import fitz  # PyMuPDF
+        FeatureFlags.PYMUPDF_AVAILABLE = True
+        print("✅ PyMuPDF available for PDF processing")
+    except ImportError:
+        FeatureFlags.PYMUPDF_AVAILABLE = False
+        print("⚠️ PyMuPDF not available - install PyMuPDF")
+    
+    try:
+        import pdfplumber
+        FeatureFlags.PDFPLUMBER_AVAILABLE = True
+        print("✅ PDFPlumber available for advanced PDF parsing")
+    except ImportError:
+        FeatureFlags.PDFPLUMBER_AVAILABLE = False
+        print("⚠️ PDFPlumber not available - install pdfplumber")
+    
+    try:
+        import unstructured
+        FeatureFlags.UNSTRUCTURED_AVAILABLE = True
+        print("✅ Unstructured available for document parsing")
+    except ImportError:
+        FeatureFlags.UNSTRUCTURED_AVAILABLE = False
+        print("⚠️ Unstructured not available - install unstructured")
+
+# Initialize feature flags when module is imported
+initialize_feature_flags()
