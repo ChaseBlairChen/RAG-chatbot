@@ -445,4 +445,63 @@ If users can't find content that exists:
 4. **Enable debug logging** for search queries
 5. **Use multiple search strategies** in parallel
 
-Remember: The key to good document retrieval is in the extraction and chunking quality. Poor extraction = poor retrieval, no matter how good your search is!
+Front end 
+frontend/
+├── src/
+│   ├── App.tsx (← you already have this!)
+│   ├── main.tsx
+│   ├── index.css
+│   ├── components/
+│   │   ├── auth/
+│   │   │   └── LoginScreen.tsx
+│   │   ├── layout/
+│   │   │   ├── AppHeader.tsx
+│   │   │   ├── BackendWarning.tsx
+│   │   │   ├── TabNavigation.tsx
+│   │   │   └── DisconnectedView.tsx
+│   │   ├── chat/
+│   │   │   ├── ChatTab.tsx
+│   │   │   ├── MessageList.tsx
+│   │   │   ├── MessageItem.tsx
+│   │   │   └── ChatInput.tsx
+│   │   ├── upload/
+│   │   │   ├── UploadTab.tsx
+│   │   │   ├── UploadZone.tsx
+│   │   │   ├── UploadQueue.tsx
+│   │   │   ├── UploadStatus.tsx
+│   │   │   └── UploadResults.tsx
+│   │   ├── documents/
+│   │   │   ├── DocumentsTab.tsx
+│   │   │   └── DocumentItem.tsx
+│   │   ├── analysis/
+│   │   │   ├── AnalysisTab.tsx
+│   │   │   ├── AnalysisToolCard.tsx
+│   │   │   └── DocumentSelector.tsx
+│   │   ├── results/
+│   │   │   ├── ResultsTab.tsx
+│   │   │   └── AnalysisResult.tsx
+│   │   └── common/
+│   │       ├── EmptyState.tsx
+│   │       └── LoadingSpinner.tsx
+│   ├── contexts/
+│   │   ├── AuthContext.tsx
+│   │   └── BackendContext.tsx
+│   ├── hooks/
+│   │   ├── useChat.ts
+│   │   ├── useDocuments.ts
+│   │   └── useAnalysis.ts
+│   ├── services/
+│   │   └── api.ts
+│   ├── types/
+│   │   └── index.ts
+│   └── utils/
+│       ├── constants.ts
+│       ├── markdown.ts
+│       ├── fileValidation.ts
+│       └── helpers.ts
+├── package.json
+├── vite.config.ts
+└── tsconfig.json
+
+
+
