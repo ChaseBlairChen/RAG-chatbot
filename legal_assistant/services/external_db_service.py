@@ -202,7 +202,7 @@ class CourtListenerInterface(LegalDatabaseInterface):
     """CourtListener - Free Federal and State Court Data"""
     
     def __init__(self):
-        self.api_endpoint = "https://www.courtlistener.com/api/rest/v3"
+        self.api_endpoint = "https://www.courtlistener.com/api/rest/v4"
         self.api_key = os.environ.get("COURTLISTENER_API_KEY", "")  # Optional, increases rate limits
         self.authenticated = True
     
@@ -216,14 +216,15 @@ class CourtListenerInterface(LegalDatabaseInterface):
             if self.api_key:
                 headers["Authorization"] = f"Token {self.api_key}"
             
+            # First, let's try searching opinions which is most relevant for legal research
             params = {
                 "q": query,
-                "format": "json",
-                "order_by": "score desc"
+                "format": "json"
             }
             
+            # Try the opinions endpoint with search
             response = requests.get(
-                f"{self.api_endpoint}/search/",
+                f"{self.api_endpoint}/opinions/",
                 params=params,
                 headers=headers,
                 timeout=10
@@ -232,19 +233,55 @@ class CourtListenerInterface(LegalDatabaseInterface):
             if response.ok:
                 data = response.json()
                 results = []
-                for item in data.get('results', []):
+                
+                # Handle paginated results
+                opinions = data.get('results', [])
+                
+                for opinion in opinions:
+                    # Get the cluster data if available
+                    cluster_url = opinion.get('cluster')
+                    case_name = opinion.get('case_name', 'Unknown Case')
+                    
                     results.append({
-                        'title': item.get('caseName', ''),
-                        'court': item.get('court', ''),
-                        'date': item.get('dateFiled', ''),
-                        'docket': item.get('docketNumber', ''),
-                        'snippet': item.get('snippet', ''),
-                        'url': f"https://www.courtlistener.com{item.get('absolute_url', '')}",
-                        'source_database': 'courtlistener'
+                        'title': case_name,
+                        'court': opinion.get('court', ''),
+                        'date': opinion.get('date_created', ''),
+                        'type': opinion.get('type', 'opinion'),
+                        'snippet': opinion.get('plain_text', '')[:200] + '...' if opinion.get('plain_text') else '',
+                        'url': f"https://www.courtlistener.com{opinion.get('absolute_url', '')}" if opinion.get('absolute_url') else '',
+                        'source_database': 'courtlistener',
+                        'id': opinion.get('id', '')
                     })
+                
+                # If no opinions found, try searching dockets
+                if not results:
+                    docket_response = requests.get(
+                        f"{self.api_endpoint}/dockets/",
+                        params=params,
+                        headers=headers,
+                        timeout=10
+                    )
+                    
+                    if docket_response.ok:
+                        docket_data = docket_response.json()
+                        dockets = docket_data.get('results', [])
+                        
+                        for docket in dockets:
+                            results.append({
+                                'title': docket.get('case_name', 'Unknown Case'),
+                                'court': docket.get('court', ''),
+                                'date': docket.get('date_created', ''),
+                                'docket': docket.get('docket_number', ''),
+                                'snippet': f"Docket: {docket.get('docket_number', 'N/A')}",
+                                'url': f"https://www.courtlistener.com{docket.get('absolute_url', '')}" if docket.get('absolute_url') else '',
+                                'source_database': 'courtlistener',
+                                'type': 'docket'
+                            })
+                
                 return results
             else:
                 logger.error(f"CourtListener search failed: {response.status_code}")
+                logger.error(f"Response: {response.text}")
                 return []
                 
         except Exception as e:
