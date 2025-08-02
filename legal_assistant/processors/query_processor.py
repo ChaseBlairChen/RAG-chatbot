@@ -1,8 +1,9 @@
-"""Query processing logic - Enhanced for better statutory analysis with external database integration"""
+"""Query processing logic - Enhanced for better statutory analysis with external database integration and proper citation formatting"""
 import re
 import logging
 import traceback
-from typing import Optional
+from typing import Optional, Dict, List, Tuple
+from datetime import datetime
 
 from ..models import QueryResponse, ComprehensiveAnalysisRequest, AnalysisType
 from ..config import FeatureFlags, OPENROUTER_API_KEY, MIN_RELEVANCE_SCORE
@@ -22,6 +23,63 @@ from ..utils import (
 )
 
 logger = logging.getLogger(__name__)
+
+def format_legal_citation(result: Dict) -> str:
+    """Format a legal database result into a proper citation"""
+    source_db = result.get('source_database', '').lower()
+    
+    # Harvard Library Caselaw Access Project format
+    if 'harvard' in source_db or 'caselaw' in source_db:
+        case_name = result.get('title', 'Unknown Case')
+        court = result.get('court', '')
+        date = result.get('date', '')
+        citation = result.get('citation', '')
+        
+        if citation:
+            # Standard format: Case Name, Citation (Court Year)
+            year = date.split('-')[0] if date else ''
+            return f"{case_name}, {citation} ({court} {year})"
+        else:
+            # Fallback format without citation
+            return f"{case_name} ({court} {date})"
+    
+    # CourtListener format
+    elif 'courtlistener' in source_db:
+        case_name = result.get('title', 'Unknown Case')
+        docket = result.get('docket_number', '')
+        court = result.get('court', '')
+        date = result.get('date', '')
+        
+        if docket:
+            return f"{case_name}, No. {docket} ({court} {date})"
+        else:
+            return f"{case_name} ({court} {date})"
+    
+    # Google Scholar format
+    elif 'scholar' in source_db or 'google' in source_db:
+        case_name = result.get('title', 'Unknown Case')
+        citation = result.get('citation', '')
+        year = result.get('date', '').split('-')[0] if result.get('date') else ''
+        
+        if citation:
+            return f"{case_name}, {citation} ({year})"
+        else:
+            return f"{case_name} ({year})"
+    
+    # Generic format for other sources
+    else:
+        case_name = result.get('title', 'Unknown Case')
+        court = result.get('court', '')
+        date = result.get('date', '')
+        citation = result.get('citation', '')
+        
+        parts = [case_name]
+        if citation:
+            parts.append(citation)
+        if court or date:
+            parts.append(f"({court} {date})".strip())
+        
+        return ", ".join(parts)
 
 def detect_statutory_question(question: str) -> bool:
     """Detect if this is a statutory/regulatory question requiring detailed extraction"""
@@ -317,9 +375,16 @@ def detect_legal_search_intent(question: str) -> bool:
         r'\bfederal\s*(?:law|court)\b', r'\bstate\s*(?:law|court)\b',
         r'\b\w+\s*(?:circuit|district)\b',
         
-        # Legal concepts
+        # Legal concepts - expanded for negligence and torts
         r'\bliability\b', r'\bnegligence\b', r'\bcontract\s*law\b',
-        r'\btort\b', r'\bcriminal\s*law\b', r'\bcivil\s*law\b'
+        r'\btort\b', r'\bcriminal\s*law\b', r'\bcivil\s*law\b',
+        r'\bduty\s*of\s*care\b', r'\bbreach\b', r'\bcausation\b',
+        r'\bproximate\s*cause\b', r'\bdamages\b', r'\bstandard\s*of\s*care\b',
+        r'\breasonable\s*person\b', r'\bforeseeability\b', r'\bcomparative\s*negligence\b',
+        r'\bcontributory\s*negligence\b', r'\bassumption\s*of\s*risk\b',
+        r'\bres\s*ipsa\s*loquitur\b', r'\bvicarious\s*liability\b',
+        r'\bintentional\s*tort\b', r'\bstrict\s*liability\b',
+        r'\bproducts\s*liability\b', r'\bmalpractice\b', r'\bpremises\s*liability\b'
     ]
     
     for pattern in legal_search_indicators:
@@ -336,6 +401,75 @@ def should_search_external_databases(question: str, search_scope: str) -> bool:
     # Check if this is a legal question that would benefit from external search
     return detect_legal_search_intent(question) or detect_statutory_question(question)
 
+def format_external_results_with_citations(external_results: List[Dict]) -> Tuple[str, List[Dict]]:
+    """Format external results with proper citations and return both formatted text and source info"""
+    if not external_results:
+        return "", []
+    
+    formatted_text = "\n\n## EXTERNAL LEGAL DATABASE RESULTS:\n"
+    formatted_text += "(These results are from public legal databases including Harvard Law School Library Caselaw Access Project, CourtListener, and Google Scholar)\n\n"
+    
+    source_info = []
+    
+    for idx, result in enumerate(external_results[:5], 1):  # Limit to top 5 results
+        # Create proper citation
+        citation = format_legal_citation(result)
+        
+        formatted_text += f"### {idx}. {citation}\n"
+        
+        # Add database attribution
+        source_db = result.get('source_database', 'Unknown')
+        if 'harvard' in source_db.lower():
+            formatted_text += f"**Database:** Harvard Law School Library - Caselaw Access Project\n"
+        elif 'courtlistener' in source_db.lower():
+            formatted_text += f"**Database:** Free Law Project - CourtListener\n"
+        elif 'scholar' in source_db.lower() or 'google' in source_db.lower():
+            formatted_text += f"**Database:** Google Scholar Legal Opinions and Journals\n"
+        else:
+            formatted_text += f"**Database:** {source_db}\n"
+        
+        # Add court and jurisdiction info
+        court = result.get('court', '')
+        jurisdiction = result.get('jurisdiction', '')
+        if court:
+            formatted_text += f"**Court:** {court}\n"
+        if jurisdiction:
+            formatted_text += f"**Jurisdiction:** {jurisdiction}\n"
+        
+        # Add date decided
+        date = result.get('date', '')
+        if date:
+            formatted_text += f"**Date Decided:** {date}\n"
+        
+        # Add relevant excerpt/preview
+        preview = result.get('preview') or result.get('snippet', '')
+        if preview:
+            # Clean up the preview text
+            preview = re.sub(r'\s+', ' ', preview).strip()
+            if len(preview) > 500:
+                preview = preview[:497] + "..."
+            formatted_text += f"**Relevant Excerpt:** {preview}\n"
+        
+        # Add URL for full text
+        if result.get('url'):
+            formatted_text += f"**Full Text Available:** {result['url']}\n"
+        
+        formatted_text += "\n"
+        
+        # Create source info entry with proper citation
+        source_info.append({
+            'file_name': citation,  # Use the formatted citation as the file name
+            'page': None,
+            'relevance': 0.8,  # Fixed relevance for external results
+            'source_type': 'external_database',
+            'database': source_db,
+            'url': result.get('url', ''),
+            'court': court,
+            'date': date
+        })
+    
+    return formatted_text, source_info
+
 def create_statutory_prompt(context_text: str, question: str, conversation_context: str, 
                           sources_searched: list, retrieval_method: str, document_id: str = None,
                           external_context: str = None) -> str:
@@ -351,6 +485,7 @@ STRICT SOURCE REQUIREMENTS:
 - Answer ONLY based on the retrieved documents provided in the context
 - Do NOT use general legal knowledge, training data, assumptions, or inferences beyond what's explicitly stated
 - If information is not in the provided documents, state: "This information is not available in the provided documents"
+- When citing external database results, use the full citation format provided (e.g., "Smith v. Jones, 123 F.3d 456 (9th Cir. 2023)")
 
 🔴 CRITICAL: You MUST extract actual numbers, durations, and specific requirements. NEVER use placeholders like "[duration not specified]" or "[requirements not listed]".
 
@@ -375,7 +510,7 @@ INSTRUCTIONS FOR THOROUGH ANALYSIS:
 2. **EXTRACT COMPLETELY**: When extracting requirements, include FULL details (e.g., "60 minutes" not just "minimum of")
 3. **QUOTE VERBATIM**: For statutory standards, use exact quotes: `"[Exact Text]" (Source)`
 4. **ENUMERATE EXPLICITLY**: Present listed requirements as numbered points with full quotes
-5. **CITE SOURCES**: Reference the document name for each fact
+5. **CITE SOURCES**: Reference the document name or case citation for each fact
 6. **BE COMPLETE**: Explicitly note missing standards: "Documents lack full subsection [X]"
 7. **USE DECISIVE PHRASING**: State facts directly ("The statute requires...") - NEVER "documents indicate"
 
@@ -460,6 +595,7 @@ STRICT SOURCE REQUIREMENTS:
 - Answer ONLY based on the retrieved documents provided in the context
 - Do NOT use general legal knowledge, training data, assumptions, or inferences beyond what's explicitly stated
 - If information is not in the provided documents, state: "This information is not available in the provided documents"
+- When citing external database results, use the full citation format provided (e.g., "Smith v. Jones, 123 F.3d 456 (9th Cir. 2023)")
 
 SOURCES SEARCHED: {', '.join(sources_searched)}
 RETRIEVAL METHOD: {retrieval_method}
@@ -475,7 +611,7 @@ INSTRUCTIONS FOR THOROUGH ANALYSIS:
 2. **EXTRACT COMPLETELY**: When extracting requirements, include FULL details (e.g., "60 minutes" not just "minimum of")
 3. **QUOTE VERBATIM**: For statutory standards, use exact quotes: `"[Exact Text]" (Source)`
 4. **ENUMERATE EXPLICITLY**: Present listed requirements as numbered points with full quotes
-5. **CITE SOURCES**: Reference the document name for each fact
+5. **CITE SOURCES**: Reference the document name or case citation for each fact
 6. **BE COMPLETE**: Explicitly note missing standards: "Documents lack full subsection [X]"
 7. **USE DECISIVE PHRASING**: State facts directly ("The statute requires...") - NEVER "documents indicate"
 
@@ -495,7 +631,7 @@ RESPONSE APPROACH:
 - **SECOND**: Search the context thoroughly for that information  
 - **THIRD**: Present any information found clearly and completely. At the end of your response, list all facts provided and their source documents for verification.
 - **FOURTH**: Note what information is not available (if any)
-- **ALWAYS**: Cite the source document for each fact provided
+- **ALWAYS**: Cite the source document or case for each fact provided
 
 ADDITIONAL GUIDANCE:
 - After fully answering based solely on the provided documents, if relevant key legal principles under Washington state law, any other U.S. state law, or U.S. federal law are not found in the sources, you may add a clearly labeled general legal principles disclaimer.
@@ -603,52 +739,44 @@ def process_query(question: str, session_id: str, user_id: Optional[str], search
             document_id=document_id
         )
         
+        # Initialize source_info
+        source_info = []
+        
         # Search external databases if appropriate
         external_context = None
+        external_source_info = []
+        
         if search_external:
             try:
                 logger.info("🔍 Searching external legal databases...")
-                external_results = search_free_legal_databases(question, None)
+                
+                # Enhance the query for better legal database results
+                enhanced_query = question
+                
+                # Add legal context based on the type of question
+                if "negligence" in question.lower():
+                    enhanced_query = f"{question} negligence tort duty care breach causation damages"
+                elif "first amendment" in question.lower():
+                    enhanced_query = f"{question} constitutional law free speech religion press"
+                elif "miranda" in question.lower():
+                    enhanced_query = f"{question} criminal procedure fifth amendment"
+                elif "fourth amendment" in question.lower():
+                    enhanced_query = f"{question} search seizure warrant constitutional"
+                elif "case" in question.lower() or "precedent" in question.lower():
+                    enhanced_query = f"{question} supreme court appellate decision"
+                else:
+                    # Generic enhancement for legal queries
+                    enhanced_query = f"{question} legal case law court decision"
+                
+                logger.info(f"Enhanced query for external search: {enhanced_query}")
+                external_results = search_free_legal_databases(enhanced_query, None)
                 
                 if external_results:
                     logger.info(f"📚 Found {len(external_results)} results from external databases")
                     sources_searched.append("external_legal_databases")
                     
-                    # Format external results for context
-                    external_context = "\n\n## EXTERNAL LEGAL DATABASE RESULTS:\n"
-                    external_context += "(These results are from public legal databases including Harvard Caselaw and CourtListener)\n\n"
-                    
-                    for idx, result in enumerate(external_results[:5], 1):  # Limit to top 5 results
-                        external_context += f"### {idx}. {result.get('title', 'Unknown Case')}\n"
-                        external_context += f"**Source Database:** {result.get('source_database', 'Unknown')}\n"
-                        external_context += f"**Court:** {result.get('court', 'N/A')}\n"
-                        external_context += f"**Date:** {result.get('date', 'N/A')}\n"
-                        
-                        if result.get('citation'):
-                            external_context += f"**Citation:** {result['citation']}\n"
-                        
-                        preview = result.get('preview') or result.get('snippet', '')
-                        if preview:
-                            external_context += f"**Preview:** {preview[:300]}...\n"
-                        
-                        if result.get('url'):
-                            external_context += f"**Full Text:** {result['url']}\n"
-                        
-                        external_context += "\n"
-                    
-                    # Add external results to source info for tracking
-                    for result in external_results[:5]:
-                        source_info_item = {
-                            'file_name': result.get('title', 'Unknown Case'),
-                            'page': None,
-                            'relevance': 0.8,  # Fixed relevance for external results
-                            'source_type': 'external_database',
-                            'database': result.get('source_database', 'unknown'),
-                            'url': result.get('url', '')
-                        }
-                        if 'source_info' not in locals():
-                            source_info = []
-                        source_info.append(source_info_item)
+                    # Format external results with proper citations
+                    external_context, external_source_info = format_external_results_with_citations(external_results)
                         
             except Exception as e:
                 logger.error(f"External database search failed: {e}")
@@ -669,6 +797,9 @@ def process_query(question: str, session_id: str, user_id: Optional[str], search
         # Format context for LLM - more context for statutory questions
         max_context_length = 8000 if is_statutory else 3000
         context_text, source_info = format_context_for_llm(retrieved_results, max_length=max_context_length)
+        
+        # Combine source info from both internal and external sources
+        all_source_info = source_info + external_source_info
         
         # Enhanced information extraction
         bill_match = re.search(r"(HB|SB|SSB|ESSB|SHB|ESHB)\s*(\d+)", question, re.IGNORECASE)
@@ -743,7 +874,7 @@ def process_query(question: str, session_id: str, user_id: Optional[str], search
             if external_context:
                 response_text += f"\n\n{external_context}"
         
-        relevant_sources = [s for s in source_info if s['relevance'] >= MIN_RELEVANCE_SCORE]
+        relevant_sources = [s for s in all_source_info if s['relevance'] >= MIN_RELEVANCE_SCORE]
         
         if relevant_sources:
             response_text += "\n\n**SOURCES:**"
@@ -751,9 +882,20 @@ def process_query(question: str, session_id: str, user_id: Optional[str], search
                 source_type = source['source_type'].replace('_', ' ').title()
                 
                 if source_type == 'External Database':
-                    response_text += f"\n- [{source['database'].upper()}] {source['file_name']}"
+                    # Use the citation format for external sources
+                    response_text += f"\n- {source['file_name']}"
+                    if source.get('database'):
+                        db_name = source['database']
+                        if 'harvard' in db_name.lower():
+                            response_text += " [Harvard Law School Library - Caselaw Access Project]"
+                        elif 'courtlistener' in db_name.lower():
+                            response_text += " [Free Law Project - CourtListener]"
+                        elif 'scholar' in db_name.lower() or 'google' in db_name.lower():
+                            response_text += " [Google Scholar]"
+                        else:
+                            response_text += f" [{db_name}]"
                     if source.get('url'):
-                        response_text += f" - [View Full Text]({source['url']})"
+                        response_text += f" - [Full Text]({source['url']})"
                 else:
                     page_info = f", Page {source['page']}" if source['page'] is not None else ""
                     response_text += f"\n- [{source_type}] {source['file_name']}{page_info} (Relevance: {source['relevance']:.2f})"
@@ -761,13 +903,13 @@ def process_query(question: str, session_id: str, user_id: Optional[str], search
         confidence_score = calculate_confidence_score(retrieved_results, len(response_text))
         
         add_to_conversation(session_id, "user", question)
-        add_to_conversation(session_id, "assistant", response_text, source_info)
+        add_to_conversation(session_id, "assistant", response_text, all_source_info)
         
         return QueryResponse(
             response=response_text,
             error=None,
             context_found=True,
-            sources=source_info,
+            sources=all_source_info,
             session_id=session_id,
             confidence_score=float(confidence_score),
             sources_searched=sources_searched,
