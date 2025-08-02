@@ -83,6 +83,9 @@ export const TEST_ACCOUNTS = [
 ];
 
 
-const DEFAULT_BACKEND_URL = "https://day-sons-grown-sides.trycloudflare.com";
+DEFAULT_BACKEND_URL = "https://day-sons-grown-sides.trycloudflare.com";
+
+
+
 
 
