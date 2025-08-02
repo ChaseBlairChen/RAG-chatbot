@@ -83,4 +83,5 @@ export const TEST_ACCOUNTS = [
 ];
 
 
-export const DEFAULT_BACKEND_URL = "http://18.232.139.244:8000";
+export const DEFAULT_BACKEND_URL = "https://smoking-sk-workflow-re.trycloudflare.com";
+
