@@ -1,16 +1,8 @@
-"""Authentication and authorization"""
-from typing import Optional
-from fastapi import Depends, HTTPException
-from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
-from ..models import User
-from ..storage.managers import user_sessions
-
-security = HTTPBearer(auto_error=False)
-
 def get_current_user(credentials: Optional[HTTPAuthorizationCredentials] = Depends(security)) -> User:
     """Get current user from credentials"""
     if credentials is None:
-        default_user_id = "debug_user"
+        # Change this to match your most common test user
+        default_user_id = "user_demo"  # Changed from "debug_user"
         if default_user_id not in user_sessions:
             from ..services.container_manager import get_container_manager
             container_manager = get_container_manager()
