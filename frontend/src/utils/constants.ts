@@ -83,5 +83,6 @@ export const TEST_ACCOUNTS = [
 ];
 
 
-export const DEFAULT_BACKEND_URL = "https://smoking-sk-workflow-re.trycloudflare.com";
+const DEFAULT_BACKEND_URL = "https://day-sons-grown-sides.trycloudflare.com";
+
 
