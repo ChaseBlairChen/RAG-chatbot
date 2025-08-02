@@ -1,5 +1,5 @@
 // App.tsx
-import { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
 import { BackendProvider, useBackend } from './contexts/BackendContext';
 import { ApiService } from './services/api';
@@ -13,6 +13,7 @@ import { UploadTab } from './components/upload/UploadTab';
 import { DocumentsTab } from './components/documents/DocumentsTab';
 import { AnalysisTab } from './components/analysis/AnalysisTab';
 import { ResultsTab } from './components/results/ResultsTab';
+import { LegalDatabaseSearch } from './components/legal/LegalDatabaseSearch';
 import { useChat } from './hooks/useChat';
 import { useDocuments } from './hooks/useDocuments';
 import { useAnalysis } from './hooks/useAnalysis';
@@ -181,6 +182,10 @@ function MainApp() {
                   onClearResults={clearResults}
                   onSetActiveTab={setActiveTab}
                 />
+              )}
+              
+              {activeTab === 'legal-search' && (
+                <LegalDatabaseSearch />
               )}
             </>
           )}
