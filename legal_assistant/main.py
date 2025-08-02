@@ -7,7 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from .config import DEFAULT_CHROMA_PATH, USER_CONTAINERS_PATH, FeatureFlags
 from .core import initialize_nlp_models, initialize_feature_flags
 from .services import initialize_container_manager
-from .api.routers import query, documents, analysis, admin, health
+from .api.routers import query, documents, analysis, admin, health, external  # ADD external HERE
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -45,6 +45,7 @@ app.include_router(query.router, tags=["queries"])
 app.include_router(documents.router, tags=["documents"])
 app.include_router(analysis.router, tags=["analysis"])
 app.include_router(admin.router, prefix="/admin", tags=["admin"])
+app.include_router(external.router, prefix="/external", tags=["external"])  # ADD THIS LINE
 app.include_router(health.router, tags=["health"])
 
 # Mount the home page from health router
@@ -66,13 +67,5 @@ if __name__ == "__main__":
     logger.info("Version: 10.0.0-SmartRAG-ComprehensiveAnalysis")
     logger.info("📁 MODULAR ARCHITECTURE - Clean separation of concerns!")
     uvicorn.run("legal_assistant.main:app", host="0.0.0.0", port=port, reload=True)
-from .api.routers import query, documents, analysis, admin, health, external
 
-# Include routers
-app.include_router(query.router, tags=["queries"])
-app.include_router(documents.router, tags=["documents"])
-app.include_router(analysis.router, tags=["analysis"])
-app.include_router(admin.router, prefix="/admin", tags=["admin"])
-app.include_router(external.router, prefix="/external", tags=["external"])  # Add this
-app.include_router(health.router, tags=["health"])
-
+# DELETE EVERYTHING BELOW THIS LINE!
