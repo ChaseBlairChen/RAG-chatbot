@@ -82,4 +82,5 @@ export const TEST_ACCOUNTS = [
   { username: 'lawyer1', password: 'legal123', email: 'lawyer1@lawfirm.com', role: 'user', subscription_tier: 'premium' }
 ];
 
-export const DEFAULT_BACKEND_URL = "https://download-configuration-indicators-apartment.trycloudflare.com";
+
+export const DEFAULT_BACKEND_URL = "https://schedules-noble-nearby-pulled.trycloudflare.com";
