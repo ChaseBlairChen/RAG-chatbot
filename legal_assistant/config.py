@@ -89,7 +89,7 @@ class FeatureFlags:
     PDFPLUMBER_AVAILABLE: bool = False
     UNSTRUCTURED_AVAILABLE: bool = False
     OCR_AVAILABLE: bool = False
-    HYBRID_SEARCH_AVAILABLE: bool = False
+    
 
 def initialize_feature_flags():
     """Initialize feature flags by checking for available dependencies"""
@@ -157,3 +157,4 @@ def initialize_feature_flags():
 
 # Initialize feature flags when module is imported
 initialize_feature_flags()
+
