@@ -29,6 +29,7 @@ export const TabNavigation: React.FC<TabNavigationProps> = ({
     { id: 'documents', label: 'My Documents', icon: '📁', badge: userDocumentsCount > 0 ? userDocumentsCount : null },
     { id: 'analysis', label: 'Analysis Tools', icon: '🔍' },
     { id: 'results', label: 'Results', icon: '📊', badge: analysisResultsCount > 0 ? analysisResultsCount : null },
+    { id: 'legal-search', label: 'Legal Search', icon: '⚖️' },
   ];
 
   return (
