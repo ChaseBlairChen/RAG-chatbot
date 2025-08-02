@@ -1,6 +1,6 @@
 // hooks/useAnalysis.ts
 import { useState, useCallback } from 'react';
-import { AnalysisResult, DocumentAnalysis } from '../types';
+import type { AnalysisResult, DocumentAnalysis } from '../types';
 import { ApiService } from '../services/api';
 import { ANALYSIS_TOOLS } from '../utils/constants';
 

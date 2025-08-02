@@ -1,6 +1,7 @@
 // contexts/BackendContext.tsx
-import React, { createContext, useContext, useState, useEffect, ReactNode } from 'react';
-import { BackendCapabilities } from '../types';
+import React, { createContext, useContext, useState, useEffect } from 'react';
+import type { ReactNode } from 'react';
+import type { BackendCapabilities } from '../types';
 import { DEFAULT_BACKEND_URL } from '../utils/constants';
 import { useAuth } from './AuthContext';
 

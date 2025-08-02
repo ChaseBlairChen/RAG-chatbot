@@ -4,7 +4,7 @@ import { UploadZone } from './UploadZone';
 import { UploadQueue } from './UploadQueue';
 import { UploadStatusComponent } from './UploadStatus';
 import { UploadResults } from './UploadResults';
-import { UploadStatus } from '../../types';
+import type { UploadStatus } from '../../types';
 
 interface UploadTabProps {
   uploadQueue: File[];

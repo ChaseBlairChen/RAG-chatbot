@@ -1,5 +1,5 @@
 // utils/constants.ts
-import { AnalysisTool } from '../types';
+import type { AnalysisTool } from '../types';
 
 export const ANALYSIS_TOOLS: AnalysisTool[] = [
   {

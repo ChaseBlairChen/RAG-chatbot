@@ -1,16 +1,16 @@
 const fs = require('fs');
 const path = require('path');
 
-// Read your pasted content
+// Read the combined file
 const content = fs.readFileSync('all_files_combined.txt', 'utf8');
 
-// Split by the separator
-const files = content.split(/\/\/ ==================== (.*?) ====================/);
+// Split by the separator pattern
+const sections = content.split(/\/\/ ==================== (.*?) ====================/);
 
 // Process each file
-for (let i = 1; i < files.length; i += 2) {
-  const filePath = files[i].trim();
-  const fileContent = files[i + 1].trim();
+for (let i = 1; i < sections.length; i += 2) {
+  const filePath = sections[i].trim();
+  const fileContent = sections[i + 1].trim();
   
   // Create the full path
   const fullPath = path.join(__dirname, filePath);
@@ -22,3 +22,5 @@ for (let i = 1; i < files.length; i += 2) {
   fs.writeFileSync(fullPath, fileContent);
   console.log(`Created: ${filePath}`);
 }
+
+console.log('All files created successfully!');

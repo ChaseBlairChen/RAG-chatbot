@@ -1,5 +1,5 @@
 // App.tsx
-import React, { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
 import { BackendProvider, useBackend } from './contexts/BackendContext';
 import { ApiService } from './services/api';

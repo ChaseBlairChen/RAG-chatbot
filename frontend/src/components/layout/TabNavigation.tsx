@@ -20,7 +20,6 @@ export const TabNavigation: React.FC<TabNavigationProps> = ({
   activeTab,
   setActiveTab,
   userDocumentsCount,
-  analysisResultsCount,
   isBackendConfigured
 }) => {
   const tabs: Tab[] = [

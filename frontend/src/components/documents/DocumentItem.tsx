@@ -1,6 +1,6 @@
 // components/documents/DocumentItem.tsx
 import React from 'react';
-import { DocumentAnalysis } from '../../types';
+import type { DocumentAnalysis } from '../../types';
 
 interface DocumentItemProps {
   document: DocumentAnalysis;

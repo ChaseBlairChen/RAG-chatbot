@@ -1,6 +1,6 @@
 // components/documents/DocumentsTab.tsx
 import React from 'react';
-import { DocumentAnalysis } from '../../types';
+import type { DocumentAnalysis } from '../../types';
 import { DocumentItem } from './DocumentItem';
 import { EmptyState } from '../common/EmptyState';
 

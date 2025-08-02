@@ -1,6 +1,6 @@
 // components/chat/MessageItem.tsx
 import React from 'react';
-import { Message } from '../../types';
+import type { Message } from '../../types';
 import { renderMarkdown } from '../../utils/markdown';
 
 interface MessageItemProps {

@@ -1,6 +1,6 @@
 // hooks/useChat.ts
 import { useState, useCallback } from 'react';
-import { Message } from '../types';
+import type { Message } from '../types';
 import { ApiService } from '../services/api';
 
 export const useChat = (apiService: ApiService) => {

@@ -1,6 +1,6 @@
 // components/results/ResultsTab.tsx
 import React from 'react';
-import { AnalysisResult } from '../../types';
+import type { AnalysisResult } from '../../types';
 import { AnalysisResultComponent } from './AnalysisResult';
 import { EmptyState } from '../common/EmptyState';
 

@@ -1,6 +1,6 @@
 // hooks/useDocuments.ts
 import { useState, useCallback, useEffect } from 'react';
-import { DocumentAnalysis, UploadStatus } from '../types';
+import type { DocumentAnalysis, UploadStatus } from '../types';
 import { ApiService } from '../services/api';
 import { validateFileBeforeUpload } from '../utils/fileValidation';
 

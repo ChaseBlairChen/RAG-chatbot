@@ -1,6 +1,6 @@
 // components/upload/UploadStatus.tsx
 import React from 'react';
-import { UploadStatus as UploadStatusType } from '../../types';
+import type { UploadStatus as UploadStatusType } from '../../types';
 import { getStatusColor } from '../../utils/helpers';
 
 interface UploadStatusProps {

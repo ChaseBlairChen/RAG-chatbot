@@ -2,7 +2,7 @@
 import React, { useState } from 'react';
 import { MessageList } from './MessageList';
 import { ChatInput } from './ChatInput';
-import { Message } from '../../types';
+import type { Message } from '../../types';
 
 interface ChatTabProps {
   messages: Message[];
@@ -11,7 +11,7 @@ interface ChatTabProps {
   sendMessage: (input: string, responseStyle: string, searchScope: string, useEnhancedRag: boolean, expandRequest?: boolean) => Promise<void>;
 }
 
-export const ChatTab: React.FC<ChatTabProps> = ({ messages, isLoading, sessionId, sendMessage }) => {
+export const ChatTab: React.FC<ChatTabProps> = ({ messages, isLoading, sendMessage }) => {
   const [input, setInput] = useState('');
   const [responseStyle, setResponseStyle] = useState('balanced');
   const [searchScope, setSearchScope] = useState('all');

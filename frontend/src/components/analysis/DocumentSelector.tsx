@@ -1,6 +1,6 @@
 // components/analysis/DocumentSelector.tsx
 import React from 'react';
-import { DocumentAnalysis } from '../../types';
+import type { DocumentAnalysis } from '../../types';
 
 interface DocumentSelectorProps {
   selectedDocument: string | null;

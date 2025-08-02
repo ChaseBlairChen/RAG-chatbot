@@ -1,6 +1,6 @@
 // components/analysis/AnalysisToolCard.tsx
 import React from 'react';
-import { AnalysisTool } from '../../types';
+import type { AnalysisTool } from '../../types';
 
 interface AnalysisToolCardProps {
   tool: AnalysisTool;

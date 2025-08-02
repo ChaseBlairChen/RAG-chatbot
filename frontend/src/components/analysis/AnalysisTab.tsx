@@ -1,6 +1,6 @@
 // components/analysis/AnalysisTab.tsx
 import React from 'react';
-import { DocumentAnalysis } from '../../types';
+import type { DocumentAnalysis } from '../../types';
 import { ANALYSIS_TOOLS } from '../../utils/constants';
 import { AnalysisToolCard } from './AnalysisToolCard';
 import { DocumentSelector } from './DocumentSelector';
