@@ -1,4 +1,4 @@
-"""Query processing logic - Enhanced for better statutory analysis"""
+"""Query processing logic - Enhanced for better statutory analysis with external database integration"""
 import re
 import logging
 import traceback
@@ -12,6 +12,7 @@ from ..services import (
     calculate_confidence_score,
     call_openrouter_api
 )
+from ..services.external_db_service import search_free_legal_databases
 from ..storage.managers import add_to_conversation, get_conversation_context
 from ..utils import (
     parse_multiple_questions,
@@ -294,9 +295,55 @@ def detect_statutory_question(question: str) -> bool:
             return True
     return False
 
+def detect_legal_search_intent(question: str) -> bool:
+    """Detect if this question would benefit from external legal database search"""
+    legal_search_indicators = [
+        # Case law queries
+        r'\bcase\s*law\b', r'\bcases?\b', r'\bprecedent\b', r'\bruling\b',
+        r'\bdecision\b', r'\bcourt\s*opinion\b', r'\bjudgment\b',
+        
+        # Specific legal queries
+        r'\bmiranda\b', r'\bconstitutional\b', r'\bamendment\b',
+        r'\bsupreme\s*court\b', r'\bappellate\b', r'\bdistrict\s*court\b',
+        
+        # Legal research terms
+        r'\blegal\s*research\b', r'\bfind\s*cases?\b', r'\blook\s*up\s*law\b',
+        r'\bsearch\s*(?:for\s*)?(?:cases?|law|precedent)\b',
+        
+        # Citations and references
+        r'\bv\.\s+\w+\b', r'\bversus\b', r'\bcite\b', r'\bcitation\b',
+        
+        # Jurisdictional queries
+        r'\bfederal\s*(?:law|court)\b', r'\bstate\s*(?:law|court)\b',
+        r'\b\w+\s*(?:circuit|district)\b',
+        
+        # Legal concepts
+        r'\bliability\b', r'\bnegligence\b', r'\bcontract\s*law\b',
+        r'\btort\b', r'\bcriminal\s*law\b', r'\bcivil\s*law\b'
+    ]
+    
+    for pattern in legal_search_indicators:
+        if re.search(pattern, question, re.IGNORECASE):
+            return True
+    return False
+
+def should_search_external_databases(question: str, search_scope: str) -> bool:
+    """Determine if external databases should be searched"""
+    # Don't search external if user explicitly wants only their documents
+    if search_scope == "user_only":
+        return False
+    
+    # Check if this is a legal question that would benefit from external search
+    return detect_legal_search_intent(question) or detect_statutory_question(question)
+
 def create_statutory_prompt(context_text: str, question: str, conversation_context: str, 
-                          sources_searched: list, retrieval_method: str, document_id: str = None) -> str:
+                          sources_searched: list, retrieval_method: str, document_id: str = None,
+                          external_context: str = None) -> str:
     """Create an enhanced prompt specifically for statutory analysis"""
+    
+    # Add external context if available
+    if external_context:
+        context_text = f"{context_text}\n\n{external_context}"
     
     return f"""You are a legal research assistant specializing in statutory analysis. Your job is to extract COMPLETE, SPECIFIC information from legal documents.
 
@@ -400,8 +447,12 @@ RESPONSE:"""
 
 def create_regular_prompt(context_text: str, question: str, conversation_context: str, 
                          sources_searched: list, retrieval_method: str, document_id: str = None, 
-                         instruction: str = "balanced") -> str:
+                         instruction: str = "balanced", external_context: str = None) -> str:
     """Create the regular prompt for non-statutory questions"""
+    
+    # Add external context if available
+    if external_context:
+        context_text = f"{context_text}\n\n{external_context}"
     
     return f"""You are a legal research assistant. Provide thorough, accurate responses based on the provided documents.
 
@@ -457,8 +508,8 @@ RESPONSE:"""
 
 def process_query(question: str, session_id: str, user_id: Optional[str], search_scope: str, 
                  response_style: str = "balanced", use_enhanced_rag: bool = True, 
-                 document_id: str = None) -> QueryResponse:
-    """Main query processing function with enhanced statutory handling"""
+                 document_id: str = None, search_external: bool = None) -> QueryResponse:
+    """Main query processing function with enhanced statutory handling and external database integration"""
     try:
         logger.info(f"Processing query - Question: '{question}', User: {user_id}, Scope: {search_scope}, Enhanced: {use_enhanced_rag}, Document: {document_id}")
         
@@ -466,6 +517,13 @@ def process_query(question: str, session_id: str, user_id: Optional[str], search
         is_statutory = detect_statutory_question(question)
         if is_statutory:
             logger.info("🏛️ Detected statutory/regulatory question - using enhanced extraction")
+        
+        # Determine if we should search external databases
+        if search_external is None:
+            search_external = should_search_external_databases(question, search_scope)
+        
+        if search_external:
+            logger.info("📚 Will search external legal databases for this query")
         
         if any(phrase in question.lower() for phrase in ["comprehensive analysis", "complete analysis", "full analysis"]):
             logger.info("Detected comprehensive analysis request")
@@ -545,7 +603,58 @@ def process_query(question: str, session_id: str, user_id: Optional[str], search
             document_id=document_id
         )
         
-        if not retrieved_results:
+        # Search external databases if appropriate
+        external_context = None
+        if search_external:
+            try:
+                logger.info("🔍 Searching external legal databases...")
+                external_results = search_free_legal_databases(question, None)
+                
+                if external_results:
+                    logger.info(f"📚 Found {len(external_results)} results from external databases")
+                    sources_searched.append("external_legal_databases")
+                    
+                    # Format external results for context
+                    external_context = "\n\n## EXTERNAL LEGAL DATABASE RESULTS:\n"
+                    external_context += "(These results are from public legal databases including Harvard Caselaw and CourtListener)\n\n"
+                    
+                    for idx, result in enumerate(external_results[:5], 1):  # Limit to top 5 results
+                        external_context += f"### {idx}. {result.get('title', 'Unknown Case')}\n"
+                        external_context += f"**Source Database:** {result.get('source_database', 'Unknown')}\n"
+                        external_context += f"**Court:** {result.get('court', 'N/A')}\n"
+                        external_context += f"**Date:** {result.get('date', 'N/A')}\n"
+                        
+                        if result.get('citation'):
+                            external_context += f"**Citation:** {result['citation']}\n"
+                        
+                        preview = result.get('preview') or result.get('snippet', '')
+                        if preview:
+                            external_context += f"**Preview:** {preview[:300]}...\n"
+                        
+                        if result.get('url'):
+                            external_context += f"**Full Text:** {result['url']}\n"
+                        
+                        external_context += "\n"
+                    
+                    # Add external results to source info for tracking
+                    for result in external_results[:5]:
+                        source_info_item = {
+                            'file_name': result.get('title', 'Unknown Case'),
+                            'page': None,
+                            'relevance': 0.8,  # Fixed relevance for external results
+                            'source_type': 'external_database',
+                            'database': result.get('source_database', 'unknown'),
+                            'url': result.get('url', '')
+                        }
+                        if 'source_info' not in locals():
+                            source_info = []
+                        source_info.append(source_info_item)
+                        
+            except Exception as e:
+                logger.error(f"External database search failed: {e}")
+                # Continue with regular search results even if external search fails
+        
+        if not retrieved_results and not external_context:
             return QueryResponse(
                 response="I couldn't find any relevant information to answer your question in the searched sources.",
                 error=None,
@@ -620,15 +729,19 @@ def process_query(question: str, session_id: str, user_id: Optional[str], search
         # Choose the appropriate prompt based on question type
         if is_statutory:
             prompt = create_statutory_prompt(context_text, question, conversation_context, 
-                                           sources_searched, retrieval_method, document_id)
+                                           sources_searched, retrieval_method, document_id,
+                                           external_context)
         else:
             prompt = create_regular_prompt(context_text, question, conversation_context, 
-                                         sources_searched, retrieval_method, document_id, instruction)
+                                         sources_searched, retrieval_method, document_id, 
+                                         instruction, external_context)
         
         if FeatureFlags.AI_ENABLED and OPENROUTER_API_KEY:
             response_text = call_openrouter_api(prompt, OPENROUTER_API_KEY)
         else:
             response_text = f"Based on the retrieved documents:\n\n{context_text}\n\nPlease review this information to answer your question."
+            if external_context:
+                response_text += f"\n\n{external_context}"
         
         relevant_sources = [s for s in source_info if s['relevance'] >= MIN_RELEVANCE_SCORE]
         
@@ -636,8 +749,14 @@ def process_query(question: str, session_id: str, user_id: Optional[str], search
             response_text += "\n\n**SOURCES:**"
             for source in relevant_sources:
                 source_type = source['source_type'].replace('_', ' ').title()
-                page_info = f", Page {source['page']}" if source['page'] is not None else ""
-                response_text += f"\n- [{source_type}] {source['file_name']}{page_info} (Relevance: {source['relevance']:.2f})"
+                
+                if source_type == 'External Database':
+                    response_text += f"\n- [{source['database'].upper()}] {source['file_name']}"
+                    if source.get('url'):
+                        response_text += f" - [View Full Text]({source['url']})"
+                else:
+                    page_info = f", Page {source['page']}" if source['page'] is not None else ""
+                    response_text += f"\n- [{source_type}] {source['file_name']}{page_info} (Relevance: {source['relevance']:.2f})"
         
         confidence_score = calculate_confidence_score(retrieved_results, len(response_text))
         
