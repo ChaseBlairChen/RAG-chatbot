@@ -22,7 +22,7 @@ def get_current_user(credentials: Optional[HTTPAuthorizationCredentials] = Depen
         return user_sessions[default_user_id]
     
     token = credentials.credentials
-    user_id = f"user_{token[:8]}`
+    user_id = f"user_{token[:8]}"
     
     if user_id not in user_sessions:
         from ..services.container_manager import get_container_manager
