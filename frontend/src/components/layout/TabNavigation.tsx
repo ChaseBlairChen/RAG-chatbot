@@ -20,6 +20,7 @@ export const TabNavigation: React.FC<TabNavigationProps> = ({
   activeTab,
   setActiveTab,
   userDocumentsCount,
+  analysisResultsCount,
   isBackendConfigured
 }) => {
   const tabs: Tab[] = [
@@ -27,6 +28,7 @@ export const TabNavigation: React.FC<TabNavigationProps> = ({
     { id: 'upload', label: 'Upload & Analyze', icon: '📤' },
     { id: 'documents', label: 'My Documents', icon: '📁', badge: userDocumentsCount > 0 ? userDocumentsCount : null },
     { id: 'analysis', label: 'Analysis Tools', icon: '🔍' },
+    { id: 'results', label: 'Results', icon: '📊', badge: analysisResultsCount > 0 ? analysisResultsCount : null },
   ];
 
   return (
