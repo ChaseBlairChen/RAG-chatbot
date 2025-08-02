@@ -154,5 +154,9 @@ def initialize_feature_flags():
         FeatureFlags.UNSTRUCTURED_AVAILABLE = False
         print("⚠️ Unstructured not available - install unstructured")
 
+# Free Legal Database Configuration
+COURTLISTENER_API_KEY = os.environ.get("COURTLISTENER_API_KEY", "")  # Optional - increases rate limits
+
 # Initialize feature flags when module is imported
 initialize_feature_flags()
+
