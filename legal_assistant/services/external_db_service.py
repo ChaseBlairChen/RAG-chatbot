@@ -2,13 +2,129 @@ import requests
 import logging
 from typing import List, Dict, Optional
 from abc import ABC, abstractmethod
-
-# Add at the top with other imports
 import os
 
 logger = logging.getLogger(__name__)
 
-# Add after the existing interfaces:
+class LegalDatabaseInterface(ABC):
+    """Abstract base class for legal database interfaces"""
+    
+    @abstractmethod
+    def authenticate(self, credentials: Dict) -> bool:
+        """Authenticate with the legal database"""
+        pass
+    
+    @abstractmethod
+    def search(self, query: str, filters: Optional[Dict] = None) -> List[Dict]:
+        """Search the legal database"""
+        pass
+    
+    @abstractmethod
+    def get_document(self, document_id: str) -> Dict:
+        """Retrieve a specific document"""
+        pass
+
+
+class LexisNexisInterface(LegalDatabaseInterface):
+    """Interface for LexisNexis legal database"""
+    
+    def __init__(self):
+        self.api_key = os.environ.get("LEXISNEXIS_API_KEY")
+        self.api_endpoint = os.environ.get("LEXISNEXIS_API_ENDPOINT", "https://api.lexisnexis.com/v1")
+        self.authenticated = False
+    
+    def authenticate(self, credentials: Dict) -> bool:
+        """Authenticate with LexisNexis"""
+        try:
+            # Placeholder for actual authentication
+            if self.api_key:
+                self.authenticated = True
+                return True
+            return False
+        except Exception as e:
+            logger.error(f"LexisNexis authentication failed: {e}")
+            return False
+    
+    def search(self, query: str, filters: Optional[Dict] = None) -> List[Dict]:
+        """Search LexisNexis database"""
+        if not self.authenticated:
+            logger.warning("Not authenticated with LexisNexis")
+            return []
+        
+        try:
+            # Placeholder for actual API call
+            # In production, this would make real API requests
+            return [{
+                'title': f'LexisNexis Result for: {query}',
+                'source': 'LexisNexis',
+                'preview': 'This would contain actual search results',
+                'source_database': 'lexisnexis'
+            }]
+        except Exception as e:
+            logger.error(f"LexisNexis search failed: {e}")
+            return []
+    
+    def get_document(self, document_id: str) -> Dict:
+        """Get document from LexisNexis"""
+        if not self.authenticated:
+            return {}
+        
+        # Placeholder for actual implementation
+        return {
+            'id': document_id,
+            'content': 'Document content would be here',
+            'source': 'LexisNexis'
+        }
+
+
+class WestlawInterface(LegalDatabaseInterface):
+    """Interface for Westlaw legal database"""
+    
+    def __init__(self):
+        self.api_key = os.environ.get("WESTLAW_API_KEY")
+        self.api_endpoint = os.environ.get("WESTLAW_API_ENDPOINT", "https://api.westlaw.com/v1")
+        self.authenticated = False
+    
+    def authenticate(self, credentials: Dict) -> bool:
+        """Authenticate with Westlaw"""
+        try:
+            if self.api_key:
+                self.authenticated = True
+                return True
+            return False
+        except Exception as e:
+            logger.error(f"Westlaw authentication failed: {e}")
+            return False
+    
+    def search(self, query: str, filters: Optional[Dict] = None) -> List[Dict]:
+        """Search Westlaw database"""
+        if not self.authenticated:
+            logger.warning("Not authenticated with Westlaw")
+            return []
+        
+        try:
+            # Placeholder for actual API call
+            return [{
+                'title': f'Westlaw Result for: {query}',
+                'source': 'Westlaw',
+                'preview': 'This would contain actual search results',
+                'source_database': 'westlaw'
+            }]
+        except Exception as e:
+            logger.error(f"Westlaw search failed: {e}")
+            return []
+    
+    def get_document(self, document_id: str) -> Dict:
+        """Get document from Westlaw"""
+        if not self.authenticated:
+            return {}
+        
+        return {
+            'id': document_id,
+            'content': 'Document content would be here',
+            'source': 'Westlaw'
+        }
+
 
 class HarvardCaselawInterface(LegalDatabaseInterface):
     """Harvard Caselaw Access Project - Completely Free"""
@@ -196,7 +312,7 @@ class JustiaInterface(LegalDatabaseInterface):
         return {"note": "Justia requires web scraping for document retrieval"}
 
 
-# Update the external_databases dictionary
+# Dictionary of available external databases
 external_databases = {
     "lexisnexis": LexisNexisInterface(),
     "westlaw": WestlawInterface(),
@@ -205,7 +321,31 @@ external_databases = {
     "justia": JustiaInterface()
 }
 
-# Add a function to search all free databases
+
+def search_external_databases(query: str, databases: List[str], user: 'User') -> List[Dict]:
+    """Search specified external databases"""
+    all_results = []
+    
+    for db_name in databases:
+        if db_name in external_databases:
+            try:
+                db_interface = external_databases[db_name]
+                
+                # Authenticate if needed
+                if hasattr(db_interface, 'authenticated') and not db_interface.authenticated:
+                    db_interface.authenticate({})
+                
+                # Search
+                results = db_interface.search(query)
+                all_results.extend(results)
+                logger.info(f"Found {len(results)} results from {db_name}")
+                
+            except Exception as e:
+                logger.error(f"Error searching {db_name}: {e}")
+    
+    return all_results
+
+
 def search_free_legal_databases(query: str, user: 'User') -> List[Dict]:
     """Search all free legal databases"""
     free_databases = ["harvard_caselaw", "courtlistener", "justia"]
