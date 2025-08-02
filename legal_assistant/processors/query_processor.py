@@ -642,6 +642,128 @@ ADDITIONAL GUIDANCE:
 
 RESPONSE:"""
 
+def consolidate_sources(source_info: List[Dict]) -> List[Dict]:
+    """Consolidate multiple chunks from the same document into meaningful source entries"""
+    from collections import defaultdict
+    
+    # Group sources by document
+    document_groups = defaultdict(list)
+    
+    for source in source_info:
+        key = (source['file_name'], source['source_type'])
+        document_groups[key].append(source)
+    
+    consolidated_sources = []
+    
+    for (file_name, source_type), sources in document_groups.items():
+        if source_type == 'external_database':
+            # External sources should not be consolidated - each is unique
+            consolidated_sources.extend(sources)
+        else:
+            # For internal documents, consolidate chunks
+            relevance_scores = [s['relevance'] for s in sources]
+            max_relevance = max(relevance_scores)
+            avg_relevance = sum(relevance_scores) / len(relevance_scores)
+            
+            # Get unique pages if available
+            pages = [s['page'] for s in sources if s.get('page') is not None]
+            unique_pages = sorted(set(pages)) if pages else []
+            
+            # Get chunk information if available
+            chunk_indices = []
+            for s in sources:
+                if 'chunk_index' in s:
+                    chunk_indices.append(s['chunk_index'])
+                elif 'metadata' in s and 'chunk_index' in s['metadata']:
+                    chunk_indices.append(s['metadata']['chunk_index'])
+            
+            consolidated_source = {
+                'file_name': file_name,
+                'source_type': source_type,
+                'relevance': max_relevance,
+                'avg_relevance': avg_relevance,
+                'num_chunks': len(sources),
+                'pages': unique_pages,
+                'chunk_indices': sorted(set(chunk_indices)) if chunk_indices else [],
+                'chunk_details': sources  # Keep original chunks for reference
+            }
+            
+            consolidated_sources.append(consolidated_source)
+    
+    # Sort by relevance
+    consolidated_sources.sort(key=lambda x: x.get('relevance', 0), reverse=True)
+    
+    return consolidated_sources
+
+def format_source_display(source: Dict) -> str:
+    """Format a source for display in the response"""
+    source_type = source['source_type'].replace('_', ' ').title()
+    
+    if source_type == 'External Database':
+        # Use the citation format for external sources
+        display = f"- {source['file_name']}"
+        if source.get('database'):
+            db_name = source['database']
+            if 'harvard' in db_name.lower():
+                display += " [Harvard Law School Library - Caselaw Access Project]"
+            elif 'courtlistener' in db_name.lower():
+                display += " [Free Law Project - CourtListener]"
+            elif 'scholar' in db_name.lower() or 'google' in db_name.lower():
+                display += " [Google Scholar]"
+            else:
+                display += f" [{db_name}]"
+        if source.get('url'):
+            display += f" - [Full Text]({source['url']})"
+        return display
+    else:
+        # Internal document format
+        display = f"- {source['file_name']}"
+        
+        # Add page information if available
+        if source.get('pages'):
+            if len(source['pages']) == 1:
+                display += f" (Page {source['pages'][0]})"
+            elif len(source['pages']) > 1:
+                if len(source['pages']) <= 3:
+                    display += f" (Pages {', '.join(map(str, source['pages']))})"
+                else:
+                    display += f" (Pages {source['pages'][0]}-{source['pages'][-1]})"
+        
+        # Add chunk information if no page info
+        elif source.get('num_chunks', 1) > 1:
+            display += f" ({source['num_chunks']} relevant sections)"
+        
+        # Add relevance score with interpretation
+        # Check if relevance is already in 0-100 range or needs conversion
+        relevance = source['relevance']
+        if relevance <= 1.0:
+            # Convert from 0-1 to 0-100 scale
+            relevance_pct = relevance * 100
+        else:
+            # Already in percentage scale
+            relevance_pct = relevance
+            
+        if relevance_pct >= 80:
+            relevance_label = "Excellent match"
+        elif relevance_pct >= 60:
+            relevance_label = "Good match"
+        elif relevance_pct >= 40:
+            relevance_label = "Fair match"
+        else:
+            relevance_label = "Partial match"
+        
+        if source.get('avg_relevance') and source['num_chunks'] > 1:
+            avg = source['avg_relevance']
+            if avg <= 1.0:
+                avg_pct = avg * 100
+            else:
+                avg_pct = avg
+            display += f" ({relevance_label}: {relevance_pct:.0f}/100, Avg: {avg_pct:.0f}/100)"
+        else:
+            display += f" ({relevance_label}: {relevance_pct:.0f}/100)"
+        
+        return display
+
 def process_query(question: str, session_id: str, user_id: Optional[str], search_scope: str, 
                  response_style: str = "balanced", use_enhanced_rag: bool = True, 
                  document_id: str = None, search_external: bool = None) -> QueryResponse:
@@ -798,6 +920,13 @@ def process_query(question: str, session_id: str, user_id: Optional[str], search
         max_context_length = 8000 if is_statutory else 3000
         context_text, source_info = format_context_for_llm(retrieved_results, max_length=max_context_length)
         
+        # Add metadata to source_info for better consolidation
+        for i, (doc, score) in enumerate(retrieved_results[:len(source_info)]):
+            if hasattr(doc, 'metadata'):
+                source_info[i]['metadata'] = doc.metadata
+                if 'chunk_index' in doc.metadata:
+                    source_info[i]['chunk_index'] = doc.metadata['chunk_index']
+        
         # Combine source info from both internal and external sources
         all_source_info = source_info + external_source_info
         
@@ -876,29 +1005,14 @@ def process_query(question: str, session_id: str, user_id: Optional[str], search
         
         relevant_sources = [s for s in all_source_info if s['relevance'] >= MIN_RELEVANCE_SCORE]
         
-        if relevant_sources:
+        # Consolidate duplicate sources
+        consolidated_sources = consolidate_sources(relevant_sources)
+        
+        if consolidated_sources:
             response_text += "\n\n**SOURCES:**"
-            for source in relevant_sources:
-                source_type = source['source_type'].replace('_', ' ').title()
-                
-                if source_type == 'External Database':
-                    # Use the citation format for external sources
-                    response_text += f"\n- {source['file_name']}"
-                    if source.get('database'):
-                        db_name = source['database']
-                        if 'harvard' in db_name.lower():
-                            response_text += " [Harvard Law School Library - Caselaw Access Project]"
-                        elif 'courtlistener' in db_name.lower():
-                            response_text += " [Free Law Project - CourtListener]"
-                        elif 'scholar' in db_name.lower() or 'google' in db_name.lower():
-                            response_text += " [Google Scholar]"
-                        else:
-                            response_text += f" [{db_name}]"
-                    if source.get('url'):
-                        response_text += f" - [Full Text]({source['url']})"
-                else:
-                    page_info = f", Page {source['page']}" if source['page'] is not None else ""
-                    response_text += f"\n- [{source_type}] {source['file_name']}{page_info} (Relevance: {source['relevance']:.2f})"
+            response_text += "\n*Relevance scores range from 0-100, where higher scores indicate better matches to your query.*"
+            for source in consolidated_sources:
+                response_text += "\n" + format_source_display(source)
         
         confidence_score = calculate_confidence_score(retrieved_results, len(response_text))
         
