@@ -20,6 +20,10 @@ LEXISNEXIS_API_ENDPOINT = os.environ.get("LEXISNEXIS_API_ENDPOINT")
 WESTLAW_API_KEY = os.environ.get("WESTLAW_API_KEY")
 WESTLAW_API_ENDPOINT = os.environ.get("WESTLAW_API_ENDPOINT")
 
+# Harvard Legal Library Configuration (NEW)
+HARVARD_LEGAL_API_KEY = os.environ.get("HARVARD_LEGAL_API_KEY")
+HARVARD_LEGAL_API_ENDPOINT = os.environ.get("HARVARD_LEGAL_API_ENDPOINT", "https://api.case.law/v1")
+
 # Model Names
 EMBEDDING_MODELS = [
     "nlpaueb/legal-bert-base-uncased",
@@ -57,7 +61,7 @@ LEGISLATIVE_CHUNK_OVERLAP = 300  # Reduced from 500
 DEFAULT_SEARCH_K = 15  # Increased from 10
 ENHANCED_SEARCH_K = 20  # Increased from 12
 COMPREHENSIVE_SEARCH_K = 30  # Increased from 20
-MIN_RELEVANCE_SCORE = 0.3  # Increased from 0.15 - much stricter!
+MIN_RELEVANCE_SCORE = 0.1  # CHANGED from 0.3 to be more permissive
 
 # Confidence Score Weights - REBALANCED
 CONFIDENCE_WEIGHTS = {
@@ -70,12 +74,12 @@ CONFIDENCE_WEIGHTS = {
 # Add new search configuration
 SEARCH_CONFIG = {
     "rerank_enabled": True,
-    "hybrid_search_enabled": True,
+    "hybrid_search_enabled": False,  # CHANGED to False to disable hybrid search
     "keyword_weight": 0.3,
     "semantic_weight": 0.7,
     "max_results_to_rerank": 50,
     "query_expansion_enabled": True,
-    "min_score_threshold": 0.3,
+    "min_score_threshold": 0.1,  # CHANGED from 0.3 to be more permissive
     "boost_exact_matches": True,
     "boost_factor": 1.5
 }
@@ -89,7 +93,7 @@ class FeatureFlags:
     PDFPLUMBER_AVAILABLE: bool = False
     UNSTRUCTURED_AVAILABLE: bool = False
     OCR_AVAILABLE: bool = False
-    
+    HYBRID_SEARCH_AVAILABLE: bool = False  # CHANGED to False to disable hybrid search
 
 def initialize_feature_flags():
     """Initialize feature flags by checking for available dependencies"""
@@ -104,14 +108,9 @@ def initialize_feature_flags():
         FeatureFlags.OCR_AVAILABLE = False
         print("⚠️ OCR not available - install pytesseract and pdf2image")
 
-    # Check hybrid search
-    try:
-        import rank_bm25
-        FeatureFlags.HYBRID_SEARCH_AVAILABLE = True
-        print("✅ Hybrid search available - better retrieval accuracy")
-    except ImportError:
-        FeatureFlags.HYBRID_SEARCH_AVAILABLE = False
-        print("⚠️ Hybrid search not available - install rank-bm25")
+    # Hybrid search is now disabled by default
+    FeatureFlags.HYBRID_SEARCH_AVAILABLE = False
+    print("⚠️ Hybrid search disabled for better performance")
     
     # Check existing features
     try:
@@ -157,4 +156,3 @@ def initialize_feature_flags():
 
 # Initialize feature flags when module is imported
 initialize_feature_flags()
-
