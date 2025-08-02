@@ -66,3 +66,13 @@ if __name__ == "__main__":
     logger.info("Version: 10.0.0-SmartRAG-ComprehensiveAnalysis")
     logger.info("📁 MODULAR ARCHITECTURE - Clean separation of concerns!")
     uvicorn.run("legal_assistant.main:app", host="0.0.0.0", port=port, reload=True)
+from .api.routers import query, documents, analysis, admin, health, external
+
+# Include routers
+app.include_router(query.router, tags=["queries"])
+app.include_router(documents.router, tags=["documents"])
+app.include_router(analysis.router, tags=["analysis"])
+app.include_router(admin.router, prefix="/admin", tags=["admin"])
+app.include_router(external.router, prefix="/external", tags=["external"])  # Add this
+app.include_router(health.router, tags=["health"])
+
