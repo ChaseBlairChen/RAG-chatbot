@@ -1,4 +1,4 @@
-// contexts/BackendContext.tsx
+// src/contexts/BackendContext.tsx
 import React, { createContext, useContext, useState, useEffect } from 'react';
 import type { ReactNode } from 'react';
 import type { BackendCapabilities } from '../types';
@@ -68,20 +68,24 @@ export const BackendProvider: React.FC<BackendProviderProps> = ({ children }) =>
       }
 
       const healthData = await healthResponse.json();
+      console.log('Backend health response:', healthData); // Debug log
       
-      if (healthData.version && healthData.version.includes("SmartRAG")) {
+      // Check if this is the legal assistant backend - match your actual response
+      if (healthData.status === 'healthy' && healthData.features) {
         setBackendCapabilities({
           hasChat: true,
           hasDocumentAnalysis: true,
-          enhancedRag: healthData.components?.enhanced_rag?.enabled || false,
-          userContainers: healthData.components?.user_containers?.enabled || false,
-          version: healthData.version,
+          enhancedRag: healthData.features.ai_enabled || false,
+          userContainers: true,
+          version: 'Legal Assistant Backend v10.0.0',
           subscriptionTier: currentUser?.subscription_tier || 'free'
         });
         setIsBackendConfigured(true);
         setConnectionError('');
+        console.log('✅ Backend connected successfully');
+        console.log('🔥 Backend features:', healthData.features);
       } else {
-        throw new Error("Backend doesn't support Smart RAG features");
+        throw new Error(`Backend response format: ${JSON.stringify(healthData)}`);
       }
     } catch (error: unknown) {
       console.error('Failed to check backend capabilities:', error);
