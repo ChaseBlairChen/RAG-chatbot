@@ -1,227 +1,124 @@
-// src/App.tsx
-import React, { useState, useEffect, useMemo } from 'react';
-import { AuthProvider, useAuth } from './contexts/AuthContext';
-import { BackendProvider, useBackend } from './contexts/BackendContext';
-import { ApiService } from './services/api';
-import { LoginScreen } from './components/auth/LoginScreen';
-import { AppHeader } from './components/layout/AppHeader';
-import { BackendWarning } from './components/layout/BackendWarning';
-import { SidebarNavigation } from './components/layout/SidebarNavigation';
-import { DisconnectedView } from './components/layout/DisconnectedView';
-import { ChatTab } from './components/chat/ChatTab';
-import { UploadTab } from './components/upload/UploadTab';
-import { DocumentsTab } from './components/documents/DocumentsTab';
-import { AnalysisTab } from './components/analysis/AnalysisTab';
-import { ResultsTab } from './components/results/ResultsTab';
-import { LegalDatabaseSearch } from './components/legal/LegalDatabaseSearch';
-import { ImmigrationTools } from './components/immigration/ImmigrationTools';
-import { SystemHealth } from './components/system/SystemHealth';
-import { AdminPanel } from './components/admin/AdminPanel';
-import { useChat } from './hooks/useChat';
-import { useDocuments } from './hooks/useDocuments';
-import { useAnalysis } from './hooks/useAnalysis';
+// src/components/layout/SidebarNavigation.tsx
+import React from 'react';
 
-function MainApp() {
-  const { isLoggedIn, currentUser, apiToken } = useAuth();
-  const { backendUrl, isBackendConfigured } = useBackend();
-  const [activeTab, setActiveTab] = useState('chat');
+interface Tab {
+  id: string;
+  label: string;
+  icon: string;
+  badge?: number | null;
+  adminOnly?: boolean;
+}
 
-  // Create API service instance
-  const apiService = useMemo(() => {
-    return new ApiService(backendUrl, apiToken);
-  }, [backendUrl, apiToken]);
+interface SidebarNavigationProps {
+  activeTab: string;
+  setActiveTab: (tab: string) => void;
+  userDocumentsCount: number;
+  analysisResultsCount: number;
+  isBackendConfigured: boolean;
+}
 
-  // Use hooks
-  const { messages, isLoading, sessionId, sendMessage, addWelcomeMessage } = useChat(apiService);
-  const {
-    userDocuments,
-    documentAnalyses,
-    uploadQueue,
-    currentlyUploading,
-    uploadProgress,
-    uploadResults,
-    uploadStatuses,
-    setDocumentAnalyses,
-    loadUserDocuments,
-    handleFileUpload,
-    uploadAllDocuments,
-    deleteDocument,
-    removeFromQueue,
-    clearQueue,
-    clearStatuses
-  } = useDocuments(apiService, isBackendConfigured);
-  
-  const {
-    analysisResults,
-    isAnalyzing,
-    selectedDocumentForAnalysis,
-    setSelectedDocumentForAnalysis,
-    runAnalysis,
-    runComprehensiveDocumentAnalysis,
-    downloadResult,
-    clearResults
-  } = useAnalysis(apiService, documentAnalyses, setDocumentAnalyses, sessionId, currentUser?.user_id);
-
-  // Initialize welcome message
-  useEffect(() => {
-    if (isLoggedIn && currentUser && messages.length === 0) {
-      addWelcomeMessage(currentUser.username);
-    }
-  }, [isLoggedIn, currentUser, messages.length, addWelcomeMessage]);
-
-  // Load documents when backend is configured
-  useEffect(() => {
-    if (isBackendConfigured) {
-      loadUserDocuments();
-    }
-  }, [isBackendConfigured, loadUserDocuments]);
-
-  // Handle logout cleanup
-  useEffect(() => {
-    if (!isLoggedIn) {
-      clearStatuses();
-      clearResults();
-    }
-  }, [isLoggedIn, clearStatuses, clearResults]);
-
-  // Handle upload and analysis
-  const handleUploadAll = async (runAnalysisAfter: boolean) => {
-    const uploadedDocIds = await uploadAllDocuments(runAnalysisAfter);
-    
-    if (runAnalysisAfter && uploadedDocIds.length > 0) {
-      setActiveTab('results');
-      
-      // Wait for processing to complete before running analysis
-      setTimeout(async () => {
-        for (const docId of uploadedDocIds) {
-          try {
-            await runComprehensiveDocumentAnalysis(docId);
-          } catch (analysisError) {
-            console.error(`Analysis failed for document ${docId}:`, analysisError);
-          }
-        }
-      }, 5000);
-    } else if (uploadedDocIds.length > 0) {
-      setActiveTab('documents');
-    }
-  };
-
-  if (!isLoggedIn) {
-    return <LoginScreen />;
-  }
+export const SidebarNavigation: React.FC<SidebarNavigationProps> = ({
+  activeTab,
+  setActiveTab,
+  userDocumentsCount,
+  analysisResultsCount,
+  isBackendConfigured
+}) => {
+  const tabs: Tab[] = [
+    { id: 'chat', label: 'Smart Chat', icon: '💬' },
+    { id: 'upload', label: 'Upload & Analyze', icon: '📤' },
+    { id: 'documents', label: 'My Documents', icon: '📁', badge: userDocumentsCount > 0 ? userDocumentsCount : null },
+    { id: 'analysis', label: 'Analysis Tools', icon: '🔍' },
+    { id: 'results', label: 'Results', icon: '📊', badge: analysisResultsCount > 0 ? analysisResultsCount : null },
+    { id: 'legal-search', label: 'Legal Search', icon: '⚖️' },
+    { id: 'immigration', label: 'Immigration', icon: '🗽' },
+    { id: 'system-health', label: 'System Health', icon: '🏥' },
+    { id: 'admin', label: 'Admin', icon: '🔧', adminOnly: true },
+  ];
 
   return (
-    <div className="flex h-screen bg-stone-50">
-      {/* Sidebar Navigation */}
-      <SidebarNavigation
-        activeTab={activeTab}
-        setActiveTab={setActiveTab}
-        userDocumentsCount={userDocuments.length}
-        analysisResultsCount={analysisResults.length}
-        isBackendConfigured={isBackendConfigured}
-      />
-
-      {/* Main Content Area */}
-      <div className="flex-1 flex flex-col overflow-hidden">
-        <AppHeader sessionId={sessionId} />
-        <BackendWarning />
-
-        {/* Content */}
-        <div className="flex-1 overflow-auto">
-          <div className="p-6 max-w-full">
-            {!isBackendConfigured ? (
-              <DisconnectedView />
-            ) : (
-              <>
-                {activeTab === 'chat' && (
-                  <ChatTab
-                    messages={messages}
-                    isLoading={isLoading}
-                    sessionId={sessionId}
-                    sendMessage={sendMessage}
-                  />
-                )}
-                
-                {activeTab === 'upload' && (
-                  <UploadTab
-                    uploadQueue={uploadQueue}
-                    currentlyUploading={currentlyUploading}
-                    uploadProgress={uploadProgress}
-                    uploadResults={uploadResults}
-                    uploadStatuses={uploadStatuses}
-                    isAnalyzing={isAnalyzing}
-                    onFileSelect={handleFileUpload}
-                    onRemoveFromQueue={removeFromQueue}
-                    onClearQueue={clearQueue}
-                    onUploadAll={handleUploadAll}
-                    onSetActiveTab={setActiveTab}
-                  />
-                )}
-                
-                {activeTab === 'documents' && (
-                  <DocumentsTab
-                    documentAnalyses={documentAnalyses}
-                    userDocuments={userDocuments}
-                    isAnalyzing={isAnalyzing}
-                    onAnalyze={runComprehensiveDocumentAnalysis}
-                    onDelete={deleteDocument}
-                    onSetActiveTab={setActiveTab}
-                  />
-                )}
-                
-                {activeTab === 'analysis' && (
-                  <AnalysisTab
-                    userDocuments={userDocuments}
-                    documentAnalyses={documentAnalyses}
-                    isAnalyzing={isAnalyzing}
-                    selectedDocument={selectedDocumentForAnalysis}
-                    setSelectedDocument={setSelectedDocumentForAnalysis}
-                    onRunAnalysis={runAnalysis}
-                    onSetActiveTab={setActiveTab}
-                  />
-                )}
-                
-                {activeTab === 'results' && (
-                  <ResultsTab
-                    analysisResults={analysisResults}
-                    isAnalyzing={isAnalyzing}
-                    onRerunAnalysis={runComprehensiveDocumentAnalysis}
-                    onDownloadResult={(id) => downloadResult(id, currentUser)}
-                    onClearResults={clearResults}
-                    onSetActiveTab={setActiveTab}
-                  />
-                )}
-                
-                {activeTab === 'legal-search' && (
-                  <LegalDatabaseSearch />
-                )}
-                
-                {activeTab === 'immigration' && (
-                  <ImmigrationTools />
-                )}
-                
-                {activeTab === 'system-health' && (
-                  <SystemHealth />
-                )}
-                
-                {activeTab === 'admin' && (
-                  <AdminPanel />
-                )}
-              </>
-            )}
+    <nav className="w-64 bg-white border-r border-gray-200 shadow-sm flex flex-col h-full">
+      {/* Sidebar Header */}
+      <div className="p-6 border-b border-gray-200">
+        <div className="flex items-center gap-3">
+          <div className="w-10 h-10 bg-stone-200 rounded-xl flex items-center justify-center shadow-sm">
+            <svg className="w-6 h-6 text-stone-700" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M3 6l3 1m0 0l-3 9a5.002 5.002 0 006.001 0M6 7l3 9M6 7l6-2m6 2l3-1m-3 1l-3 9a5.002 5.002 0 006.001 0M18 7l3 9m-3-9l-6-2m0-2v2m0 16V5m0 16H9m3 0h3" />
+            </svg>
+          </div>
+          <div>
+            <h1 className="text-lg font-semibold text-gray-900">Legally</h1>
+            <p className="text-xs text-gray-500">— powered by AI</p>
           </div>
         </div>
       </div>
-    </div>
-  );
-}
 
-export default function App() {
-  return (
-    <AuthProvider>
-      <BackendProvider>
-        <MainApp />
-      </BackendProvider>
-    </AuthProvider>
+      {/* Navigation Items */}
+      <div className="flex-1 py-6 px-3 space-y-1 overflow-y-auto">
+        {tabs.map(tab => (
+          <button
+            key={tab.id}
+            onClick={() => setActiveTab(tab.id)}
+            disabled={!isBackendConfigured}
+            className={`w-full flex items-center gap-3 px-3 py-3 text-left rounded-xl transition-all duration-200 group ${
+              activeTab === tab.id
+                ? 'bg-slate-900 text-white shadow-lg transform scale-[0.98]'
+                : 'text-gray-700 hover:bg-gray-50 hover:text-gray-900'
+            } ${!isBackendConfigured ? 'cursor-not-allowed opacity-50' : 'cursor-pointer'} ${
+              tab.adminOnly && activeTab !== tab.id ? 'hover:bg-red-50 hover:text-red-700' : ''
+            }`}
+          >
+            <span className={`text-xl transition-transform duration-200 ${
+              activeTab === tab.id ? 'scale-110' : 'group-hover:scale-105'
+            }`}>
+              {tab.icon}
+            </span>
+            
+            <div className="flex-1 min-w-0">
+              <span className={`text-sm font-medium block truncate ${
+                tab.adminOnly && activeTab !== tab.id ? 'text-red-600' : ''
+              }`}>
+                {tab.label}
+              </span>
+              {tab.adminOnly && (
+                <span className="text-xs text-red-500 opacity-75">Admin Only</span>
+              )}
+            </div>
+
+            {tab.badge && (
+              <span className={`text-xs font-medium px-2 py-1 rounded-full ${
+                activeTab === tab.id
+                  ? 'bg-white text-slate-900'
+                  : 'bg-slate-900 text-white'
+              }`}>
+                {tab.badge}
+              </span>
+            )}
+
+            {tab.adminOnly && (
+              <span className="text-xs bg-red-100 text-red-700 px-2 py-1 rounded-full">
+                🔒
+              </span>
+            )}
+          </button>
+        ))}
+      </div>
+
+      {/* Backend Status Footer */}
+      <div className="p-3 border-t border-gray-200">
+        <div className={`flex items-center gap-2 px-3 py-2 rounded-lg text-xs ${
+          isBackendConfigured 
+            ? 'bg-emerald-50 text-emerald-700 border border-emerald-200' 
+            : 'bg-rose-50 text-rose-700 border border-rose-200'
+        }`}>
+          <div className={`w-2 h-2 rounded-full ${
+            isBackendConfigured ? 'bg-emerald-500 animate-pulse' : 'bg-rose-500 animate-pulse'
+          }`} />
+          <span className="font-medium">
+            {isBackendConfigured ? 'Connected' : 'Disconnected'}
+          </span>
+        </div>
+      </div>
+    </nav>
   );
-}
+};
