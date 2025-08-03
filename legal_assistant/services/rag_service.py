@@ -19,6 +19,31 @@ from ..utils.text_processing import remove_duplicate_documents
 
 logger = logging.getLogger(__name__)
 
+def normalize_score(score: float) -> float:
+    """Normalize score to 0-1 range"""
+    # Handle different score ranges that might come from different sources
+    if score > 1.0:
+        # Assume it's in 0-100 range or similar, normalize to 0-1
+        if score <= 100.0:
+            return score / 100.0
+        else:
+            # For very large scores, use log normalization
+            return min(1.0, np.log(score + 1) / np.log(101))
+    elif score < 0.0:
+        # Handle negative scores (distance-based metrics)
+        return max(0.0, 1.0 + score)
+    else:
+        # Already in 0-1 range
+        return score
+
+def normalize_results(results: List[Tuple]) -> List[Tuple]:
+    """Normalize all scores in results to 0-1 range"""
+    normalized_results = []
+    for doc, score in results:
+        normalized_score = normalize_score(score)
+        normalized_results.append((doc, normalized_score))
+    return normalized_results
+
 def load_database():
     """Load the default database"""
     try:
@@ -44,10 +69,12 @@ def enhanced_retrieval_v2(db, query_text: str, conversation_history_context: str
     
     try:
         direct_results = db.similarity_search_with_score(query_text, k=k, filter=document_filter)
+        direct_results = normalize_results(direct_results)
         logger.info(f"[ENHANCED_RETRIEVAL] Direct search returned {len(direct_results)} results")
         
         expanded_query = f"{query_text} {conversation_history_context}"
         expanded_results = db.similarity_search_with_score(expanded_query, k=k, filter=document_filter)
+        expanded_results = normalize_results(expanded_results)
         logger.info(f"[ENHANCED_RETRIEVAL] Expanded search returned {len(expanded_results)} results")
         
         sub_queries = []
@@ -67,6 +94,7 @@ def enhanced_retrieval_v2(db, query_text: str, conversation_history_context: str
         sub_query_results = []
         for sq in sub_queries[:3]:
             sq_results = db.similarity_search_with_score(sq, k=3, filter=document_filter)
+            sq_results = normalize_results(sq_results)
             sub_query_results.extend(sq_results)
         
         logger.info(f"[ENHANCED_RETRIEVAL] Sub-query search returned {len(sub_query_results)} results")
@@ -81,6 +109,7 @@ def enhanced_retrieval_v2(db, query_text: str, conversation_history_context: str
     except Exception as e:
         logger.error(f"[ENHANCED_RETRIEVAL] Error in enhanced retrieval: {e}")
         basic_results = db.similarity_search_with_score(query_text, k=k, filter=document_filter)
+        basic_results = normalize_results(basic_results)
         return basic_results, "basic_fallback"
 
 def enhanced_retrieval_v3(db, query_text: str, conversation_history_context: str, 
@@ -103,6 +132,9 @@ def enhanced_retrieval_v3(db, query_text: str, conversation_history_context: str
                 k=k * 2,  # Get more results for filtering
                 filter=document_filter
             )
+            
+            # Normalize scores immediately
+            results = normalize_results(results)
             
             # Deduplicate and filter by relevance
             for doc, score in results:
@@ -141,6 +173,7 @@ def enhanced_retrieval_v3(db, query_text: str, conversation_history_context: str
         logger.error(f"[ENHANCED_RETRIEVAL_V3] Error: {e}")
         # Fallback to basic search
         results = db.similarity_search_with_score(query_text, k=k, filter=document_filter)
+        results = normalize_results(results)
         return [(doc, score) for doc, score in results if score >= MIN_RELEVANCE_SCORE], "basic_fallback"
 
 def expand_query_intelligently(query: str) -> List[str]:
@@ -194,23 +227,28 @@ def extract_key_terms(query: str) -> List[str]:
     return key_terms
 
 def boost_score_for_exact_matches(query: str, content: str, base_score: float) -> float:
-    """Boost score for exact matches"""
+    """Boost score for exact matches - ensures output stays in 0-1 range"""
     query_lower = query.lower()
     content_lower = content.lower()
     
+    # Ensure base_score is normalized
+    base_score = normalize_score(base_score)
+    
     # Check for exact phrase match
     if query_lower in content_lower:
-        return min(1.0, base_score * SEARCH_CONFIG["boost_factor"])
+        boosted_score = base_score * SEARCH_CONFIG["boost_factor"]
+        return min(1.0, boosted_score)
     
     # Check for all query terms present
     query_terms = extract_key_terms(query)
-    if all(term in content_lower for term in query_terms):
-        return min(1.0, base_score * 1.2)
+    if query_terms and all(term in content_lower for term in query_terms):
+        boosted_score = base_score * 1.2
+        return min(1.0, boosted_score)
     
     return base_score
 
 def rerank_results(query: str, results: List[Tuple]) -> List[Tuple]:
-    """Rerank results using cross-encoder if available"""
+    """Rerank results using cross-encoder if available - returns normalized scores"""
     try:
         from sentence_transformers import CrossEncoder
         
@@ -226,11 +264,17 @@ def rerank_results(query: str, results: List[Tuple]) -> List[Tuple]:
         # Combine scores with original scores
         reranked = []
         for i, (doc, orig_score) in enumerate(results):
-            # Normalize rerank score to 0-1
-            rerank_score = (rerank_scores[i] + 10) / 20
+            # Ensure original score is normalized
+            orig_score = normalize_score(orig_score)
             
-            # Weighted combination
+            # Normalize rerank score to 0-1 range
+            # MS-MARCO cross-encoder typically outputs scores around -10 to +10
+            rerank_score = np.clip((rerank_scores[i] + 10) / 20, 0.0, 1.0)
+            
+            # Weighted combination - ensures result stays in 0-1
             final_score = 0.4 * orig_score + 0.6 * rerank_score
+            final_score = np.clip(final_score, 0.0, 1.0)
+            
             reranked.append((doc, final_score))
         
         # Sort by final score
@@ -271,6 +315,9 @@ def hybrid_retrieval_default(db, query_text: str, k: int = ENHANCED_SEARCH_K, do
             filter_dict=document_filter
         )
         
+        # Normalize scores from hybrid search
+        results = normalize_results(results)
+        
         logger.info(f"[HYBRID_RETRIEVAL] Hybrid search returned {len(results)} results for default database")
         return results, "hybrid_search_default"
         
@@ -302,11 +349,14 @@ def combined_search(query: str, user_id: Optional[str], search_scope: str, conve
                     retrieval_method = method
                 else:
                     logger.info("[COMBINED_SEARCH] Using basic search for default database")
-                    default_results = default_db.similarity_search_with_score(query, k=k)
+                    default_results = db.similarity_search_with_score(query, k=k)
+                    default_results = normalize_results(default_results)
                     retrieval_method = "basic_search"
                 
                 # Add source type metadata
                 for doc, score in default_results:
+                    # Ensure score is normalized
+                    score = normalize_score(score)
                     doc.metadata['source_type'] = 'default_database'
                     all_results.append((doc, score))
                 sources_searched.append("default_database")
@@ -325,6 +375,8 @@ def combined_search(query: str, user_id: Optional[str], search_scope: str, conve
                 user_results = container_manager.hybrid_search_user_container(
                     user_id, query, k=k, document_id=document_id
                 )
+                # Normalize scores from user container hybrid search
+                user_results = normalize_results(user_results)
                 # Update retrieval method only if we haven't used hybrid for default DB
                 if retrieval_method not in ["hybrid_search_default", "hybrid_search"]:
                     retrieval_method = "hybrid_search_user"
@@ -333,6 +385,8 @@ def combined_search(query: str, user_id: Optional[str], search_scope: str, conve
                 user_results = container_manager.enhanced_search_user_container(
                     user_id, query, conversation_context, k=k, document_id=document_id
                 )
+                # Normalize scores from user container enhanced search
+                user_results = normalize_results(user_results)
                 # Update retrieval method only if we haven't used a better method
                 if retrieval_method not in ["hybrid_search_default", "hybrid_search", "enhanced_retrieval_v3"]:
                     retrieval_method = "enhanced_search_user"
@@ -341,11 +395,15 @@ def combined_search(query: str, user_id: Optional[str], search_scope: str, conve
                 user_results = container_manager.search_user_container(
                     user_id, query, k=k, document_id=document_id
                 )
+                # Normalize scores from user container basic search
+                user_results = normalize_results(user_results)
                 if retrieval_method == "basic":
                     retrieval_method = "basic_search_user"
             
             # Add source type metadata
             for doc, score in user_results:
+                # Ensure score is normalized
+                score = normalize_score(score)
                 doc.metadata['source_type'] = 'user_container'
                 all_results.append((doc, score))
             if user_results:
@@ -360,11 +418,12 @@ def combined_search(query: str, user_id: Optional[str], search_scope: str, conve
         all_results = remove_duplicate_documents(all_results)
         logger.info(f"[COMBINED_SEARCH] Removed duplicates, {len(all_results)} unique results remaining")
     else:
-        # Sort by score for basic search
+        # Sort by score for basic search (scores should already be normalized)
         all_results.sort(key=lambda x: x[1], reverse=True)
     
-    # Apply relevance threshold
-    all_results = [(doc, score) for doc, score in all_results if score >= MIN_RELEVANCE_SCORE]
+    # Apply relevance threshold (ensure MIN_RELEVANCE_SCORE is in 0-1 range)
+    normalized_min_score = normalize_score(MIN_RELEVANCE_SCORE)
+    all_results = [(doc, score) for doc, score in all_results if score >= normalized_min_score]
     
     # Limit to k results
     final_results = all_results[:k]
@@ -374,18 +433,22 @@ def combined_search(query: str, user_id: Optional[str], search_scope: str, conve
     logger.info(f"  - Sources: {sources_searched}")
     logger.info(f"  - Results: {len(final_results)}")
     logger.info(f"  - Hybrid available: {FeatureFlags.HYBRID_SEARCH_AVAILABLE}")
+    logger.info(f"  - Score range: {[score for _, score in final_results[:3]]}")  # Log first 3 scores for debugging
     
     return final_results, sources_searched, retrieval_method
 
 def calculate_confidence_score(results_with_scores: List[Tuple], response_length: int) -> float:
-    """Calculate confidence score for results"""
+    """Calculate confidence score for results - expects normalized scores in 0-1 range"""
     try:
         if not results_with_scores:
             return 0.2
         
-        scores = [score for _, score in results_with_scores]
+        # Ensure all scores are normalized
+        normalized_results = normalize_results(results_with_scores)
+        scores = [score for _, score in normalized_results]
+        
         avg_relevance = np.mean(scores)
-        doc_factor = min(1.0, len(results_with_scores) / 5.0)
+        doc_factor = min(1.0, len(scores) / 5.0)
         
         if len(scores) > 1:
             score_std = np.std(scores)
@@ -402,7 +465,13 @@ def calculate_confidence_score(results_with_scores: List[Tuple], response_length
             completeness_factor * CONFIDENCE_WEIGHTS["completeness"]
         )
         
+        # Ensure confidence is in 0-1 range
         confidence = max(0.0, min(1.0, confidence))
+        
+        logger.debug(f"Confidence calculation: avg_relevance={avg_relevance:.3f}, "
+                    f"doc_factor={doc_factor:.3f}, consistency={consistency_factor:.3f}, "
+                    f"completeness={completeness_factor:.3f}, final={confidence:.3f}")
+        
         return confidence
     
     except Exception as e:
