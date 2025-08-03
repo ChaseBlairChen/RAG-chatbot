@@ -434,7 +434,7 @@ class UserContainerManager:
                 chunk_metadata.update({
                     'chunk_type': 'legislative_bill',
                     'bill_number': bill_number,
-                    'contains_bills': bill_number,
+                    'contains_bills': [bill_number],  # FIX: Make it a list for ChromaDB
                     'chunk_index': len(chunks),
                     'is_complete_bill': True
                 })
@@ -473,7 +473,7 @@ class UserContainerManager:
                 chunk_metadata.update({
                     'chunk_type': 'legislative_bill_part',
                     'bill_number': bill_number,
-                    'contains_bills': bill_number,
+                    'contains_bills': [bill_number],  # FIX: Make it a list for ChromaDB
                     'chunk_index': len(chunks),
                     'part_number': len(chunks) + 1
                 })
@@ -497,7 +497,7 @@ class UserContainerManager:
             chunk_metadata.update({
                 'chunk_type': 'legislative_bill_part',
                 'bill_number': bill_number,
-                'contains_bills': bill_number,
+                'contains_bills': [bill_number],  # FIX: Make it a list for ChromaDB
                 'chunk_index': len(chunks),
                 'part_number': len(chunks) + 1,
                 'is_final_part': True
@@ -691,7 +691,7 @@ class UserContainerManager:
             bill_metadata.update({
                 'chunk_type': 'legislative_bill',
                 'bill_number': bill_number,
-                'contains_bills': bill_number,
+                'contains_bills': [bill_number],  # FIX: Make it a list for ChromaDB
             })
             
             # Extract additional bill info
@@ -935,12 +935,21 @@ class UserContainerManager:
                         
                         for i, (doc_id, metadata, content) in enumerate(zip(all_docs['ids'], all_docs['metadatas'], all_docs['documents'])):
                             if metadata and 'contains_bills' in metadata:
-                                if bill_number in metadata['contains_bills']:
-                                    # Create a document object for this chunk
-                                    doc_obj = Document(page_content=content, metadata=metadata)
-                                    # Use a high relevance score since we found exact bill match
-                                    bill_specific_chunks.append((doc_obj, 0.95))  # High relevance for exact matches
-                                    logger.info(f"Found {bill_number} in chunk {metadata.get('chunk_index')} with boosted score")
+                                # Check if contains_bills contains our bill (handle both string and list formats)
+                                contains_bills = metadata['contains_bills']
+                                if isinstance(contains_bills, str):
+                                    # Handle string format (old data)
+                                    if bill_number in contains_bills:
+                                        doc_obj = Document(page_content=content, metadata=metadata)
+                                        bill_specific_chunks.append((doc_obj, 0.95))
+                                        logger.info(f"Found {bill_number} in chunk {metadata.get('chunk_index')} with boosted score")
+                                else:
+                                    # Handle list format (new data) - convert to string for searching
+                                    contains_bills_str = str(contains_bills)
+                                    if bill_number in contains_bills_str:
+                                        doc_obj = Document(page_content=content, metadata=metadata)
+                                        bill_specific_chunks.append((doc_obj, 0.95))
+                                        logger.info(f"Found {bill_number} in chunk {metadata.get('chunk_index')} with boosted score")
                         
                         if bill_specific_chunks:
                             logger.info(f"Using {len(bill_specific_chunks)} bill-specific chunks with high relevance")
