@@ -1,8 +1,9 @@
 """Main FastAPI application entry point"""
 import os
 import logging
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from .config import DEFAULT_CHROMA_PATH, USER_CONTAINERS_PATH, FeatureFlags
 from .core import initialize_nlp_models, initialize_feature_flags
 from .services import initialize_container_manager
@@ -28,6 +29,15 @@ app = FastAPI(
     description="Multi-User Legal Assistant with Enhanced RAG, Comprehensive Analysis, and External Database Integration",
     version="10.0.0-SmartRAG-ComprehensiveAnalysis"
 )
+
+# Request size limit middleware
+@app.middleware("http")
+async def limit_request_size(request: Request, call_next):
+    if request.headers.get("content-length"):
+        content_length = int(request.headers["content-length"])
+        if content_length > 100 * 1024 * 1024:  # 100MB limit
+            return JSONResponse(status_code=413, content={"detail": "Request too large"})
+    return await call_next(request)
 
 # Configure CORS
 app.add_middleware(
