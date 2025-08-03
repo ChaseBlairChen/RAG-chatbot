@@ -26,6 +26,7 @@ class UserContainerManager:
     def __init__(self, base_path: str):
         self.base_path = base_path
         self.embeddings = None
+        self._db_cache = {}  # Cache database connections
         self._initialize_embeddings()
         logger.info(f"UserContainerManager initialized with base path: {base_path}")
     
@@ -76,6 +77,9 @@ class UserContainerManager:
             persist_directory=container_path
         )
         
+        # Cache the new database
+        self._db_cache[user_id] = user_db
+        
         logger.info(f"Created container for user {user_id}: {container_id}")
         return container_id
     
@@ -83,8 +87,8 @@ class UserContainerManager:
         """Get container ID for a user"""
         return hashlib.sha256(user_id.encode()).hexdigest()[:16]
     
-    def get_user_database(self, user_id: str) -> Optional[Chroma]:
-        """Get user's database"""
+    def _create_database(self, user_id: str) -> Optional[Chroma]:
+        """Create database connection for a user"""
         container_id = self.get_container_id(user_id)
         container_path = os.path.join(self.base_path, container_id)
         
@@ -106,15 +110,36 @@ class UserContainerManager:
             persist_directory=container_path
         )
     
+    def get_user_database(self, user_id: str) -> Optional[Chroma]:
+        """Get user's database with caching"""
+        # Check cache first
+        if user_id in self._db_cache:
+            logger.debug(f"Using cached database for user {user_id}")
+            return self._db_cache[user_id]
+        
+        # Create and cache connection
+        db = self._create_database(user_id)
+        if db:
+            self._db_cache[user_id] = db
+            logger.info(f"Created and cached database connection for user {user_id}")
+        return db
+    
     def get_user_database_safe(self, user_id: str) -> Optional[Chroma]:
         """Get user database with enhanced error handling and recovery"""
         try:
+            # Try to get from cache or create
+            db = self.get_user_database(user_id)
+            if db:
+                return db
+            
+            # Database not found, try to create container
             container_id = self.get_container_id(user_id)
             container_path = os.path.join(self.base_path, container_id)
             
             if not os.path.exists(container_path):
                 logger.warning(f"Container not found for user {user_id}, creating new one")
                 self.create_user_container(user_id)
+                return self._db_cache.get(user_id)  # Should be cached after creation
             
             # Ensure embeddings are available
             if not self.embeddings:
@@ -124,35 +149,49 @@ class UserContainerManager:
                 logger.error("No embeddings model available for safe database access")
                 return None
             
-            return Chroma(
+            # Try to create database connection
+            db = Chroma(
                 collection_name=f"user_{container_id}",
                 embedding_function=self.embeddings,
                 persist_directory=container_path
             )
             
+            # Cache the connection
+            self._db_cache[user_id] = db
+            return db
+            
         except Exception as e:
             logger.error(f"Error getting user database for {user_id}: {e}")
             try:
                 logger.info(f"Attempting to recover by creating new container for {user_id}")
+                # Clear any corrupted cache entry
+                if user_id in self._db_cache:
+                    del self._db_cache[user_id]
+                
                 self.create_user_container(user_id)
-                container_id = self.get_container_id(user_id)
-                container_path = os.path.join(self.base_path, container_id)
+                return self._db_cache.get(user_id)
                 
-                if not self.embeddings:
-                    self._initialize_embeddings()
-                
-                if not self.embeddings:
-                    logger.error("No embeddings model available for recovery")
-                    return None
-                
-                return Chroma(
-                    collection_name=f"user_{container_id}",
-                    embedding_function=self.embeddings,
-                    persist_directory=container_path
-                )
             except Exception as recovery_error:
                 logger.error(f"Recovery failed for user {user_id}: {recovery_error}")
                 return None
+    
+    def clear_cache(self, user_id: str = None):
+        """Clear database cache for specific user or all users"""
+        if user_id:
+            if user_id in self._db_cache:
+                del self._db_cache[user_id]
+                logger.info(f"Cleared cache for user {user_id}")
+        else:
+            self._db_cache.clear()
+            logger.info("Cleared all database cache")
+    
+    def get_cache_info(self) -> Dict:
+        """Get information about current cache state"""
+        return {
+            'cached_users': list(self._db_cache.keys()),
+            'cache_size': len(self._db_cache),
+            'memory_usage': sum(1 for _ in self._db_cache.values())  # Simple count
+        }
     
     def add_document_to_container(self, user_id: str, document_text: str, metadata: Dict, file_id: str = None) -> bool:
         """Add document to user's container with intelligent chunking"""
@@ -954,4 +993,3 @@ def get_container_manager() -> UserContainerManager:
     if _container_manager is None:
         return initialize_container_manager()
     return _container_manager
-
