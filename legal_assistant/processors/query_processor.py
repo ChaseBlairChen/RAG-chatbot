@@ -13,7 +13,7 @@ from ..services import (
     calculate_confidence_score,
     call_openrouter_api
 )
-from ..services.external_db_service import search_free_legal_databases
+from ..services.external_db_service import search_free_legal_databases, search_free_legal_databases_enhanced
 from ..storage.managers import add_to_conversation, get_conversation_context
 from ..utils import (
     parse_multiple_questions,
@@ -23,6 +23,63 @@ from ..utils import (
 )
 
 logger = logging.getLogger(__name__)
+
+# Safe import with fallback
+try:
+    from ..services.news_country_apis import comprehensive_researcher
+except ImportError:
+    logger.warning("News country APIs not available")
+    comprehensive_researcher = None
+
+try:
+    from ..utils.immigration_helpers import get_form_info
+except ImportError:
+    logger.warning("Immigration helpers not available")
+    def get_form_info(form_number):
+        return f"Form {form_number} information not available"
+
+
+def extract_statutory_information(context_text: str, statute_citation: str) -> dict:
+    """Extract specific information from statutory text"""
+    extracted_info = {
+        "requirements": [],
+        "durations": [],
+        "numbers": [],
+        "procedures": []
+    }
+    
+    try:
+        # Look for duration patterns
+        duration_patterns = [
+            r"minimum of (\d+) (?:minutes?|hours?)",
+            r"at least (\d+) (?:minutes?|hours?)",
+            r"(\d+)-(?:minute|hour) (?:minimum|maximum)",
+            r"(?:shall|must) be (\d+) (?:minutes?|hours?)"
+        ]
+        
+        for pattern in duration_patterns:
+            matches = re.findall(pattern, context_text, re.IGNORECASE)
+            for match in matches:
+                extracted_info["durations"].append(f"{match} minutes/hours")
+        
+        # Look for numerical requirements
+        number_patterns = [
+            r"(?:maximum|minimum) of (\d+) (?:participants?|people|individuals?)",
+            r"at least (\d+) (?:speakers?|facilitators?|members?)",
+            r"no more than (\d+) (?:participants?|attendees?)"
+        ]
+        
+        for pattern in number_patterns:
+            matches = re.findall(pattern, context_text, re.IGNORECASE)
+            for match in matches:
+                extracted_info["numbers"].append(match)
+        
+        return extracted_info
+        
+    except Exception as e:
+        logger.error(f"Error extracting statutory information: {e}")
+        return extracted_info
+
 
 def format_legal_citation(result: Dict) -> str:
     """Format a legal database result into a proper citation"""
@@ -81,6 +138,7 @@ def format_legal_citation(result: Dict) -> str:
         
         return ", ".join(parts)
 
+
 def detect_statutory_question(question: str) -> bool:
     """Detect if this is a statutory/regulatory question requiring detailed extraction"""
     statutory_indicators = [
@@ -113,228 +171,18 @@ def detect_statutory_question(question: str) -> bool:
         r'\bNew\s+York\s+(?:Criminal\s+Procedure|Penal|Civil\s+Practice|Family\s+Court\s+Act|General\s+Business|Vehicle\s+and\s+Traffic)\s+Law\s*§?\s*\d+',
         r'\bN\.Y\.C\.R\.R\.\s*tit\.\s*\d+',         # New York Codes, Rules and Regulations
         
-        # Florida
+        # Additional state patterns (condensed for brevity)
         r'\bFla\.\s*Stat\.\s*(?:Ann\.)?\s*§?\s*\d+', # Florida Statutes
-        r'\bFlorida\s+Statutes\s*§?\s*\d+',
-        r'\bFla\.\s*Admin\.\s*Code\s*Ann\.\s*r\.\s*\d+', # Florida Administrative Code
+        r'\b\d+\s*ILCS\s*\d+', # Illinois Compiled Statutes
+        r'\b\d+\s*Pa\.\s*(?:C\.S\.|Cons\.\s*Stat\.)\s*§?\s*\d+', # Pennsylvania
+        r'\bOhio\s*Rev\.\s*Code\s*(?:Ann\.)?\s*§?\s*\d+', # Ohio
+        r'\bO\.C\.G\.A\.\s*§?\s*\d+',              # Georgia
+        r'\bN\.C\.\s*Gen\.\s*Stat\.\s*§?\s*\d+',   # North Carolina
+        r'\bMich\.\s*Comp\.\s*Laws\s*(?:Ann\.)?\s*§?\s*\d+', # Michigan
+        r'\bN\.J\.\s*Stat\.\s*(?:Ann\.)?\s*§?\s*\d+', # New Jersey
+        r'\bVa\.\s*Code\s*(?:Ann\.)?\s*§?\s*\d+',   # Virginia
         
-        # Illinois
-        r'\b\d+\s*ILCS\s*\d+', # Illinois Compiled Statutes (e.g., 720 ILCS 5)
-        r'\bIll\.\s*Comp\.\s*Stat\.\s*ch\.\s*\d+', # Illinois Compiled Statutes alternate
-        r'\bIll\.\s*Admin\.\s*Code\s*tit\.\s*\d+', # Illinois Administrative Code
-        
-        # Pennsylvania
-        r'\b\d+\s*Pa\.\s*(?:C\.S\.|Cons\.\s*Stat\.)\s*§?\s*\d+', # Pennsylvania Consolidated Statutes
-        r'\bPa\.\s*Code\s*§?\s*\d+',               # Pennsylvania Code
-        
-        # Ohio
-        r'\bOhio\s*Rev\.\s*Code\s*(?:Ann\.)?\s*§?\s*\d+', # Ohio Revised Code
-        r'\bOhio\s*Admin\.\s*Code\s*\d+',          # Ohio Administrative Code
-        
-        # Georgia
-        r'\bO\.C\.G\.A\.\s*§?\s*\d+',              # Official Code of Georgia Annotated
-        r'\bGa\.\s*Code\s*(?:Ann\.)?\s*§?\s*\d+',   # Georgia Code
-        r'\bGa\.\s*Comp\.\s*R\.\s*&\s*Regs\.\s*r\.\s*\d+', # Georgia Rules and Regulations
-        
-        # North Carolina
-        r'\bN\.C\.\s*Gen\.\s*Stat\.\s*§?\s*\d+',   # North Carolina General Statutes
-        r'\bN\.C\.\s*Admin\.\s*Code\s*tit\.\s*\d+', # North Carolina Administrative Code
-        
-        # Michigan
-        r'\bMich\.\s*Comp\.\s*Laws\s*(?:Ann\.)?\s*§?\s*\d+', # Michigan Compiled Laws
-        r'\bMich\.\s*Admin\.\s*Code\s*r\.\s*\d+',   # Michigan Administrative Code
-        
-        # New Jersey
-        r'\bN\.J\.\s*Stat\.\s*(?:Ann\.)?\s*§?\s*\d+', # New Jersey Statutes
-        r'\bN\.J\.\s*Admin\.\s*Code\s*§?\s*\d+',    # New Jersey Administrative Code
-        
-        # Virginia
-        r'\bVa\.\s*Code\s*(?:Ann\.)?\s*§?\s*\d+',   # Virginia Code
-        r'\bVirginia\s+Code\s*§?\s*\d+',
-        r'\bVa\.\s*Admin\.\s*Code\s*§?\s*\d+',      # Virginia Administrative Code
-        
-        # Massachusetts
-        r'\bMass\.\s*Gen\.\s*Laws\s*(?:Ann\.)?\s*ch\.\s*\d+', # Massachusetts General Laws
-        r'\bM\.G\.L\.\s*ch?\.\s*\d+',               # Massachusetts General Laws (abbreviated)
-        r'\bMass\.\s*Regs\.\s*Code\s*tit\.\s*\d+', # Massachusetts Regulations
-        
-        # Maryland
-        r'\bMd\.\s*Code\s*(?:Ann\.)?(?:\s*,\s*\w+)?\s*§?\s*\d+', # Maryland Code (with possible subject area)
-        r'\bCOMR\s*\d+',                           # Code of Maryland Regulations
-        
-        # Wisconsin
-        r'\bWis\.\s*Stat\.\s*(?:Ann\.)?\s*§?\s*\d+', # Wisconsin Statutes
-        r'\bWis\.\s*Admin\.\s*Code\s*§?\s*\d+',     # Wisconsin Administrative Code
-        
-        # Minnesota
-        r'\bMinn\.\s*Stat\.\s*(?:Ann\.)?\s*§?\s*\d+', # Minnesota Statutes
-        r'\bMinn\.\s*R\.\s*\d+',                   # Minnesota Rules
-        
-        # Colorado
-        r'\bColo\.\s*Rev\.\s*Stat\.\s*(?:Ann\.)?\s*§?\s*\d+', # Colorado Revised Statutes
-        r'\bC\.R\.S\.\s*§?\s*\d+',                 # Colorado Revised Statutes (abbreviated)
-        r'\bColo\.\s*Code\s*Regs\.\s*§?\s*\d+',    # Colorado Code of Regulations
-        
-        # Arizona
-        r'\bAriz\.\s*Rev\.\s*Stat\.\s*(?:Ann\.)?\s*§?\s*\d+', # Arizona Revised Statutes
-        r'\bA\.R\.S\.\s*§?\s*\d+',                 # Arizona Revised Statutes (abbreviated)
-        r'\bAriz\.\s*Admin\.\s*Code\s*§?\s*\d+',   # Arizona Administrative Code
-        
-        # Tennessee
-        r'\bTenn\.\s*Code\s*(?:Ann\.)?\s*§?\s*\d+', # Tennessee Code
-        r'\bT\.C\.A\.\s*§?\s*\d+',                 # Tennessee Code (abbreviated)
-        r'\bTenn\.\s*Comp\.\s*R\.\s*&\s*Regs\.\s*\d+', # Tennessee Rules and Regulations
-        
-        # Missouri
-        r'\bMo\.\s*(?:Ann\.\s*)?Stat\.\s*§?\s*\d+', # Missouri Statutes
-        r'\bR\.S\.Mo\.\s*§?\s*\d+',                # Revised Statutes of Missouri
-        r'\bMo\.\s*Code\s*Regs\.\s*Ann\.\s*tit\.\s*\d+', # Missouri Code of Regulations
-        
-        # Indiana
-        r'\bInd\.\s*Code\s*(?:Ann\.)?\s*§?\s*\d+',  # Indiana Code
-        r'\bI\.C\.\s*§?\s*\d+',                    # Indiana Code (abbreviated)
-        r'\bInd\.\s*Admin\.\s*Code\s*tit\.\s*\d+', # Indiana Administrative Code
-        
-        # Louisiana
-        r'\bLa\.\s*(?:Civ\.|Rev\.\s*Stat\.\s*Ann\.|Code\s*Civ\.\s*Proc\.\s*Ann\.|Code\s*Crim\.\s*Proc\.\s*Ann\.|Code\s*Evid\.\s*Ann\.|Const\.|R\.S\.)\s*(?:art\.)?\s*§?\s*\d+', # Louisiana various codes
-        r'\bLouisiana\s+(?:Civil|Revised\s+Statutes|Criminal|Evidence)\s+Code\s*(?:art\.)?\s*§?\s*\d+',
-        r'\bLa\.\s*Admin\.\s*Code\s*tit\.\s*\d+',  # Louisiana Administrative Code
-        
-        # Alabama
-        r'\bAla\.\s*Code\s*§?\s*\d+',              # Alabama Code
-        r'\bAlabama\s+Code\s*§?\s*\d+',
-        r'\bAla\.\s*Admin\.\s*Code\s*r\.\s*\d+',   # Alabama Administrative Code
-        
-        # South Carolina
-        r'\bS\.C\.\s*Code\s*(?:Ann\.)?\s*§?\s*\d+', # South Carolina Code
-        r'\bS\.C\.\s*Code\s*Regs\.\s*\d+',         # South Carolina Code of Regulations
-        
-        # Kentucky
-        r'\bKy\.\s*Rev\.\s*Stat\.\s*(?:Ann\.)?\s*§?\s*\d+', # Kentucky Revised Statutes
-        r'\bK\.R\.S\.\s*§?\s*\d+',                 # Kentucky Revised Statutes (abbreviated)
-        r'\bKy\.\s*Admin\.\s*Regs\.\s*tit\.\s*\d+', # Kentucky Administrative Regulations
-        
-        # Oregon
-        r'\bOr\.\s*Rev\.\s*Stat\.\s*(?:Ann\.)?\s*§?\s*\d+', # Oregon Revised Statutes
-        r'\bO\.R\.S\.\s*§?\s*\d+',                 # Oregon Revised Statutes (abbreviated)
-        r'\bOr\.\s*Admin\.\s*R\.\s*\d+',           # Oregon Administrative Rules
-        
-        # Oklahoma
-        r'\bOkla\.\s*Stat\.\s*(?:Ann\.)?\s*tit\.\s*\d+', # Oklahoma Statutes
-        r'\bOklahoma\s+Statutes\s+tit\.\s*\d+',
-        r'\bOkla\.\s*Admin\.\s*Code\s*§?\s*\d+',   # Oklahoma Administrative Code
-        
-        # Connecticut
-        r'\bConn\.\s*Gen\.\s*Stat\.\s*(?:Ann\.)?\s*§?\s*\d+', # Connecticut General Statutes
-        r'\bC\.G\.S\.\s*§?\s*\d+',                 # Connecticut General Statutes (abbreviated)
-        r'\bConn\.\s*Agencies\s*Regs\.\s*§?\s*\d+', # Connecticut Agencies Regulations
-        
-        # Iowa
-        r'\bIowa\s*Code\s*(?:Ann\.)?\s*§?\s*\d+',   # Iowa Code
-        r'\bI\.C\.\s*§?\s*\d+',                    # Iowa Code (abbreviated) - Note: conflicts with Indiana
-        r'\bIowa\s*Admin\.\s*Code\s*r\.\s*\d+',    # Iowa Administrative Code
-        
-        # Arkansas
-        r'\bArk\.\s*Code\s*(?:Ann\.)?\s*§?\s*\d+',  # Arkansas Code
-        r'\bA\.C\.A\.\s*§?\s*\d+',                 # Arkansas Code (abbreviated)
-        r'\bArk\.\s*Code\s*R\.\s*\d+',             # Arkansas Code of Rules
-        
-        # Mississippi
-        r'\bMiss\.\s*Code\s*(?:Ann\.)?\s*§?\s*\d+', # Mississippi Code
-        r'\bMississippi\s+Code\s*§?\s*\d+',
-        
-        # Kansas
-        r'\bKan\.\s*Stat\.\s*(?:Ann\.)?\s*§?\s*\d+', # Kansas Statutes
-        r'\bK\.S\.A\.\s*§?\s*\d+',                 # Kansas Statutes (abbreviated)
-        r'\bKan\.\s*Admin\.\s*Regs\.\s*§?\s*\d+',  # Kansas Administrative Regulations
-        
-        # Utah
-        r'\bUtah\s*Code\s*(?:Ann\.)?\s*§?\s*\d+',   # Utah Code
-        r'\bU\.C\.A\.\s*§?\s*\d+',                 # Utah Code (abbreviated)
-        r'\bUtah\s*Admin\.\s*Code\s*r\.\s*\d+',    # Utah Administrative Code
-        
-        # Nevada
-        r'\bNev\.\s*Rev\.\s*Stat\.\s*(?:Ann\.)?\s*§?\s*\d+', # Nevada Revised Statutes
-        r'\bN\.R\.S\.\s*§?\s*\d+',                 # Nevada Revised Statutes (abbreviated)
-        r'\bNev\.\s*Admin\.\s*Code\s*§?\s*\d+',    # Nevada Administrative Code
-        
-        # New Mexico
-        r'\bN\.M\.\s*Stat\.\s*(?:Ann\.)?\s*§?\s*\d+', # New Mexico Statutes
-        r'\bNMSA\s*§?\s*\d+',                      # New Mexico Statutes (abbreviated)
-        r'\bN\.M\.\s*Code\s*R\.\s*§?\s*\d+',       # New Mexico Code of Rules
-        
-        # West Virginia
-        r'\bW\.\s*Va\.\s*Code\s*(?:Ann\.)?\s*§?\s*\d+', # West Virginia Code
-        r'\bW\.Va\.\s*Code\s*R\.\s*§?\s*\d+',      # West Virginia Code of Rules
-        
-        # Nebraska
-        r'\bNeb\.\s*Rev\.\s*Stat\.\s*(?:Ann\.)?\s*§?\s*\d+', # Nebraska Revised Statutes
-        r'\bR\.R\.S\.\s*Neb\.\s*§?\s*\d+',         # Revised Revised Statutes Nebraska
-        r'\bNeb\.\s*Admin\.\s*R\.\s*&\s*Regs\.\s*§?\s*\d+', # Nebraska Administrative Rules
-        
-        # Idaho
-        r'\bIdaho\s*Code\s*(?:Ann\.)?\s*§?\s*\d+',  # Idaho Code
-        r'\bI\.C\.\s*§?\s*\d+',                    # Idaho Code (abbreviated) - Note: conflicts with others
-        r'\bIDAPA\s*\d+',                          # Idaho Administrative Procedures Act
-        
-        # Hawaii
-        r'\bHaw\.\s*Rev\.\s*Stat\.\s*(?:Ann\.)?\s*§?\s*\d+', # Hawaii Revised Statutes
-        r'\bH\.R\.S\.\s*§?\s*\d+',                 # Hawaii Revised Statutes (abbreviated)
-        r'\bHaw\.\s*Code\s*R\.\s*§?\s*\d+',        # Hawaii Code of Rules
-        
-        # New Hampshire
-        r'\bN\.H\.\s*Rev\.\s*Stat\.\s*(?:Ann\.)?\s*§?\s*\d+', # New Hampshire Revised Statutes
-        r'\bR\.S\.A\.\s*§?\s*\d+',                 # Revised Statutes Annotated
-        r'\bN\.H\.\s*Code\s*Admin\.\s*R\.\s*§?\s*\d+', # New Hampshire Code of Administrative Rules
-        
-        # Maine
-        r'\bMe\.\s*Rev\.\s*Stat\.\s*(?:Ann\.)?\s*tit\.\s*\d+', # Maine Revised Statutes
-        r'\bM\.R\.S\.\s*tit\.\s*\d+',              # Maine Revised Statutes (abbreviated)
-        r'\bMe\.\s*Code\s*R\.\s*§?\s*\d+',         # Maine Code of Rules
-        
-        # Rhode Island
-        r'\bR\.I\.\s*Gen\.\s*Laws\s*(?:Ann\.)?\s*§?\s*\d+', # Rhode Island General Laws
-        r'\bR\.I\.\s*Code\s*R\.\s*§?\s*\d+',       # Rhode Island Code of Rules
-        
-        # Montana
-        r'\bMont\.\s*Code\s*(?:Ann\.)?\s*§?\s*\d+', # Montana Code
-        r'\bM\.C\.A\.\s*§?\s*\d+',                 # Montana Code (abbreviated)
-        r'\bMont\.\s*Admin\.\s*R\.\s*§?\s*\d+',    # Montana Administrative Rules
-        
-        # Delaware
-        r'\bDel\.\s*Code\s*(?:Ann\.)?\s*tit\.\s*\d+', # Delaware Code
-        r'\bDel\.\s*Admin\.\s*Code\s*tit\.\s*\d+', # Delaware Administrative Code
-        
-        # South Dakota
-        r'\bS\.D\.\s*Codified\s*Laws\s*(?:Ann\.)?\s*§?\s*\d+', # South Dakota Codified Laws
-        r'\bSDCL\s*§?\s*\d+',                      # South Dakota Codified Laws (abbreviated)
-        r'\bS\.D\.\s*Admin\.\s*R\.\s*§?\s*\d+',    # South Dakota Administrative Rules
-        
-        # North Dakota
-        r'\bN\.D\.\s*Cent\.\s*Code\s*(?:Ann\.)?\s*§?\s*\d+', # North Dakota Century Code
-        r'\bN\.D\.C\.C\.\s*§?\s*\d+',              # North Dakota Century Code (abbreviated)
-        r'\bN\.D\.\s*Admin\.\s*Code\s*§?\s*\d+',   # North Dakota Administrative Code
-        
-        # Alaska
-        r'\bAlaska\s*Stat\.\s*(?:Ann\.)?\s*§?\s*\d+', # Alaska Statutes
-        r'\bA\.S\.\s*§?\s*\d+',                    # Alaska Statutes (abbreviated)
-        r'\bAlaska\s*Admin\.\s*Code\s*tit\.\s*\d+', # Alaska Administrative Code
-        
-        # Vermont
-        r'\bVt\.\s*Stat\.\s*(?:Ann\.)?\s*tit\.\s*\d+', # Vermont Statutes
-        r'\bV\.S\.A\.\s*tit\.\s*\d+',              # Vermont Statutes Annotated (abbreviated)
-        r'\bVt\.\s*Code\s*R\.\s*§?\s*\d+',         # Vermont Code of Rules
-        
-        # Wyoming
-        r'\bWyo\.\s*Stat\.\s*(?:Ann\.)?\s*§?\s*\d+', # Wyoming Statutes
-        r'\bW\.S\.\s*§?\s*\d+',                    # Wyoming Statutes (abbreviated)
-        r'\bWyo\.\s*Code\s*R\.\s*§?\s*\d+',        # Wyoming Code of Rules
-        
-        # District of Columbia
-        r'\bD\.C\.\s*(?:Code|Official\s*Code)\s*(?:Ann\.)?\s*§?\s*\d+', # DC Code
-        r'\bD\.C\.M\.R\.\s*§?\s*\d+',              # DC Municipal Regulations
-        
-        # Generic statutory terms (these should come after specific state patterns)
+        # Generic statutory terms
         r'\bstatute[s]?', r'\bregulation[s]?', r'\bcode\s+section[s]?',
         r'\bminimum\s+standards?', r'\brequirements?', r'\bmust\s+meet',
         r'\bstandards?.*regulat', r'\bcomposition.*conduct',
@@ -352,6 +200,7 @@ def detect_statutory_question(question: str) -> bool:
         if re.search(pattern, question, re.IGNORECASE):
             return True
     return False
+
 
 def detect_legal_search_intent(question: str) -> bool:
     """Detect if this question would benefit from external legal database search"""
@@ -392,6 +241,84 @@ def detect_legal_search_intent(question: str) -> bool:
             return True
     return False
 
+
+def detect_immigration_query(question: str) -> bool:
+    """Detect if this is an immigration-related query"""
+    immigration_indicators = [
+        # Case types
+        r'\basylum\b', r'\brefugee\b', r'\bgreen\s*card\b', r'\bvisa\b',
+        r'\bimmigration\b', r'\bnaturalization\b', r'\bcitizenship\b',
+        
+        # Forms
+        r'\bI-\d{3}\b', r'\bN-\d{3}\b', r'\bUSCIS\b',
+        
+        # Procedures
+        r'\bcredible\s*fear\b', r'\bremoval\b', r'\bdeportation\b',
+        r'\bwork\s*permit\b', r'\bEAD\b', r'\bpriority\s*date\b',
+        
+        # Country conditions
+        r'\bcountry\s*conditions?\b', r'\bpersecution\b', r'\bhuman\s*rights\b',
+        
+        # Status questions
+        r'\bcase\s*status\b', r'\bprocessing\s*time\b', r'\binterview\b'
+    ]
+    
+    for pattern in immigration_indicators:
+        if re.search(pattern, question, re.IGNORECASE):
+            return True
+    return False
+
+
+def detect_query_type(question: str) -> List[str]:
+    """Detect the type of legal query for targeted searching"""
+    query_types = []
+    
+    # Environmental law patterns
+    environmental_patterns = [
+        r'\bepa\b', r'\benvironmental\b', r'\bpollution\b', r'\bclimate\b',
+        r'\bemissions\b', r'\bclean\s+air\b', r'\bclean\s+water\b',
+        r'\bwetlands\b', r'\bendangered\s+species\b', r'\bnepa\b',
+        r'\bcercla\b', r'\brcra\b', r'\btsca\b'
+    ]
+    
+    # Business law patterns
+    business_patterns = [
+        r'\bsba\b', r'\bsmall\s+business\b', r'\bstartup\b', r'\bincorporat',
+        r'\bllc\b', r'\bcorporation\b', r'\bsec\b', r'\bsecurities\b',
+        r'\bpatent\b', r'\btrademark\b', r'\bcopyright\b', r'\bcontract\b'
+    ]
+    
+    # Regulatory patterns
+    regulatory_patterns = [
+        r'\bregulation\b', r'\brule\b', r'\bcfr\b', r'\bfederal\s+register\b',
+        r'\bagency\b', r'\badministrative\b'
+    ]
+    
+    # Check each pattern type
+    question_lower = question.lower()
+    
+    if any(re.search(pattern, question_lower) for pattern in environmental_patterns):
+        query_types.append('environmental')
+    
+    if any(re.search(pattern, question_lower) for pattern in business_patterns):
+        query_types.append('business')
+    
+    if any(re.search(pattern, question_lower) for pattern in regulatory_patterns):
+        query_types.append('regulatory')
+    
+    # Existing checks
+    if detect_statutory_question(question):
+        query_types.append('statutory')
+    
+    if detect_legal_search_intent(question):
+        query_types.append('case_law')
+    
+    if detect_immigration_query(question):
+        query_types.append('immigration')
+    
+    return query_types
+
+
 def should_search_external_databases(question: str, search_scope: str) -> bool:
     """Determine if external databases should be searched"""
     # Don't search external if user explicitly wants only their documents
@@ -400,6 +327,7 @@ def should_search_external_databases(question: str, search_scope: str) -> bool:
     
     # Check if this is a legal question that would benefit from external search
     return detect_legal_search_intent(question) or detect_statutory_question(question)
+
 
 def format_external_results_with_citations(external_results: List[Dict]) -> Tuple[str, List[Dict]]:
     """Format external results with proper citations and return both formatted text and source info"""
@@ -469,6 +397,7 @@ def format_external_results_with_citations(external_results: List[Dict]) -> Tupl
         })
     
     return formatted_text, source_info
+
 
 def create_statutory_prompt(context_text: str, question: str, conversation_context: str, 
                           sources_searched: list, retrieval_method: str, document_id: str = None,
@@ -580,6 +509,7 @@ ADDITIONAL GUIDANCE:
 
 RESPONSE:"""
 
+
 def create_regular_prompt(context_text: str, question: str, conversation_context: str, 
                          sources_searched: list, retrieval_method: str, document_id: str = None, 
                          instruction: str = "balanced", external_context: str = None) -> str:
@@ -642,6 +572,59 @@ ADDITIONAL GUIDANCE:
 
 RESPONSE:"""
 
+
+def create_immigration_prompt(context_text: str, question: str, conversation_context: str,
+                            sources_searched: list, retrieval_method: str, document_id: str = None) -> str:
+    """Create prompt specifically for immigration queries"""
+    
+    return f"""You are an immigration legal assistant with expertise in U.S. immigration law, asylum claims, and country conditions research.
+
+IMPORTANT IMMIGRATION CONTEXT:
+- Always note that immigration law is complex and changes frequently
+- Processing times and requirements vary by service center and case type
+- Country conditions can change rapidly
+- Each case is unique and requires individual assessment
+
+SOURCES SEARCHED: {', '.join(sources_searched)}
+RETRIEVAL METHOD: {retrieval_method}
+{f"DOCUMENT FILTER: Specific document {document_id}" if document_id else "DOCUMENT SCOPE: All available documents"}
+
+When answering immigration questions:
+1. **Be specific about forms and procedures** - Include form numbers, deadlines, and requirements
+2. **Cite authoritative sources** - USCIS, State Dept, UNHCR, and court decisions
+3. **Include relevant country conditions** - When applicable to asylum/refugee claims  
+4. **Note time-sensitive information** - Priority dates, filing deadlines, age-out issues
+5. **Highlight critical warnings** - Bars to admission, unlawful presence, criminal issues
+6. **Suggest evidence needed** - Documents, testimony, expert reports
+7. **Mention related forms/procedures** - Related applications that may be needed
+
+For country conditions:
+- Summarize current human rights situation
+- Note specific risks for particular groups
+- Include recent changes or trends
+- Cite multiple sources for credibility
+
+CONVERSATION HISTORY:
+{conversation_context}
+
+DOCUMENT CONTEXT (including country research if applicable):
+{context_text}
+
+USER QUESTION:
+{question}
+
+RESPONSE INSTRUCTIONS:
+- Provide practical, actionable guidance
+- Include specific form numbers and deadlines
+- Note any recent policy changes
+- Warn about common pitfalls
+- Suggest next steps
+- If asylum-related, address credibility and corroboration
+- Always include disclaimer about consulting an attorney
+
+RESPONSE:"""
+
+
 def consolidate_sources(source_info: List[Dict]) -> List[Dict]:
     """Consolidate multiple chunks from the same document into meaningful source entries"""
     from collections import defaultdict
@@ -694,6 +677,7 @@ def consolidate_sources(source_info: List[Dict]) -> List[Dict]:
     consolidated_sources.sort(key=lambda x: x.get('relevance', 0), reverse=True)
     
     return consolidated_sources
+
 
 def format_source_display(source: Dict) -> str:
     """Format a source for display in the response"""
@@ -764,6 +748,7 @@ def format_source_display(source: Dict) -> str:
         
         return display
 
+
 def process_query(question: str, session_id: str, user_id: Optional[str], search_scope: str, 
                  response_style: str = "balanced", use_enhanced_rag: bool = True, 
                  document_id: str = None, search_external: bool = None) -> QueryResponse:
@@ -776,12 +761,88 @@ def process_query(question: str, session_id: str, user_id: Optional[str], search
         if is_statutory:
             logger.info("🏛️ Detected statutory/regulatory question - using enhanced extraction")
         
+        # Detect query types
+        query_types = detect_query_type(question)
+        logger.info(f"Detected query types: {query_types}")
+        
+        # Check if this is an immigration query
+        is_immigration = 'immigration' in query_types
+        if is_immigration:
+            logger.info("🗽 Detected immigration-related query")
+        
+        # Check for country conditions specifically
+        country_conditions_match = re.search(
+            r'(?:country\s*conditions?|human\s*rights?|persecution|asylum\s*claim)\s*(?:for|in|about)?\s*([A-Z][a-zA-Z\s]+)',
+            question, re.IGNORECASE
+        )
+        
+        country_context = ""
+        if country_conditions_match and comprehensive_researcher:
+            country = country_conditions_match.group(1).strip()
+            logger.info(f"📍 Country conditions query detected for: {country}")
+            
+            try:
+                # Get comprehensive country research
+                country_results = comprehensive_researcher.research_all_sources(
+                    country=country,
+                    topics=['persecution', 'human_rights', 'government', 'violence'],
+                    include_multilingual=True
+                )
+                
+                # Format the results for the LLM
+                country_context = f"""
+COMPREHENSIVE COUNTRY CONDITIONS RESEARCH FOR {country.upper()}:
+
+Sources consulted:
+- News articles from multiple outlets (including translated foreign press)
+- Human Rights Watch reports
+- Amnesty International documentation  
+- UNHCR Refworld
+- U.S. State Department country information
+- Freedom House democracy scores
+- Academic research
+
+{country_results.get('summary', '')}
+
+Key findings by topic:
+"""
+                
+                for source_type, sources in country_results.get('sources', {}).items():
+                    if sources and isinstance(sources, list):
+                        country_context += f"\n{source_type.upper()}:\n"
+                        for source in sources[:3]:
+                            if isinstance(source, dict):
+                                country_context += f"- {source.get('title', '')}\n"
+            except Exception as e:
+                logger.error(f"Country conditions research failed: {e}")
+        
+        # Detect form-specific queries
+        form_match = re.search(r'\b(I-\d{3}|N-\d{3})\b', question, re.IGNORECASE)
+        form_context = ""
+        if form_match:
+            form_number = form_match.group(1).upper()
+            logger.info(f"📋 Form-specific query for: {form_number}")
+            
+            # Add form-specific context
+            form_context = f"\nFORM {form_number} INFORMATION:\n{get_form_info(form_number)}\n"
+        
         # Determine if we should search external databases
         if search_external is None:
-            search_external = should_search_external_databases(question, search_scope)
+            search_external = should_search_external_databases(question, search_scope) or is_immigration
         
         if search_external:
             logger.info("📚 Will search external legal databases for this query")
+        
+        # Determine which free databases to search
+        source_types = []
+        if 'case_law' in query_types:
+            source_types.append('cases')
+        if 'regulatory' in query_types or 'environmental' in query_types:
+            source_types.append('regulations')
+        if 'statutory' in query_types:
+            source_types.append('legislation')
+        if 'business' in query_types:
+            source_types.append('business')
         
         if any(phrase in question.lower() for phrase in ["comprehensive analysis", "complete analysis", "full analysis"]):
             logger.info("Detected comprehensive analysis request")
@@ -904,6 +965,49 @@ def process_query(question: str, session_id: str, user_id: Optional[str], search
                 logger.error(f"External database search failed: {e}")
                 # Continue with regular search results even if external search fails
         
+        # Search free databases if appropriate
+        if source_types and search_external:
+            try:
+                logger.info(f"🆓 Searching free legal databases for: {source_types}")
+                free_results = search_free_legal_databases_enhanced(question, None, source_types)
+                
+                if free_results:
+                    logger.info(f"📚 Found {len(free_results)} results from free databases")
+                    sources_searched.append("free_legal_databases")
+                    
+                    # Format free results
+                    free_context = "\n\n## FREE LEGAL DATABASE RESULTS:\n"
+                    for idx, result in enumerate(free_results[:10], 1):
+                        free_context += f"\n### {idx}. {result.get('title', 'No title')}\n"
+                        
+                        if result.get('source_database'):
+                            free_context += f"**Source:** {result['source_database'].replace('_', ' ').title()}\n"
+                        
+                        if result.get('date') or result.get('publication_date'):
+                            free_context += f"**Date:** {result.get('date') or result.get('publication_date')}\n"
+                        
+                        if result.get('court'):
+                            free_context += f"**Court:** {result['court']}\n"
+                        
+                        if result.get('agencies'):
+                            free_context += f"**Agencies:** {result['agencies']}\n"
+                        
+                        if result.get('summary') or result.get('preview'):
+                            preview = result.get('summary') or result.get('preview', '')
+                            free_context += f"**Summary:** {preview[:300]}...\n"
+                        
+                        if result.get('url'):
+                            free_context += f"**Link:** {result['url']}\n"
+                    
+                    # Add to context
+                    if external_context:
+                        external_context += free_context
+                    else:
+                        external_context = free_context
+                        
+            except Exception as e:
+                logger.error(f"Free database search failed: {e}")
+        
         if not retrieved_results and not external_context:
             return QueryResponse(
                 response="I couldn't find any relevant information to answer your question in the searched sources.",
@@ -943,7 +1047,7 @@ def process_query(question: str, session_id: str, user_id: Optional[str], search
             # Search specifically for chunks containing this bill
             bill_specific_results = []
             for doc, score in retrieved_results:
-                if 'contains_bills' in doc.metadata and bill_number in doc.metadata['contains_bills']:
+                if hasattr(doc, 'metadata') and 'contains_bills' in doc.metadata and bill_number in doc.metadata['contains_bills']:
                     bill_specific_results.append((doc, score))
                     logger.info(f"Found {bill_number} in chunk {doc.metadata.get('chunk_index', 'unknown')} with score {score}")
             
@@ -952,8 +1056,9 @@ def process_query(question: str, session_id: str, user_id: Optional[str], search
                 logger.info(f"Using {len(bill_specific_results)} bill-specific chunks for {bill_number}")
                 # Use the bill-specific chunks with boosted relevance
                 boosted_results = [(doc, min(score + 0.3, 1.0)) for doc, score in bill_specific_results]
-                retrieved_results = boosted_results + [r for r in retrieved_results if r not in bill_specific_results]
-                retrieved_results = retrieved_results[:len(retrieved_results)]
+                other_results = [r for r in retrieved_results if r not in bill_specific_results]
+                retrieved_results = boosted_results + other_results
+                retrieved_results = retrieved_results[:search_k]  # Limit to original k value
             
             extracted_info = extract_bill_information(context_text, bill_number)
         elif statute_match:
@@ -978,6 +1083,12 @@ def process_query(question: str, session_id: str, user_id: Optional[str], search
             if enhancement.strip() != "KEY INFORMATION FOUND:":
                 context_text += enhancement
         
+        # Add immigration-specific context
+        if country_context:
+            context_text = country_context + "\n\n" + context_text
+        if form_context:
+            context_text = form_context + "\n\n" + context_text
+        
         style_instructions = {
             "concise": "Please provide a concise answer (1-2 sentences) based on the context.",
             "balanced": "Please provide a balanced answer (2-3 paragraphs) based on the context.",
@@ -987,14 +1098,23 @@ def process_query(question: str, session_id: str, user_id: Optional[str], search
         instruction = style_instructions.get(response_style, style_instructions["balanced"])
         
         # Choose the appropriate prompt based on question type
-        if is_statutory:
-            prompt = create_statutory_prompt(context_text, question, conversation_context, 
-                                           sources_searched, retrieval_method, document_id,
-                                           external_context)
+        if is_immigration:
+            prompt = create_immigration_prompt(
+                context_text, question, conversation_context,
+                sources_searched, retrieval_method, document_id
+            )
+        elif is_statutory:
+            prompt = create_statutory_prompt(
+                context_text, question, conversation_context, 
+                sources_searched, retrieval_method, document_id,
+                external_context
+            )
         else:
-            prompt = create_regular_prompt(context_text, question, conversation_context, 
-                                         sources_searched, retrieval_method, document_id, 
-                                         instruction, external_context)
+            prompt = create_regular_prompt(
+                context_text, question, conversation_context, 
+                sources_searched, retrieval_method, document_id, 
+                instruction, external_context
+            )
         
         if FeatureFlags.AI_ENABLED and OPENROUTER_API_KEY:
             response_text = call_openrouter_api(prompt, OPENROUTER_API_KEY)
@@ -1002,6 +1122,10 @@ def process_query(question: str, session_id: str, user_id: Optional[str], search
             response_text = f"Based on the retrieved documents:\n\n{context_text}\n\nPlease review this information to answer your question."
             if external_context:
                 response_text += f"\n\n{external_context}"
+        
+        # Add immigration-specific tips if relevant
+        if is_immigration:
+            response_text += "\n\n**Immigration Law Notice**: This information is general guidance only. Immigration law is complex and changes frequently. Please consult with an immigration attorney for advice specific to your situation."
         
         relevant_sources = [s for s in all_source_info if s['relevance'] >= MIN_RELEVANCE_SCORE]
         
@@ -1044,39 +1168,3 @@ def process_query(question: str, session_id: str, user_id: Optional[str], search
             sources_searched=[],
             retrieval_method="error"
         )
-
-def extract_statutory_information(context_text: str, statute_citation: str) -> dict:
-    """Extract specific information from statutory text"""
-    extracted_info = {
-        "requirements": [],
-        "durations": [],
-        "numbers": [],
-        "procedures": []
-    }
-    
-    # Look for duration patterns
-    duration_patterns = [
-        r"minimum of (\d+) (?:minutes?|hours?)",
-        r"at least (\d+) (?:minutes?|hours?)",
-        r"(\d+)-(?:minute|hour) (?:minimum|maximum)",
-        r"(?:shall|must) be (\d+) (?:minutes?|hours?)"
-    ]
-    
-    for pattern in duration_patterns:
-        matches = re.findall(pattern, context_text, re.IGNORECASE)
-        for match in matches:
-            extracted_info["durations"].append(f"{match} minutes/hours")
-    
-    # Look for numerical requirements
-    number_patterns = [
-        r"(?:maximum|minimum) of (\d+) (?:participants?|people|individuals?)",
-        r"at least (\d+) (?:speakers?|facilitators?|members?)",
-        r"no more than (\d+) (?:participants?|attendees?)"
-    ]
-    
-    for pattern in number_patterns:
-        matches = re.findall(pattern, context_text, re.IGNORECASE)
-        for match in matches:
-            extracted_info["numbers"].append(match)
-    
-    return extracted_info
