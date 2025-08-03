@@ -5,6 +5,7 @@ from typing import List, Dict, Optional
 from datetime import datetime, timedelta
 from googletrans import Translator
 import hashlib
+import os
 
 logger = logging.getLogger(__name__)
 
