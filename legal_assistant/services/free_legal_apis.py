@@ -6,6 +6,7 @@ from typing import List, Dict, Optional
 from datetime import datetime, timedelta
 import time
 from bs4 import BeautifulSoup
+import os
 
 from ..config import (
     COURTLISTENER_API_KEY, COURTLISTENER_API_ENDPOINT,
