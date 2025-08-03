@@ -34,3 +34,10 @@ __all__ = [
     'WestlawInterface',
     'search_external_databases'
 ]
+
+# ===== SEPARATE FILE: routers/__init__.py =====
+
+"""API routers package"""
+from . import query, documents, analysis, admin, health, external
+
+__all__ = ['query', 'documents', 'analysis', 'admin', 'health', 'external']
