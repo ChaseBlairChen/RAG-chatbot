@@ -3,6 +3,23 @@ import re
 from typing import Dict, List, Tuple
 from datetime import datetime, timedelta
 
+def get_form_info(form_number: str) -> str:
+    """Get information about specific USCIS forms"""
+    form_info = {
+        "I-130": "Petition for Alien Relative - Used to establish family relationship for immigration purposes",
+        "I-485": "Application to Register Permanent Residence or Adjust Status - Apply for green card while in US",
+        "I-765": "Application for Employment Authorization Document (EAD) - Apply for work permit",
+        "I-131": "Application for Travel Document - Apply for advance parole or refugee travel document",
+        "I-589": "Application for Asylum and for Withholding of Removal - Apply for asylum protection",
+        "I-129": "Petition for Nonimmigrant Worker - Apply for temporary work visas",
+        "I-140": "Immigrant Petition for Alien Workers - Employment-based green card petition",
+        "N-400": "Application for Naturalization - Apply for U.S. citizenship",
+        "I-751": "Petition to Remove Conditions on Residence - Remove conditions from conditional green card",
+        "I-90": "Application to Replace Permanent Resident Card - Replace lost/damaged green card"
+    }
+    
+    return form_info.get(form_number.upper(), f"Form {form_number} - No specific information available")
+
 def calculate_priority_date_wait(category: str, country: str, priority_date: datetime) -> Dict:
     """Calculate estimated wait time based on visa bulletin"""
     # This would integrate with State Dept API in production
