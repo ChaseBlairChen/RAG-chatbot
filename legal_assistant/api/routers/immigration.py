@@ -3,6 +3,9 @@ import logging
 from typing import List
 from datetime import datetime, timedelta
 from fastapi import APIRouter, Depends, HTTPException, Form, File, UploadFile
+import hashlib
+from typing import Optional
+
 
 from ...models import (
     User, ImmigrationCase, DeadlineAlert, DocumentClassification,
