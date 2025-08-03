@@ -1,4 +1,4 @@
-// src/App.tsx
+// ===== 1. REPLACE: src/App.tsx =====
 import React, { useState, useEffect, useMemo } from 'react';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
 import { BackendProvider, useBackend } from './contexts/BackendContext';
@@ -6,7 +6,7 @@ import { ApiService } from './services/api';
 import { LoginScreen } from './components/auth/LoginScreen';
 import { AppHeader } from './components/layout/AppHeader';
 import { BackendWarning } from './components/layout/BackendWarning';
-import { TabNavigation } from './components/layout/TabNavigation';
+import { SidebarNavigation } from './components/layout/SidebarNavigation';
 import { DisconnectedView } from './components/layout/DisconnectedView';
 import { ChatTab } from './components/chat/ChatTab';
 import { UploadTab } from './components/upload/UploadTab';
@@ -111,10 +111,9 @@ function MainApp() {
   }
 
   return (
-    <div className="flex flex-col h-screen bg-stone-50">
-      <AppHeader sessionId={sessionId} />
-      <BackendWarning />
-      <TabNavigation
+    <div className="flex h-screen bg-stone-50">
+      {/* Sidebar Navigation */}
+      <SidebarNavigation
         activeTab={activeTab}
         setActiveTab={setActiveTab}
         userDocumentsCount={userDocuments.length}
@@ -122,88 +121,95 @@ function MainApp() {
         isBackendConfigured={isBackendConfigured}
       />
 
-      <div className="flex-grow overflow-auto">
-        <div className="w-full max-w-7xl mx-auto p-6">
-          {!isBackendConfigured ? (
-            <DisconnectedView />
-          ) : (
-            <>
-              {activeTab === 'chat' && (
-                <ChatTab
-                  messages={messages}
-                  isLoading={isLoading}
-                  sessionId={sessionId}
-                  sendMessage={sendMessage}
-                />
-              )}
-              
-              {activeTab === 'upload' && (
-                <UploadTab
-                  uploadQueue={uploadQueue}
-                  currentlyUploading={currentlyUploading}
-                  uploadProgress={uploadProgress}
-                  uploadResults={uploadResults}
-                  uploadStatuses={uploadStatuses}
-                  isAnalyzing={isAnalyzing}
-                  onFileSelect={handleFileUpload}
-                  onRemoveFromQueue={removeFromQueue}
-                  onClearQueue={clearQueue}
-                  onUploadAll={handleUploadAll}
-                  onSetActiveTab={setActiveTab}
-                />
-              )}
-              
-              {activeTab === 'documents' && (
-                <DocumentsTab
-                  documentAnalyses={documentAnalyses}
-                  userDocuments={userDocuments}
-                  isAnalyzing={isAnalyzing}
-                  onAnalyze={runComprehensiveDocumentAnalysis}
-                  onDelete={deleteDocument}
-                  onSetActiveTab={setActiveTab}
-                />
-              )}
-              
-              {activeTab === 'analysis' && (
-                <AnalysisTab
-                  userDocuments={userDocuments}
-                  documentAnalyses={documentAnalyses}
-                  isAnalyzing={isAnalyzing}
-                  selectedDocument={selectedDocumentForAnalysis}
-                  setSelectedDocument={setSelectedDocumentForAnalysis}
-                  onRunAnalysis={runAnalysis}
-                  onSetActiveTab={setActiveTab}
-                />
-              )}
-              
-              {activeTab === 'results' && (
-                <ResultsTab
-                  analysisResults={analysisResults}
-                  isAnalyzing={isAnalyzing}
-                  onRerunAnalysis={runComprehensiveDocumentAnalysis}
-                  onDownloadResult={(id) => downloadResult(id, currentUser)}
-                  onClearResults={clearResults}
-                  onSetActiveTab={setActiveTab}
-                />
-              )}
-              
-              {activeTab === 'legal-search' && (
-                <LegalDatabaseSearch />
-              )}
-              
-              {activeTab === 'immigration' && (
-                <ImmigrationTools />
-              )}
-              
-              {activeTab === 'system-health' && (
-                <SystemHealth />
-              )}
-              
-              {activeTab === 'admin' && (
-                <AdminPanel />
-              )}
-            </>
-          )}
+      {/* Main Content Area */}
+      <div className="flex-1 flex flex-col overflow-hidden">
+        <AppHeader sessionId={sessionId} />
+        <BackendWarning />
+
+        {/* Content */}
+        <div className="flex-1 overflow-auto">
+          <div className="p-6 max-w-full">
+            {!isBackendConfigured ? (
+              <DisconnectedView />
+            ) : (
+              <>
+                {activeTab === 'chat' && (
+                  <ChatTab
+                    messages={messages}
+                    isLoading={isLoading}
+                    sessionId={sessionId}
+                    sendMessage={sendMessage}
+                  />
+                )}
+                
+                {activeTab === 'upload' && (
+                  <UploadTab
+                    uploadQueue={uploadQueue}
+                    currentlyUploading={currentlyUploading}
+                    uploadProgress={uploadProgress}
+                    uploadResults={uploadResults}
+                    uploadStatuses={uploadStatuses}
+                    isAnalyzing={isAnalyzing}
+                    onFileSelect={handleFileUpload}
+                    onRemoveFromQueue={removeFromQueue}
+                    onClearQueue={clearQueue}
+                    onUploadAll={handleUploadAll}
+                    onSetActiveTab={setActiveTab}
+                  />
+                )}
+                
+                {activeTab === 'documents' && (
+                  <DocumentsTab
+                    documentAnalyses={documentAnalyses}
+                    userDocuments={userDocuments}
+                    isAnalyzing={isAnalyzing}
+                    onAnalyze={runComprehensiveDocumentAnalysis}
+                    onDelete={deleteDocument}
+                    onSetActiveTab={setActiveTab}
+                  />
+                )}
+                
+                {activeTab === 'analysis' && (
+                  <AnalysisTab
+                    userDocuments={userDocuments}
+                    documentAnalyses={documentAnalyses}
+                    isAnalyzing={isAnalyzing}
+                    selectedDocument={selectedDocumentForAnalysis}
+                    setSelectedDocument={setSelectedDocumentForAnalysis}
+                    onRunAnalysis={runAnalysis}
+                    onSetActiveTab={setActiveTab}
+                  />
+                )}
+                
+                {activeTab === 'results' && (
+                  <ResultsTab
+                    analysisResults={analysisResults}
+                    isAnalyzing={isAnalyzing}
+                    onRerunAnalysis={runComprehensiveDocumentAnalysis}
+                    onDownloadResult={(id) => downloadResult(id, currentUser)}
+                    onClearResults={clearResults}
+                    onSetActiveTab={setActiveTab}
+                  />
+                )}
+                
+                {activeTab === 'legal-search' && (
+                  <LegalDatabaseSearch />
+                )}
+                
+                {activeTab === 'immigration' && (
+                  <ImmigrationTools />
+                )}
+                
+                {activeTab === 'system-health' && (
+                  <SystemHealth />
+                )}
+                
+                {activeTab === 'admin' && (
+                  <AdminPanel />
+                )}
+              </>
+            )}
+          </div>
         </div>
       </div>
     </div>
