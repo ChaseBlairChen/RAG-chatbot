@@ -2,12 +2,15 @@
 from .api_models import (
     User, Query, QueryResponse, ComprehensiveAnalysisRequest,
     StructuredAnalysisResponse, UserDocumentUpload, DocumentUploadResponse,
-    ConversationHistory
+    ConversationHistory, ImmigrationCase, DeadlineAlert, DocumentClassification,
+    BatchProcessingRequest, CountryConditionsRequest, ResourceLibraryItem
 )
-from .enums import AnalysisType
+from .enums import AnalysisType, DocumentCategory, ImmigrationFormType, CaseType
 
 __all__ = [
     'User', 'Query', 'QueryResponse', 'ComprehensiveAnalysisRequest',
     'StructuredAnalysisResponse', 'UserDocumentUpload', 'DocumentUploadResponse',
-    'ConversationHistory', 'AnalysisType'
+    'ConversationHistory', 'AnalysisType', 'ImmigrationCase', 'DeadlineAlert', 
+    'DocumentClassification', 'BatchProcessingRequest', 'CountryConditionsRequest',
+    'ResourceLibraryItem', 'DocumentCategory', 'ImmigrationFormType', 'CaseType'
 ]
