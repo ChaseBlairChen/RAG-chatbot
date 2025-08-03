@@ -3,11 +3,10 @@ import os
 import logging
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-
 from .config import DEFAULT_CHROMA_PATH, USER_CONTAINERS_PATH, FeatureFlags
 from .core import initialize_nlp_models, initialize_feature_flags
 from .services import initialize_container_manager
-from .api.routers import query, documents, analysis, admin, health, external  # ADD external HERE
+from .api.routers import query, documents, analysis, admin, health, external, immigration
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -19,7 +18,6 @@ os.makedirs(USER_CONTAINERS_PATH, exist_ok=True)
 # Initialize everything
 logger.info(f"Using DEFAULT_CHROMA_PATH: {DEFAULT_CHROMA_PATH}")
 logger.info(f"Using USER_CONTAINERS_PATH: {USER_CONTAINERS_PATH}")
-
 initialize_feature_flags()
 initialize_nlp_models()
 initialize_container_manager()
@@ -41,15 +39,13 @@ app.add_middleware(
 )
 
 # Include routers
+app.include_router(health.router, tags=["health"])
 app.include_router(query.router, tags=["queries"])
 app.include_router(documents.router, tags=["documents"])
 app.include_router(analysis.router, tags=["analysis"])
 app.include_router(admin.router, prefix="/admin", tags=["admin"])
-app.include_router(external.router, prefix="/external", tags=["external"])  # ADD THIS LINE
-app.include_router(health.router, tags=["health"])
-
-# Mount the home page from health router
-app.mount("/", health.router)
+app.include_router(external.router, prefix="/external", tags=["external"])
+app.include_router(immigration.router, prefix="/immigration", tags=["immigration"])
 
 def create_app():
     """Application factory"""
@@ -67,5 +63,3 @@ if __name__ == "__main__":
     logger.info("Version: 10.0.0-SmartRAG-ComprehensiveAnalysis")
     logger.info("📁 MODULAR ARCHITECTURE - Clean separation of concerns!")
     uvicorn.run("legal_assistant.main:app", host="0.0.0.0", port=port, reload=True)
-
-# DELETE EVERYTHING BELOW THIS LINE!
