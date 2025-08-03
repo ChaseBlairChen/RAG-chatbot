@@ -1,4 +1,4 @@
-// App.tsx
+// src/App.tsx
 import React, { useState, useEffect, useMemo } from 'react';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
 import { BackendProvider, useBackend } from './contexts/BackendContext';
@@ -14,6 +14,9 @@ import { DocumentsTab } from './components/documents/DocumentsTab';
 import { AnalysisTab } from './components/analysis/AnalysisTab';
 import { ResultsTab } from './components/results/ResultsTab';
 import { LegalDatabaseSearch } from './components/legal/LegalDatabaseSearch';
+import { ImmigrationTools } from './components/immigration/ImmigrationTools';
+import { SystemHealth } from './components/system/SystemHealth';
+import { AdminPanel } from './components/admin/AdminPanel';
 import { useChat } from './hooks/useChat';
 import { useDocuments } from './hooks/useDocuments';
 import { useAnalysis } from './hooks/useAnalysis';
@@ -186,6 +189,18 @@ function MainApp() {
               
               {activeTab === 'legal-search' && (
                 <LegalDatabaseSearch />
+              )}
+              
+              {activeTab === 'immigration' && (
+                <ImmigrationTools />
+              )}
+              
+              {activeTab === 'system-health' && (
+                <SystemHealth />
+              )}
+              
+              {activeTab === 'admin' && (
+                <AdminPanel />
               )}
             </>
           )}
