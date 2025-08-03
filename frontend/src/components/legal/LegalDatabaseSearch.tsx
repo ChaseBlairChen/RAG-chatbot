@@ -31,8 +31,25 @@ export const LegalDatabaseSearch: React.FC = () => {
       console.log(`📡 Backend URL: ${backendUrl}`);
       console.log(`🔑 API Token: ${apiToken.substring(0, 20)}...`);
       
-      // Try the search
-      const response = await apiService.searchFreeLegalDatabases(query);
+      // Try the search - let's test the endpoint directly first
+      console.log('🔍 Testing endpoint:', `${backendUrl}/external/search-free`);
+      
+      const formData = new FormData();
+      formData.append('query', query);
+      
+      const response = await fetch(`${backendUrl}/external/search-free`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${apiToken}`,
+        },
+        body: formData,
+      });
+      
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+      }
+      
+      const data = await response.json();
       
       console.log('✅ Full backend response:', response);
       setDebugInfo(response);
