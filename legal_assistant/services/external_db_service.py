@@ -607,6 +607,43 @@ def search_free_legal_databases(query: str, user_tier: str = "free") -> List[Dic
         free_databases.append("congress_gov")
     
     return search_external_databases(query, free_databases, user_tier)
+# Add this function to your legal_assistant/services/external_db_service.py file
+# Add it at the end of the file, before the last line
+
+def search_free_legal_databases_enhanced(query: str, user_tier: str = "free", source_types: List[str] = None) -> List[Dict]:
+    """Enhanced search with source type filtering"""
+    try:
+        # Get all free database results first
+        results = search_free_legal_databases(query, user_tier)
+        
+        if not source_types:
+            return results
+        
+        # Filter results based on source types
+        filtered_results = []
+        
+        for result in results:
+            source_db = result.get('source_database', '').lower()
+            
+            # Map source types to database names
+            if 'cases' in source_types and any(db in source_db for db in ['harvard', 'courtlistener']):
+                filtered_results.append(result)
+            elif 'regulations' in source_types and 'federal_register' in source_db:
+                filtered_results.append(result)
+            elif 'legislation' in source_types and 'congress' in source_db:
+                filtered_results.append(result)
+            elif 'business' in source_types and any(db in source_db for db in ['sec', 'sba', 'uspto']):
+                filtered_results.append(result)
+            elif not source_types:  # If no specific types, include all
+                filtered_results.append(result)
+        
+        logger.info(f"Enhanced search: {len(results)} total results, {len(filtered_results)} after filtering for {source_types}")
+        return filtered_results
+        
+    except Exception as e:
+        logger.error(f"Enhanced search failed: {e}")
+        return search_free_legal_databases(query, user_tier)  # Fallback to regular search
+
 
 def get_database_status() -> Dict[str, Dict]:
     """Get status of all configured databases"""
@@ -632,3 +669,4 @@ def get_database_status() -> Dict[str, Dict]:
             }
     
     return status
+
