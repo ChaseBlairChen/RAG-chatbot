@@ -61,3 +61,13 @@ def cleanup_expired_conversations():
         del conversations[session_id]
     if expired_sessions:
         logger.info(f"Cleaned up {len(expired_sessions)} expired conversations")
+
+# Add these after the existing storage definitions
+
+# Immigration-specific storage
+immigration_cases: Dict[str, Any] = {}
+deadline_alerts: Dict[str, Any] = {}
+resource_library: Dict[str, Any] = {}
+case_documents: Dict[str, List[str]] = {}  # case_id -> [document_ids]
+translation_queue: Dict[str, Dict] = {}
+
