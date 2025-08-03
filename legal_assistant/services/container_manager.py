@@ -477,7 +477,7 @@ class UserContainerManager:
         return self._chunk_legal_document(text, base_metadata)
     
     def _chunk_with_sliding_window(self, text: str, base_metadata: Dict, 
-                                  chunk_size: int = 1000, overlap: int = 200) -> List[Dict]:
+                                  chunk_size: int = 1500, overlap: int = 300) -> List[Dict]:
         """Improved sliding window with sentence boundaries"""
         chunks = []
         
@@ -954,3 +954,4 @@ def get_container_manager() -> UserContainerManager:
     if _container_manager is None:
         return initialize_container_manager()
     return _container_manager
+
