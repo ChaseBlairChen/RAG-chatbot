@@ -1,955 +1,778 @@
-# legal_assistant/services/comprehensive_legal_apis.py
-"""Comprehensive integration of all available free legal APIs"""
+# legal_assistant/services/state_law_apis.py
+"""Free state law and legal database integrations"""
 import requests
 import logging
 import re
 import time
-import json
-from typing import List, Dict, Optional, Any
+from typing import List, Dict, Optional
 from datetime import datetime, timedelta
-from urllib.parse import quote, urlencode
+import json
 from bs4 import BeautifulSoup
-import os
+from urllib.parse import quote, urljoin
 
 logger = logging.getLogger(__name__)
 
-# API Keys from your registrations
-CONGRESS_API_KEY = "7J5Bfj6i0F3tg4VZleZ4SyQmVbG0QyIM9tPMQA2M"
-DATA_GOV_API_KEY = "yZAV2yQIyyVzDYCHCw39CUBx98HDQQmHjd9wojRe"
-
 class RateLimiter:
-    def __init__(self, requests_per_hour: int = 100, requests_per_minute: int = 10):
-        self.requests_per_hour = requests_per_hour
+    """Enhanced rate limiter for multiple APIs"""
+    def __init__(self, requests_per_minute: int = 60, burst: int = 10):
         self.requests_per_minute = requests_per_minute
-        self.hourly_calls = []
-        self.minute_calls = []
+        self.burst = burst
+        self.calls = []
     
     def wait_if_needed(self):
         now = time.time()
+        # Remove calls older than 1 minute
+        self.calls = [t for t in self.calls if now - t < 60]
         
-        # Clean old calls
-        self.hourly_calls = [t for t in self.hourly_calls if now - t < 3600]
-        self.minute_calls = [t for t in self.minute_calls if now - t < 60]
+        # Check burst limit
+        if len(self.calls) >= self.burst:
+            sleep_time = 60 / self.requests_per_minute
+            time.sleep(sleep_time)
         
-        # Check limits
-        if len(self.minute_calls) >= self.requests_per_minute:
-            time.sleep(1)
-        elif len(self.hourly_calls) >= self.requests_per_hour:
-            time.sleep(10)
-        
-        self.hourly_calls.append(now)
-        self.minute_calls.append(now)
+        self.calls.append(now)
 
-class EnvironmentalLawAPI:
-    """EPA and environmental law APIs"""
+class CornellLegalAPI:
+    """Legal Information Institute (Cornell Law) - Free comprehensive legal database"""
     
     def __init__(self):
-        self.epa_base = "https://www.epa.gov/enviro/envirofacts-data-service-api"
-        self.air_quality_base = "https://www.airnowapi.org/aq"
-        self.water_quality_base = "https://www.waterqualitydata.us"
-        self.rate_limiter = RateLimiter(200, 20)
-    
-    def search_environmental_violations(self, facility_name: str = None, state: str = None, 
-                                     violation_type: str = None) -> List[Dict]:
-        """Search EPA environmental violations"""
+        self.base_url = "https://www.law.cornell.edu"
+        self.rate_limiter = RateLimiter(30, 5)  # Be respectful
+        
+    def search_state_code(self, state: str, query: str) -> List[Dict]:
+        """Search state legal codes"""
         self.rate_limiter.wait_if_needed()
         
         try:
-            # EPA Enforcement and Compliance History Online (ECHO)
-            echo_url = "https://echo.epa.gov/tools/web-services/facility-search"
-            
-            params = {
-                "output": "json",
-                "responseset": "1"
+            # Cornell organizes by state
+            state_codes = {
+                'california': 'https://www.law.cornell.edu/california/code',
+                'new_york': 'https://www.law.cornell.edu/newyork/code',
+                'texas': 'https://www.law.cornell.edu/texas/code',
+                'florida': 'https://www.law.cornell.edu/florida/code',
+                'washington': 'https://www.law.cornell.edu/washington/code',
+                # Add more states as needed
             }
             
-            if facility_name:
-                params["p_fn"] = facility_name
-            if state:
-                params["p_st"] = state
-            if violation_type:
-                params["p_act"] = violation_type  # CAA, CWA, RCRA, etc.
+            state_key = state.lower().replace(' ', '_')
+            if state_key not in state_codes:
+                return self._search_generic_cornell(query, state)
             
-            response = requests.get(echo_url, params=params, timeout=10,
+            # Search specific state code
+            search_url = f"{state_codes[state_key]}/search"
+            params = {'q': query, 'source': 'state_code'}
+            
+            response = requests.get(search_url, params=params, timeout=10,
                                   headers={'User-Agent': 'LegalAssistant/1.0'})
             
             if response.ok:
-                data = response.json()
-                results = []
-                
-                for facility in data.get('Results', {}).get('Facilities', [])[:20]:
-                    results.append({
-                        'facility_name': facility.get('FacName', ''),
-                        'location': f"{facility.get('FacCity', '')}, {facility.get('FacState', '')}",
-                        'violations': facility.get('CurrViol', ''),
-                        'enforcement_actions': facility.get('Enforcements', ''),
-                        'program': facility.get('Programs', ''),
-                        'inspection_date': facility.get('LastInsp', ''),
-                        'compliance_status': facility.get('ComplianceStatus', ''),
-                        'source_database': 'epa_echo',
-                        'url': f"https://echo.epa.gov/detailed-facility-report?fid={facility.get('RegistryID', '')}"
-                    })
-                
-                return results
-                
+                # Parse Cornell's response (would need HTML parsing)
+                return self._parse_cornell_results(response.text, state)
+            
         except Exception as e:
-            logger.error(f"EPA ECHO search failed: {e}")
+            logger.error(f"Cornell Law search failed: {e}")
         
         return []
     
-    def search_air_quality_data(self, state: str, county: str = None) -> List[Dict]:
-        """Search air quality data"""
+    def search_federal_code(self, query: str, code_type: str = "usc") -> List[Dict]:
+        """Search federal codes (USC, CFR)"""
         self.rate_limiter.wait_if_needed()
         
         try:
-            params = {
-                "format": "json",
-                "api_key": DATA_GOV_API_KEY
-            }
+            if code_type == "usc":
+                search_url = f"{self.base_url}/uscode/search"
+            elif code_type == "cfr":
+                search_url = f"{self.base_url}/cfr/search"
+            else:
+                search_url = f"{self.base_url}/search"
             
-            if state:
-                params["state"] = state
-            if county:
-                params["county"] = county
+            params = {'q': query, 'source': code_type}
             
-            response = requests.get(f"{self.air_quality_base}/forecast/state", 
-                                  params=params, timeout=10)
+            response = requests.get(search_url, params=params, timeout=10,
+                                  headers={'User-Agent': 'LegalAssistant/1.0'})
             
             if response.ok:
-                data = response.json()
+                return self._parse_cornell_federal_results(response.text, code_type)
+                
+        except Exception as e:
+            logger.error(f"Cornell federal search failed: {e}")
+        
+        return []
+    
+    def _search_generic_cornell(self, query: str, state: str) -> List[Dict]:
+        """Generic Cornell search when state-specific not available"""
+        try:
+            search_url = f"{self.base_url}/search"
+            params = {'q': f"{state} {query}", 'source': 'all'}
+            
+            response = requests.get(search_url, params=params, timeout=10,
+                                  headers={'User-Agent': 'LegalAssistant/1.0'})
+            
+            if response.ok:
                 return [{
-                    'title': f'Air Quality Data - {state}',
-                    'data': data,
-                    'source_database': 'epa_air_quality',
-                    'type': 'environmental_data'
+                    'title': f'Cornell Law - {state} Legal Resources',
+                    'url': f"{self.base_url}/search?q={quote(f'{state} {query}')}",
+                    'source_database': 'cornell_law',
+                    'state': state,
+                    'description': f'Comprehensive legal resources for {state}',
+                    'sections': ['State Code', 'Case Law', 'Regulations'],
+                    'access_note': 'Full text available at Cornell Law School'
                 }]
                 
         except Exception as e:
-            logger.error(f"Air quality search failed: {e}")
+            logger.error(f"Generic Cornell search failed: {e}")
         
         return []
-
-class ImmigrationLawAPI:
-    """Immigration law and data APIs"""
     
-    def __init__(self):
-        self.uscis_base = "https://egov.uscis.gov"
-        self.state_dept_base = "https://travel.state.gov"
-        self.rate_limiter = RateLimiter(100, 10)
-    
-    def check_case_status(self, receipt_number: str) -> Dict:
-        """Check USCIS case status"""
-        self.rate_limiter.wait_if_needed()
-        
+    def _parse_cornell_results(self, html: str, state: str) -> List[Dict]:
+        """Parse Cornell Law search results"""
+        results = []
         try:
-            # USCIS case status check
-            url = f"{self.uscis_base}/casestatus/mycasestatus.do"
-            data = {"appReceiptNum": receipt_number}
+            soup = BeautifulSoup(html, 'html.parser')
             
-            response = requests.post(url, data=data, timeout=10,
-                                   headers={'User-Agent': 'LegalAssistant/1.0'})
+            # Find search result elements (adjust selectors as needed)
+            result_elements = soup.find_all('div', class_='search-result')
             
-            if response.ok:
-                # Parse HTML response for case status
-                soup = BeautifulSoup(response.text, 'html.parser')
-                status_element = soup.find('div', class_='current-status-sec')
-                
-                if status_element:
-                    return {
-                        'receipt_number': receipt_number,
-                        'status': status_element.get_text().strip(),
-                        'source_database': 'uscis_case_status',
-                        'checked_date': datetime.now().isoformat()
-                    }
+            for element in result_elements[:10]:
+                title_elem = element.find('h3') or element.find('a')
+                if title_elem:
+                    title = title_elem.get_text().strip()
+                    url = title_elem.get('href', '')
+                    if url and not url.startswith('http'):
+                        url = urljoin(self.base_url, url)
                     
-        except Exception as e:
-            logger.error(f"USCIS case status check failed: {e}")
-        
-        return {}
-    
-    def get_visa_bulletin_data(self) -> Dict:
-        """Get current visa bulletin data"""
-        self.rate_limiter.wait_if_needed()
-        
-        try:
-            # State Department visa bulletin
-            url = f"{self.state_dept_base}/content/travel/en/legal/visa-law0/visa-bulletin.html"
-            
-            response = requests.get(url, timeout=10,
-                                  headers={'User-Agent': 'LegalAssistant/1.0'})
-            
-            if response.ok:
-                return {
-                    'title': 'Current Visa Bulletin',
-                    'url': url,
-                    'source_database': 'state_dept_visa_bulletin',
-                    'last_updated': datetime.now().isoformat(),
-                    'description': 'Current priority dates and visa availability'
-                }
-                
-        except Exception as e:
-            logger.error(f"Visa bulletin fetch failed: {e}")
-        
-        return {}
-
-class HousingLawAPI:
-    """Housing and homelessness law APIs"""
-    
-    def __init__(self):
-        self.hud_base = "https://www.huduser.gov/hudapi/public"
-        self.census_base = "https://api.census.gov/data"
-        self.rate_limiter = RateLimiter(150, 15)
-    
-    def search_fair_market_rents(self, state: str, county: str = None) -> List[Dict]:
-        """Search HUD Fair Market Rents"""
-        self.rate_limiter.wait_if_needed()
-        
-        try:
-            url = f"{self.hud_base}/fmr/data/{state}"
-            if county:
-                url += f"/{county}"
-            
-            params = {"format": "json"}
-            
-            response = requests.get(url, params=params, timeout=10,
-                                  headers={'User-Agent': 'LegalAssistant/1.0'})
-            
-            if response.ok:
-                data = response.json()
-                results = []
-                
-                for fmr in data.get('data', [])[:10]:
+                    description_elem = element.find('p') or element.find('div', class_='description')
+                    description = description_elem.get_text().strip() if description_elem else ''
+                    
                     results.append({
-                        'area_name': fmr.get('area_name', ''),
+                        'title': title,
+                        'url': url,
+                        'description': description[:200] + '...' if len(description) > 200 else description,
+                        'source_database': 'cornell_law',
                         'state': state,
-                        'fmr_0br': fmr.get('fmr_0br', ''),
-                        'fmr_1br': fmr.get('fmr_1br', ''),
-                        'fmr_2br': fmr.get('fmr_2br', ''),
-                        'fmr_3br': fmr.get('fmr_3br', ''),
-                        'fmr_4br': fmr.get('fmr_4br', ''),
-                        'year': fmr.get('year', ''),
-                        'source_database': 'hud_fair_market_rents'
+                        'type': 'state_code'
                     })
-                
-                return results
-                
-        except Exception as e:
-            logger.error(f"HUD FMR search failed: {e}")
-        
-        return []
-    
-    def search_housing_data(self, state: str, data_type: str = "demographics") -> List[Dict]:
-        """Search Census housing data"""
-        self.rate_limiter.wait_if_needed()
-        
-        try:
-            # American Community Survey housing data
-            year = datetime.now().year - 1  # Use most recent complete year
-            dataset = f"{year}/acs/acs1"
-            
-            # Housing-related variables
-            housing_vars = {
-                'demographics': ['B25001_001E', 'B25002_001E', 'B25003_001E'],  # Total housing units
-                'costs': ['B25070_001E', 'B25091_001E'],  # Housing costs
-                'occupancy': ['B25004_001E', 'B25014_001E']  # Vacancy status
-            }
-            
-            variables = housing_vars.get(data_type, housing_vars['demographics'])
-            
-            params = {
-                "get": ",".join(variables + ["NAME"]),
-                "for": f"state:{self._get_state_fips(state)}",
-                "key": DATA_GOV_API_KEY
-            }
-            
-            response = requests.get(f"{self.census_base}/{dataset}", 
-                                  params=params, timeout=10)
-            
-            if response.ok:
-                data = response.json()
-                if len(data) > 1:  # First row is headers
-                    return [{
-                        'state': state,
-                        'housing_data': dict(zip(data[0], data[1])),
-                        'data_type': data_type,
-                        'year': year,
-                        'source_database': 'census_housing'
-                    }]
                     
         except Exception as e:
-            logger.error(f"Census housing search failed: {e}")
+            logger.error(f"Error parsing Cornell results: {e}")
         
-        return []
+        return results
     
-    def _get_state_fips(self, state_name: str) -> str:
-        """Get FIPS code for state"""
-        state_fips = {
-            'alabama': '01', 'alaska': '02', 'arizona': '04', 'arkansas': '05',
-            'california': '06', 'colorado': '08', 'connecticut': '09', 'delaware': '10',
-            'florida': '12', 'georgia': '13', 'hawaii': '15', 'idaho': '16',
-            'illinois': '17', 'indiana': '18', 'iowa': '19', 'kansas': '20',
-            'kentucky': '21', 'louisiana': '22', 'maine': '23', 'maryland': '24',
-            'massachusetts': '25', 'michigan': '26', 'minnesota': '27', 'mississippi': '28',
-            'missouri': '29', 'montana': '30', 'nebraska': '31', 'nevada': '32',
-            'new hampshire': '33', 'new jersey': '34', 'new mexico': '35', 'new york': '36',
-            'north carolina': '37', 'north dakota': '38', 'ohio': '39', 'oklahoma': '40',
-            'oregon': '41', 'pennsylvania': '42', 'rhode island': '44', 'south carolina': '45',
-            'south dakota': '46', 'tennessee': '47', 'texas': '48', 'utah': '49',
-            'vermont': '50', 'virginia': '51', 'washington': '53', 'west virginia': '54',
-            'wisconsin': '55', 'wyoming': '56'
-        }
-        return state_fips.get(state_name.lower(), '06')  # Default to California
+    def _parse_cornell_federal_results(self, html: str, code_type: str) -> List[Dict]:
+        """Parse Cornell federal law results"""
+        # Similar parsing logic for federal codes
+        return [{
+            'title': f'Cornell Law - Federal {code_type.upper()} Search Results',
+            'url': f"{self.base_url}/{code_type}/",
+            'source_database': 'cornell_law',
+            'type': f'federal_{code_type}',
+            'description': f'Federal {code_type.upper()} search results from Cornell Law'
+        }]
+    
+    def search(self, query: str, filters: Optional[Dict] = None) -> List[Dict]:
+        """Unified search method for external_db_service integration"""
+        state = filters.get('state', 'Washington') if filters else 'Washington'
+        return self.search_state_code(state, query)
 
-class BusinessLawAPI:
-    """Corporate and business law APIs"""
+    def authenticate(self, credentials: Dict) -> bool:
+        """No authentication needed"""
+        return True
+
+    def get_document(self, document_id: str) -> Dict:
+        """Get document - not implemented for Cornell"""
+        return {}
+
+class OpenStatesAPI:
+    """OpenStates API - Free state legislative data"""
     
     def __init__(self):
-        self.sec_base = "https://data.sec.gov/api"
-        self.sba_base = "https://api.sba.gov"
-        self.rate_limiter = RateLimiter(100, 10)
+        self.base_url = "https://v3.openstates.org"
+        self.api_key = None  # Free tier doesn't require key
+        self.rate_limiter = RateLimiter(60, 10)
+        
+        # State jurisdiction mapping
+        self.state_jurisdictions = {
+            'alabama': 'al', 'alaska': 'ak', 'arizona': 'az', 'arkansas': 'ar',
+            'california': 'ca', 'colorado': 'co', 'connecticut': 'ct', 'delaware': 'de',
+            'florida': 'fl', 'georgia': 'ga', 'hawaii': 'hi', 'idaho': 'id',
+            'illinois': 'il', 'indiana': 'in', 'iowa': 'ia', 'kansas': 'ks',
+            'kentucky': 'ky', 'louisiana': 'la', 'maine': 'me', 'maryland': 'md',
+            'massachusetts': 'ma', 'michigan': 'mi', 'minnesota': 'mn', 'mississippi': 'ms',
+            'missouri': 'mo', 'montana': 'mt', 'nebraska': 'ne', 'nevada': 'nv',
+            'new hampshire': 'nh', 'new jersey': 'nj', 'new mexico': 'nm', 'new york': 'ny',
+            'north carolina': 'nc', 'north dakota': 'nd', 'ohio': 'oh', 'oklahoma': 'ok',
+            'oregon': 'or', 'pennsylvania': 'pa', 'rhode island': 'ri', 'south carolina': 'sc',
+            'south dakota': 'sd', 'tennessee': 'tn', 'texas': 'tx', 'utah': 'ut',
+            'vermont': 'vt', 'virginia': 'va', 'washington': 'wa', 'west virginia': 'wv',
+            'wisconsin': 'wi', 'wyoming': 'wy'
+        }
     
-    def search_sec_filings(self, company_name: str, filing_type: str = None) -> List[Dict]:
-        """Search SEC EDGAR filings"""
+    def search_bills(self, state: str, query: str, session: str = None) -> List[Dict]:
+        """Search state bills"""
         self.rate_limiter.wait_if_needed()
         
         try:
-            # First get company CIK
-            cik = self._get_company_cik(company_name)
-            if not cik:
+            jurisdiction = self._get_jurisdiction(state)
+            if not jurisdiction:
                 return []
             
-            # Get company filings
-            url = f"https://data.sec.gov/submissions/CIK{cik:0>10}.json"
+            params = {
+                'jurisdiction': jurisdiction,
+                'q': query,
+                'format': 'json'
+            }
             
-            response = requests.get(url, timeout=10, headers={
-                'User-Agent': 'LegalAssistant legal-research@example.com',
-                'Accept-Encoding': 'gzip, deflate',
-                'Host': 'data.sec.gov'
-            })
+            if session:
+                params['session'] = session
+            
+            response = requests.get(
+                f"{self.base_url}/bills",
+                params=params,
+                timeout=10,
+                headers={'User-Agent': 'LegalAssistant/1.0'}
+            )
             
             if response.ok:
                 data = response.json()
                 results = []
                 
-                recent_filings = data.get('filings', {}).get('recent', {})
-                forms = recent_filings.get('form', [])
-                filing_dates = recent_filings.get('filingDate', [])
-                accession_numbers = recent_filings.get('accessionNumber', [])
+                for bill in data.get('results', [])[:20]:
+                    results.append({
+                        'bill_id': bill.get('identifier', ''),
+                        'title': bill.get('title', ''),
+                        'state': state,
+                        'session': bill.get('session', ''),
+                        'subject': ', '.join(bill.get('subject', [])),
+                        'status': self._get_latest_action(bill),
+                        'sponsors': self._get_sponsors(bill),
+                        'url': bill.get('openstates_url', ''),
+                        'source_database': 'openstates',
+                        'updated_at': bill.get('updated_at', ''),
+                        'chamber': bill.get('from_organization', '')
+                    })
                 
-                for i in range(min(10, len(forms))):
-                    if not filing_type or forms[i] == filing_type:
-                        results.append({
-                            'company': company_name,
-                            'form_type': forms[i],
-                            'filing_date': filing_dates[i],
-                            'accession_number': accession_numbers[i],
-                            'url': f"https://www.sec.gov/Archives/edgar/data/{cik}/{accession_numbers[i].replace('-', '')}/{accession_numbers[i]}-index.htm",
-                            'source_database': 'sec_edgar'
-                        })
-                
+                logger.info(f"OpenStates found {len(results)} bills for {state}")
                 return results
                 
         except Exception as e:
-            logger.error(f"SEC search failed: {e}")
+            logger.error(f"OpenStates bill search failed: {e}")
         
         return []
     
-    def _get_company_cik(self, company_name: str) -> Optional[int]:
-        """Get company CIK from name"""
-        try:
-            # Search company tickers file
-            url = "https://www.sec.gov/files/company_tickers.json"
-            response = requests.get(url, timeout=10, headers={
-                'User-Agent': 'LegalAssistant legal-research@example.com'
-            })
-            
-            if response.ok:
-                data = response.json()
-                company_lower = company_name.lower()
-                
-                for company_info in data.values():
-                    if company_lower in company_info.get('title', '').lower():
-                        return company_info.get('cik_str')
-                        
-        except Exception as e:
-            logger.error(f"CIK lookup failed: {e}")
-        
-        return None
-
-class LaborEmploymentAPI:
-    """Department of Labor and employment law APIs"""
-    
-    def __init__(self):
-        self.dol_base = "https://developer.dol.gov/health-and-safety"
-        self.osha_base = "https://www.osha.gov/api"
-        self.bls_base = "https://api.bls.gov/publicAPI/v2"
-        self.rate_limiter = RateLimiter(150, 15)
-    
-    def search_osha_violations(self, company_name: str = None, state: str = None) -> List[Dict]:
-        """Search OSHA violations and citations"""
+    def get_bill_details(self, bill_id: str, jurisdiction: str) -> Dict:
+        """Get detailed bill information"""
         self.rate_limiter.wait_if_needed()
         
         try:
-            # OSHA enforcement data
-            url = f"{self.dol_base}/consumerComplaintSearch"
+            response = requests.get(
+                f"{self.base_url}/bills/{jurisdiction}/{bill_id}",
+                timeout=10,
+                headers={'User-Agent': 'LegalAssistant/1.0'}
+            )
             
-            params = {
-                "format": "json",
-                "top": "50"
-            }
+            if response.ok:
+                return response.json()
+                
+        except Exception as e:
+            logger.error(f"Failed to get bill details: {e}")
+        
+        return {}
+    
+    def search_legislators(self, state: str, name: str = None) -> List[Dict]:
+        """Search state legislators"""
+        self.rate_limiter.wait_if_needed()
+        
+        try:
+            jurisdiction = self._get_jurisdiction(state)
+            if not jurisdiction:
+                return []
             
-            if company_name:
-                params["estab_name"] = company_name
-            if state:
-                params["state"] = state
+            params = {'jurisdiction': jurisdiction}
+            if name:
+                params['name'] = name
             
-            response = requests.get(url, params=params, timeout=10,
-                                  headers={'User-Agent': 'LegalAssistant/1.0'})
+            response = requests.get(
+                f"{self.base_url}/people",
+                params=params,
+                timeout=10,
+                headers={'User-Agent': 'LegalAssistant/1.0'}
+            )
             
             if response.ok:
                 data = response.json()
                 results = []
                 
-                for violation in data.get('dataset', [])[:20]:
+                for person in data.get('results', [])[:10]:
                     results.append({
-                        'company': violation.get('estab_name', ''),
-                        'violation_type': violation.get('violation_type', ''),
-                        'citation_date': violation.get('issuance_date', ''),
-                        'penalty': violation.get('current_penalty', ''),
-                        'standard_violated': violation.get('standard', ''),
-                        'description': violation.get('description', ''),
-                        'state': violation.get('state', ''),
-                        'source_database': 'dol_osha'
+                        'name': person.get('name', ''),
+                        'party': person.get('party', [{}])[0].get('name', '') if person.get('party') else '',
+                        'chamber': person.get('current_role', {}).get('org_classification', ''),
+                        'district': person.get('current_role', {}).get('district', ''),
+                        'email': person.get('email', ''),
+                        'url': person.get('openstates_url', ''),
+                        'source_database': 'openstates',
+                        'state': state
                     })
                 
                 return results
                 
         except Exception as e:
-            logger.error(f"OSHA search failed: {e}")
+            logger.error(f"OpenStates legislator search failed: {e}")
         
         return []
     
-    def search_wage_hour_violations(self, company_name: str = None, state: str = None) -> List[Dict]:
-        """Search DOL Wage and Hour violations"""
-        self.rate_limiter.wait_if_needed()
-        
-        try:
-            # DOL WHD (Wage and Hour Division) data
-            url = "https://enforcedata.dol.gov/views/data_catalogs.php"
-            
-            # This would require scraping or finding the proper API endpoint
-            # For now, return a structured search URL
-            return [{
-                'title': f'DOL Wage & Hour Violations Search - {company_name or state or "All"}',
-                'url': f"https://enforcedata.dol.gov/views/data_summary.php",
-                'company': company_name,
-                'state': state,
-                'source_database': 'dol_wage_hour',
-                'description': 'Department of Labor wage and hour violation data'
-            }]
-            
-        except Exception as e:
-            logger.error(f"DOL search failed: {e}")
-        
-        return []
+    def _get_jurisdiction(self, state: str) -> Optional[str]:
+        """Get OpenStates jurisdiction code for state"""
+        return self.state_jurisdictions.get(state.lower())
+    
+    def _get_latest_action(self, bill: Dict) -> str:
+        """Extract latest action from bill data"""
+        actions = bill.get('actions', [])
+        if actions:
+            latest = max(actions, key=lambda x: x.get('date', ''))
+            return latest.get('description', 'Unknown action')
+        return 'No actions recorded'
+    
+    def _get_sponsors(self, bill: Dict) -> List[str]:
+        """Extract sponsors from bill data"""
+        sponsors = []
+        for sponsorship in bill.get('sponsorships', []):
+            name = sponsorship.get('name', '')
+            if name:
+                sponsors.append(name)
+        return sponsors
+    
+    def search(self, query: str, filters: Optional[Dict] = None) -> List[Dict]:
+        """Unified search method for external_db_service integration"""
+        state = filters.get('state', 'Washington') if filters else 'Washington'
+        return self.search_bills(state, query)
 
-class IntellectualPropertyAPI:
-    """USPTO patent and trademark APIs"""
+    def authenticate(self, credentials: Dict) -> bool:
+        """No authentication needed"""
+        return True
+
+    def get_document(self, document_id: str) -> Dict:
+        """Get document by ID"""
+        parts = document_id.split('-')
+        if len(parts) >= 2:
+            return self.get_bill_details(parts[1], parts[0])
+        return {}
+
+class JustiaLegalAPI:
+    """Justia Free Law Database - Comprehensive free legal search"""
     
     def __init__(self):
-        self.uspto_base = "https://developer.uspto.gov/api-catalog"
-        self.patent_base = "https://patents.uspto.gov/api"
-        self.trademark_base = "https://tsdrapi.uspto.gov"
-        self.rate_limiter = RateLimiter(200, 20)
+        self.base_url = "https://law.justia.com"
+        self.rate_limiter = RateLimiter(30, 5)  # Be respectful of free service
     
-    def search_patents(self, query: str, inventor: str = None) -> List[Dict]:
-        """Search USPTO patents"""
+    def search_state_law(self, state: str, query: str, law_type: str = "codes") -> List[Dict]:
+        """Search Justia state law database"""
         self.rate_limiter.wait_if_needed()
         
         try:
-            # Use Google Patents as primary source (free and comprehensive)
-            google_patents_url = "https://patents.google.com/xhr/query"
+            # Justia URL structure: /codes/[state]/
+            state_slug = state.lower().replace(' ', '-')
             
-            params = {
-                "url": quote(f"q={query}"),
-                "exp": ""
+            search_urls = {
+                'codes': f"{self.base_url}/codes/{state_slug}/",
+                'cases': f"{self.base_url}/cases/{state_slug}/",
+                'regulations': f"{self.base_url}/regulations/{state_slug}/"
             }
             
-            if inventor:
-                params["url"] = quote(f"q={query} inventor:{inventor}")
+            base_url = search_urls.get(law_type, search_urls['codes'])
             
-            # For now, provide structured search URLs since Google Patents API is complex
-            results = [{
-                'title': f'Patent Search: {query}',
-                'url': f"https://patents.google.com/?q={quote(query)}",
-                'search_query': query,
-                'inventor': inventor,
-                'source_database': 'google_patents',
-                'description': f'Search patents for: {query}',
-                'access': 'Free full-text patent search'
-            }]
+            # Perform search (Justia uses Google Custom Search)
+            search_url = f"{base_url}search"
+            params = {
+                'q': query,
+                'cx': 'justia_custom_search_id',  # Would need to get actual ID
+                'num': 10
+            }
             
-            # Also provide USPTO search URL
-            results.append({
-                'title': f'USPTO Patent Search: {query}',
-                'url': f"https://ppubs.uspto.gov/pubwebapp/static/pages/ppubsbasic.html?term={quote(query)}",
-                'source_database': 'uspto_patents',
-                'description': 'Official USPTO patent database',
-                'access': 'Free official patent search'
-            })
+            # For now, create structured search URLs
+            results = []
             
+            # Common state code patterns
+            code_types = {
+                'criminal': f"{base_url}criminal/",
+                'civil': f"{base_url}civil/",
+                'business': f"{base_url}business/",
+                'family': f"{base_url}family/",
+                'property': f"{base_url}property/",
+                'administrative': f"{base_url}administrative/"
+            }
+            
+            # Determine relevant code types based on query
+            relevant_types = self._determine_relevant_codes(query)
+            
+            for code_type in relevant_types:
+                if code_type in code_types:
+                    results.append({
+                        'title': f'{state} {code_type.title()} Code - {query}',
+                        'url': f"{code_types[code_type]}?search={quote(query)}",
+                        'source_database': 'justia',
+                        'state': state,
+                        'code_type': code_type,
+                        'description': f'Search {state} {code_type} law for: {query}',
+                        'access': 'Free full text'
+                    })
+            
+            logger.info(f"Justia found {len(results)} relevant code sections for {state}")
             return results
             
         except Exception as e:
-            logger.error(f"Patent search failed: {e}")
+            logger.error(f"Justia search failed: {e}")
         
         return []
     
-    def search_trademarks(self, mark: str, owner: str = None) -> List[Dict]:
-        """Search USPTO trademarks"""
+    def search_case_law(self, state: str, query: str, court_level: str = "all") -> List[Dict]:
+        """Search Justia case law"""
         self.rate_limiter.wait_if_needed()
         
         try:
-            # USPTO Trademark Electronic Search System (TESS)
-            tess_url = f"https://tmsearch.uspto.gov/bin/gate.exe?f=searchss&state=4806:1e7v2n.1.1"
+            state_slug = state.lower().replace(' ', '-')
             
+            # Justia case law structure
+            court_urls = {
+                'supreme': f"{self.base_url}/cases/{state_slug}/supreme-court/",
+                'appellate': f"{self.base_url}/cases/{state_slug}/court-of-appeals/",
+                'all': f"{self.base_url}/cases/{state_slug}/"
+            }
+            
+            base_url = court_urls.get(court_level, court_urls['all'])
+            
+            # Create search result
             return [{
-                'title': f'Trademark Search: {mark}',
-                'url': f"https://tmsearch.uspto.gov/search/search-information",
-                'mark': mark,
-                'owner': owner,
-                'source_database': 'uspto_trademarks',
-                'description': f'Search trademarks for: {mark}',
-                'access': 'Free official trademark search'
+                'title': f'{state} Case Law Search - {query}',
+                'url': f"{base_url}?search={quote(query)}",
+                'source_database': 'justia_cases',
+                'state': state,
+                'court_level': court_level,
+                'description': f'Search {state} case law for: {query}',
+                'search_query': query,
+                'note': 'Click to access full search results on Justia'
             }]
             
         except Exception as e:
-            logger.error(f"Trademark search failed: {e}")
-        
-        return []
-
-class HealthcareLawAPI:
-    """FDA and healthcare law APIs"""
-    
-    def __init__(self):
-        self.fda_base = "https://api.fda.gov"
-        self.cms_base = "https://data.cms.gov/api"
-        self.rate_limiter = RateLimiter(120, 12)
-    
-    def search_fda_enforcement(self, product_type: str = "drug", 
-                             date_range: int = 30) -> List[Dict]:
-        """Search FDA enforcement actions"""
-        self.rate_limiter.wait_if_needed()
-        
-        try:
-            endpoint_map = {
-                'drug': 'drug/enforcement',
-                'device': 'device/enforcement', 
-                'food': 'food/enforcement'
-            }
-            
-            endpoint = endpoint_map.get(product_type, 'drug/enforcement')
-            url = f"{self.fda_base}/{endpoint}.json"
-            
-            # Search recent enforcement actions
-            params = {
-                "search": f"report_date:[{(datetime.now() - timedelta(days=date_range)).strftime('%Y%m%d')} TO {datetime.now().strftime('%Y%m%d')}]",
-                "limit": 20
-            }
-            
-            response = requests.get(url, params=params, timeout=10,
-                                  headers={'User-Agent': 'LegalAssistant/1.0'})
-            
-            if response.ok:
-                data = response.json()
-                results = []
-                
-                for enforcement in data.get('results', []):
-                    results.append({
-                        'product_description': enforcement.get('product_description', ''),
-                        'reason_for_recall': enforcement.get('reason_for_recall', ''),
-                        'classification': enforcement.get('classification', ''),
-                        'company': enforcement.get('recalling_firm', ''),
-                        'report_date': enforcement.get('report_date', ''),
-                        'status': enforcement.get('status', ''),
-                        'source_database': f'fda_{product_type}_enforcement'
-                    })
-                
-                return results
-                
-        except Exception as e:
-            logger.error(f"FDA enforcement search failed: {e}")
-        
-        return []
-
-class CriminalJusticeAPI:
-    """FBI and criminal justice data APIs"""
-    
-    def __init__(self):
-        self.fbi_base = "https://api.usa.gov/crime/fbi/cde"
-        self.bjs_base = "https://bjs.ojp.gov/api"
-        self.rate_limiter = RateLimiter(100, 10)
-    
-    def search_crime_data(self, state: str = None, offense_type: str = None) -> List[Dict]:
-        """Search FBI crime data"""
-        self.rate_limiter.wait_if_needed()
-        
-        try:
-            # FBI Crime Data Explorer API
-            url = f"{self.fbi_base}/estimate/state"
-            
-            params = {
-                "API_KEY": DATA_GOV_API_KEY,
-                "format": "json"
-            }
-            
-            if state:
-                params["state_abbr"] = self._get_state_abbr(state)
-            if offense_type:
-                params["offense"] = offense_type
-            
-            response = requests.get(url, params=params, timeout=10,
-                                  headers={'User-Agent': 'LegalAssistant/1.0'})
-            
-            if response.ok:
-                data = response.json()
-                return [{
-                    'title': f'FBI Crime Statistics - {state or "National"}',
-                    'data': data.get('results', []),
-                    'state': state,
-                    'offense_type': offense_type,
-                    'source_database': 'fbi_crime_data'
-                }]
-                
-        except Exception as e:
-            logger.error(f"FBI crime data search failed: {e}")
+            logger.error(f"Justia case law search failed: {e}")
         
         return []
     
-    def _get_state_abbr(self, state_name: str) -> str:
-        """Get state abbreviation"""
-        state_abbrs = {
-            'alabama': 'AL', 'alaska': 'AK', 'arizona': 'AZ', 'arkansas': 'AR',
-            'california': 'CA', 'colorado': 'CO', 'connecticut': 'CT', 'delaware': 'DE',
-            'florida': 'FL', 'georgia': 'GA', 'hawaii': 'HI', 'idaho': 'ID',
-            'illinois': 'IL', 'indiana': 'IN', 'iowa': 'IA', 'kansas': 'KS',
-            'kentucky': 'KY', 'louisiana': 'LA', 'maine': 'ME', 'maryland': 'MD',
-            'massachusetts': 'MA', 'michigan': 'MI', 'minnesota': 'MN', 'mississippi': 'MS',
-            'missouri': 'MO', 'montana': 'MT', 'nebraska': 'NE', 'nevada': 'NV',
-            'new hampshire': 'NH', 'new jersey': 'NJ', 'new mexico': 'NM', 'new york': 'NY',
-            'north carolina': 'NC', 'north dakota': 'ND', 'ohio': 'OH', 'oklahoma': 'OK',
-            'oregon': 'OR', 'pennsylvania': 'PA', 'rhode island': 'RI', 'south carolina': 'SC',
-            'south dakota': 'SD', 'tennessee': 'TN', 'texas': 'TX', 'utah': 'UT',
-            'vermont': 'VT', 'virginia': 'VA', 'washington': 'WA', 'west virginia': 'WV',
-            'wisconsin': 'WI', 'wyoming': 'WY'
+    def _determine_relevant_codes(self, query: str) -> List[str]:
+        """Determine which code sections are relevant to query"""
+        query_lower = query.lower()
+        
+        code_keywords = {
+            'criminal': ['crime', 'criminal', 'felony', 'misdemeanor', 'arrest', 'sentence', 'bail'],
+            'civil': ['lawsuit', 'tort', 'negligence', 'contract', 'damages', 'liability'],
+            'business': ['corporation', 'llc', 'partnership', 'securities', 'commercial'],
+            'family': ['divorce', 'custody', 'child support', 'marriage', 'adoption'],
+            'property': ['real estate', 'property', 'deed', 'zoning', 'landlord', 'tenant'],
+            'administrative': ['agency', 'regulation', 'administrative', 'permit', 'license']
         }
-        return state_abbrs.get(state_name.lower(), 'CA')
+        
+        relevant = []
+        for code_type, keywords in code_keywords.items():
+            if any(keyword in query_lower for keyword in keywords):
+                relevant.append(code_type)
+        
+        # Default to civil if no specific match
+        if not relevant:
+            relevant = ['civil', 'criminal']
+        
+        return relevant
+    
+    def search(self, query: str, filters: Optional[Dict] = None) -> List[Dict]:
+        """Unified search method for external_db_service integration"""
+        state = filters.get('state', 'Washington') if filters else 'Washington'
+        law_type = filters.get('law_type', 'codes') if filters else 'codes'
+        return self.search_state_law(state, query, law_type)
 
-class InternationalLawAPI:
-    """International law and treaty APIs"""
+    def authenticate(self, credentials: Dict) -> bool:
+        """No authentication needed"""
+        return True
+
+    def get_document(self, document_id: str) -> Dict:
+        """Get document - not implemented for Justia"""
+        return {}
+
+class GoogleScholarLegalAPI:
+    """Google Scholar Legal Opinions - Free case law search"""
     
     def __init__(self):
-        self.un_base = "https://treaties.un.org/api"
-        self.worldbank_base = "https://api.worldbank.org/v2"
-        self.rate_limiter = RateLimiter(100, 10)
+        self.base_url = "https://scholar.google.com"
+        self.rate_limiter = RateLimiter(10, 2)  # Very conservative for Google
     
-    def search_treaties(self, topic: str, country: str = None) -> List[Dict]:
-        """Search UN treaty collection"""
+    def search_case_law(self, query: str, state: str = None, court: str = None) -> List[Dict]:
+        """Search Google Scholar for case law"""
         self.rate_limiter.wait_if_needed()
         
         try:
-            # UN Treaty Collection search
+            # Enhance query for legal search
+            enhanced_query = f"{query} case law"
+            if state:
+                enhanced_query += f" {state}"
+            if court:
+                enhanced_query += f" {court}"
+            
+            # Google Scholar Legal search URL
+            search_url = f"{self.base_url}/scholar"
             params = {
-                "format": "json",
-                "query": topic
+                'hl': 'en',
+                'as_sdt': '2006',  # Legal documents and patents
+                'q': enhanced_query
             }
             
-            if country:
-                params["participant"] = country
+            # Note: Google Scholar requires careful scraping
+            # In production, you'd need to handle CAPTCHAs and rate limiting
             
-            # Note: UN Treaty API may require different authentication
-            # For now, provide search URL
+            # For now, return structured search URL
             return [{
-                'title': f'UN Treaty Collection - {topic}',
-                'url': f"https://treaties.un.org/pages/AdvanceSearch.aspx?tab=UNTS&clang=_en",
-                'topic': topic,
-                'country': country,
-                'source_database': 'un_treaties',
-                'description': f'Search international treaties on: {topic}'
+                'title': f'Google Scholar Legal Search - {query}',
+                'url': f"{search_url}?{requests.compat.urlencode(params)}",
+                'source_database': 'google_scholar_legal',
+                'query': enhanced_query,
+                'state': state,
+                'court': court,
+                'description': f'Search legal opinions and case law for: {query}',
+                'access_note': 'Free access to case law and legal opinions',
+                'search_tips': [
+                    'Use specific case names for exact matches',
+                    'Include jurisdiction (state/federal) for targeted results',
+                    'Use legal terminology for better precision'
+                ]
             }]
             
         except Exception as e:
-            logger.error(f"UN treaty search failed: {e}")
+            logger.error(f"Google Scholar search failed: {e}")
         
         return []
+    
+    def search(self, query: str, filters: Optional[Dict] = None) -> List[Dict]:
+        """Unified search method for external_db_service integration"""
+        state = filters.get('state') if filters else None
+        court = filters.get('court') if filters else None
+        return self.search_case_law(query, state, court)
 
-class ComprehensiveLegalHub:
-    """Unified hub for all free legal APIs"""
+    def authenticate(self, credentials: Dict) -> bool:
+        """No authentication needed"""
+        return True
+
+    def get_document(self, document_id: str) -> Dict:
+        """Get document - not implemented for Google Scholar"""
+        return {}
+
+class LegalInformationAPI:
+    """Aggregate multiple free legal APIs"""
     
     def __init__(self):
-        self.environmental = EnvironmentalLawAPI()
-        self.immigration = ImmigrationLawAPI()
-        self.housing = HousingLawAPI()
-        self.business = BusinessLawAPI()
-        self.labor = LaborEmploymentAPI()
-        self.ip = IntellectualPropertyAPI()
-        self.international = InternationalLawAPI()
-        self.criminal = CriminalJusticeAPI()
+        self.cornell = CornellLegalAPI()
+        self.openstates = OpenStatesAPI()
+        self.justia = JustiaLegalAPI()
+        self.google_scholar = GoogleScholarLegalAPI()
     
-    def intelligent_search(self, query: str, detected_state: str = None) -> Dict:
-        """Intelligently route searches based on query content"""
+    def comprehensive_state_search(self, state: str, query: str) -> Dict:
+        """Search all available state law sources"""
+        results = {
+            'state': state,
+            'query': query,
+            'search_date': datetime.now().isoformat(),
+            'sources': {}
+        }
         
-        # Detect legal areas from query
-        legal_areas = self._detect_legal_areas(query)
-        detected_state = detected_state or self._detect_state_from_query(query)
+        # Search state codes
+        try:
+            cornell_codes = self.cornell.search_state_code(state, query)
+            justia_codes = self.justia.search_state_law(state, query, 'codes')
+            results['sources']['state_codes'] = cornell_codes + justia_codes
+        except Exception as e:
+            logger.error(f"State code search failed: {e}")
+            results['sources']['state_codes'] = []
         
-        logger.info(f"Detected legal areas: {legal_areas}, State: {detected_state}")
+        # Search state case law
+        try:
+            justia_cases = self.justia.search_case_law(state, query)
+            scholar_cases = self.google_scholar.search_case_law(query, state)
+            results['sources']['case_law'] = justia_cases + scholar_cases
+        except Exception as e:
+            logger.error(f"Case law search failed: {e}")
+            results['sources']['case_law'] = []
         
+        # Search state legislation
+        try:
+            openstates_bills = self.openstates.search_bills(state, query)
+            results['sources']['legislation'] = openstates_bills
+        except Exception as e:
+            logger.error(f"Legislation search failed: {e}")
+            results['sources']['legislation'] = []
+        
+        # Search state legislators (for authorship/sponsorship info)
+        try:
+            legislators = self.openstates.search_legislators(state)
+            results['sources']['legislators'] = legislators
+        except Exception as e:
+            logger.error(f"Legislator search failed: {e}")
+            results['sources']['legislators'] = []
+        
+        # Calculate totals
+        total_results = sum(len(v) for v in results['sources'].values() if isinstance(v, list))
+        results['total_results'] = total_results
+        
+        # Add search recommendations
+        results['recommendations'] = self._generate_search_recommendations(state, query, results)
+        
+        return results
+    
+    def search_federal_law(self, query: str, law_type: str = "all") -> Dict:
+        """Search federal law sources"""
         results = {
             'query': query,
-            'detected_state': detected_state,
-            'legal_areas': legal_areas,
+            'law_type': law_type,
             'search_date': datetime.now().isoformat(),
-            'results_by_area': {}
+            'sources': {}
         }
         
-        # Search relevant APIs based on detected areas
-        for area in legal_areas:
+        # Search USC (United States Code)
+        if law_type in ['all', 'usc', 'statutes']:
             try:
-                if area == 'environmental':
-                    env_results = self.environmental.search_environmental_violations(
-                        state=detected_state
-                    )
-                    results['results_by_area']['environmental'] = env_results
-                
-                elif area == 'immigration':
-                    # Check if query contains receipt number
-                    receipt_match = re.search(r'[A-Z]{3}\d{10}', query)
-                    if receipt_match:
-                        case_status = self.immigration.check_case_status(receipt_match.group())
-                        results['results_by_area']['immigration'] = [case_status] if case_status else []
-                    else:
-                        visa_data = self.immigration.get_visa_bulletin_data()
-                        results['results_by_area']['immigration'] = [visa_data] if visa_data else []
-                
-                elif area == 'housing':
-                    housing_results = self.housing.search_fair_market_rents(
-                        state=detected_state or 'CA'
-                    )
-                    results['results_by_area']['housing'] = housing_results
-                
-                elif area == 'business':
-                    # Extract company name if present
-                    company_match = re.search(r'\b([A-Z][a-zA-Z\s&]+(?:Inc\.|Corp\.|LLC|Co\.))\b', query)
-                    if company_match:
-                        company_name = company_match.group(1)
-                        sec_results = self.business.search_sec_filings(company_name)
-                        results['results_by_area']['business'] = sec_results
-                
-                elif area == 'labor':
-                    # Extract company name for OSHA search
-                    company_match = re.search(r'\b([A-Z][a-zA-Z\s&]+(?:Inc\.|Corp\.|LLC|Co\.))\b', query)
-                    company_name = company_match.group(1) if company_match else None
-                    
-                    osha_results = self.labor.search_osha_violations(
-                        company_name=company_name,
-                        state=detected_state
-                    )
-                    results['results_by_area']['labor'] = osha_results
-                
-                elif area == 'intellectual_property':
-                    patent_results = self.ip.search_patents(query)
-                    trademark_results = self.ip.search_trademarks(query)
-                    results['results_by_area']['intellectual_property'] = patent_results + trademark_results
-                
-                elif area == 'criminal':
-                    crime_results = self.criminal.search_crime_data(
-                        state=detected_state
-                    )
-                    results['results_by_area']['criminal'] = crime_results
-                
-                elif area == 'international':
-                    treaty_results = self.international.search_treaties(query)
-                    results['results_by_area']['international'] = treaty_results
-                    
+                usc_results = self.cornell.search_federal_code(query, 'usc')
+                results['sources']['usc'] = usc_results
             except Exception as e:
-                logger.error(f"Search failed for area {area}: {e}")
-                results['results_by_area'][area] = []
+                logger.error(f"USC search failed: {e}")
+                results['sources']['usc'] = []
         
-        # Calculate total results
-        total_results = sum(
-            len(v) for v in results['results_by_area'].values() 
-            if isinstance(v, list)
-        )
+        # Search CFR (Code of Federal Regulations)
+        if law_type in ['all', 'cfr', 'regulations']:
+            try:
+                cfr_results = self.cornell.search_federal_code(query, 'cfr')
+                results['sources']['cfr'] = cfr_results
+            except Exception as e:
+                logger.error(f"CFR search failed: {e}")
+                results['sources']['cfr'] = []
+        
+        # Search federal case law
+        if law_type in ['all', 'cases']:
+            try:
+                federal_cases = self.google_scholar.search_case_law(query, court="federal")
+                results['sources']['federal_cases'] = federal_cases
+            except Exception as e:
+                logger.error(f"Federal case search failed: {e}")
+                results['sources']['federal_cases'] = []
+        
+        total_results = sum(len(v) for v in results['sources'].values() if isinstance(v, list))
         results['total_results'] = total_results
         
         return results
     
-    def _detect_legal_areas(self, query: str) -> List[str]:
-        """Detect legal practice areas from query"""
-        query_lower = query.lower()
-        areas = []
+    def _generate_search_recommendations(self, state: str, query: str, results: Dict) -> List[str]:
+        """Generate search improvement recommendations"""
+        recommendations = []
         
-        area_keywords = {
-            'environmental': [
-                'environmental', 'epa', 'pollution', 'clean air', 'clean water', 
-                'hazardous waste', 'superfund', 'emissions', 'toxic', 'contamination'
-            ],
-            'immigration': [
-                'immigration', 'visa', 'green card', 'asylum', 'deportation', 
-                'uscis', 'naturalization', 'refugee', 'border', 'customs'
-            ],
-            'housing': [
-                'housing', 'rental', 'landlord', 'tenant', 'eviction', 'fair housing',
-                'discrimination', 'section 8', 'rent control', 'homelessness'
-            ],
-            'business': [
-                'corporate', 'business', 'sec filing', 'securities', 'merger',
-                'acquisition', 'ipo', 'quarterly report', 'annual report', '10-k', '10-q'
-            ],
-            'labor': [
-                'employment', 'labor', 'osha', 'workplace safety', 'wage', 'overtime',
-                'discrimination', 'harassment', 'workers compensation', 'union'
-            ],
-            'intellectual_property': [
-                'patent', 'trademark', 'copyright', 'intellectual property', 'trade secret',
-                'infringement', 'licensing', 'invention', 'brand'
-            ],
-            'criminal': [
-                'criminal', 'crime', 'arrest', 'prosecution', 'sentencing', 'prison',
-                'felony', 'misdemeanor', 'fbi', 'investigation'
-            ],
-            'international': [
-                'international', 'treaty', 'foreign', 'diplomatic', 'trade agreement',
-                'human rights', 'war crimes', 'international court'
-            ]
-        }
+        total_results = results.get('total_results', 0)
         
-        for area, keywords in area_keywords.items():
-            if any(keyword in query_lower for keyword in keywords):
-                areas.append(area)
+        if total_results == 0:
+            recommendations.extend([
+                f"Try broader search terms for {state} law",
+                "Search federal law if state law doesn't cover this topic",
+                "Consider searching related legal concepts",
+                "Check if this is covered by municipal/local law instead"
+            ])
+        elif total_results < 5:
+            recommendations.extend([
+                "Try adding synonyms or related legal terms",
+                f"Search neighboring states for similar laws",
+                "Consider federal law alternatives"
+            ])
+        else:
+            recommendations.extend([
+                "Review state code sections for exact requirements",
+                "Check case law for interpretations and precedents",
+                "Look at recent legislation for updates"
+            ])
         
-        # Default to general if no specific area detected
-        if not areas:
-            areas = ['general']
-        
-        return areas
+        return recommendations
+
+class StateLawSearchService:
+    """Main service class for state law searches"""
     
-    def _detect_state_from_query(self, query: str) -> Optional[str]:
-        """Detect state from query text"""
-        states = [
-            'Alabama', 'Alaska', 'Arizona', 'Arkansas', 'California', 'Colorado', 'Connecticut', 'Delaware',
-            'Florida', 'Georgia', 'Hawaii', 'Idaho', 'Illinois', 'Indiana', 'Iowa', 'Kansas', 'Kentucky',
-            'Louisiana', 'Maine', 'Maryland', 'Massachusetts', 'Michigan', 'Minnesota', 'Mississippi',
-            'Missouri', 'Montana', 'Nebraska', 'Nevada', 'New Hampshire', 'New Jersey', 'New Mexico',
-            'New York', 'North Carolina', 'North Dakota', 'Ohio', 'Oklahoma', 'Oregon', 'Pennsylvania',
-            'Rhode Island', 'South Carolina', 'South Dakota', 'Tennessee', 'Texas', 'Utah', 'Vermont',
-            'Virginia', 'Washington', 'West Virginia', 'Wisconsin', 'Wyoming'
-        ]
+    def __init__(self):
+        self.legal_api = LegalInformationAPI()
+    
+    def search_state_specific(self, state: str, query: str, search_type: str = "comprehensive") -> Dict:
+        """Main entry point for state-specific legal searches"""
         
-        # Also check for state abbreviations and codes
-        state_indicators = {
-            'Washington': ['WA', 'Wash.', 'RCW', 'WAC'],
-            'California': ['CA', 'Cal.', 'Calif.'],
-            'New York': ['NY', 'N.Y.'],
-            'Texas': ['TX', 'Tex.'],
-            'Florida': ['FL', 'Fla.']
+        # Detect query type for targeted search
+        query_indicators = {
+            'statutes': ['statute', 'code section', 'RCW', 'USC', 'law'],
+            'cases': ['case', 'v.', 'versus', 'court', 'decision', 'ruling'],
+            'regulations': ['regulation', 'rule', 'CFR', 'administrative'],
+            'bills': ['bill', 'HB', 'SB', 'legislation', 'sponsor']
         }
         
-        # Check for state codes first (more specific)
-        for state, indicators in state_indicators.items():
-            if any(indicator in query for indicator in indicators):
-                return state
+        detected_types = []
+        query_lower = query.lower()
+        for search_type_key, indicators in query_indicators.items():
+            if any(indicator in query_lower for indicator in indicators):
+                detected_types.append(search_type_key)
         
-        # Check for full state names
+        if not detected_types:
+            detected_types = ['statutes', 'cases']  # Default
+        
+        logger.info(f"Detected search types for '{query}': {detected_types}")
+        
+        if search_type == "comprehensive":
+            return self.legal_api.comprehensive_state_search(state, query)
+        else:
+            # Targeted search based on detected type
+            results = {'state': state, 'query': query, 'sources': {}}
+            
+            for search_type_detected in detected_types:
+                if search_type_detected == 'statutes':
+                    results['sources']['statutes'] = self.legal_api.cornell.search_state_code(state, query)
+                elif search_type_detected == 'cases':
+                    results['sources']['cases'] = self.legal_api.justia.search_case_law(state, query)
+                elif search_type_detected == 'bills':
+                    results['sources']['bills'] = self.legal_api.openstates.search_bills(state, query)
+            
+            return results
+    
+    def search_multi_state(self, states: List[str], query: str) -> Dict:
+        """Search multiple states for comparison"""
+        results = {
+            'query': query,
+            'states': states,
+            'search_date': datetime.now().isoformat(),
+            'state_results': {}
+        }
+        
         for state in states:
-            if state.lower() in query.lower():
-                return state
+            try:
+                state_result = self.search_state_specific(state, query, "comprehensive")
+                results['state_results'][state] = state_result
+            except Exception as e:
+                logger.error(f"Multi-state search failed for {state}: {e}")
+                results['state_results'][state] = {'error': str(e)}
         
-        return None
+        # Add comparison analysis
+        results['comparison'] = self._analyze_state_differences(results['state_results'])
+        
+        return results
+    
+    def _analyze_state_differences(self, state_results: Dict) -> Dict:
+        """Analyze differences between state laws"""
+        analysis = {
+            'similarities': [],
+            'differences': [],
+            'unique_provisions': {},
+            'common_patterns': []
+        }
+        
+        # Simple analysis - count result types by state
+        for state, result in state_results.items():
+            if 'error' not in result:
+                source_counts = {k: len(v) for k, v in result.get('sources', {}).items() if isinstance(v, list)}
+                analysis['unique_provisions'][state] = source_counts
+        
+        return analysis
 
 # Global instance
-comprehensive_legal_hub = ComprehensiveLegalHub()
-
-# Integration function for your external_db_service.py
-def get_comprehensive_legal_apis() -> Dict:
-    """Get all comprehensive legal APIs for integration"""
-    return {
-        'environmental_law': EnvironmentalLawAPI(),
-        'immigration_law': ImmigrationLawAPI(),
-        'housing_law': HousingLawAPI(),
-        'business_law': BusinessLawAPI(),
-        'labor_employment': LaborEmploymentAPI(),
-        'intellectual_property': IntellectualPropertyAPI(),
-        'healthcare_law': HealthcareLawAPI(),
-        'criminal_justice': CriminalJusticeAPI(),
-        'international_law': InternationalLawAPI(),
-        'comprehensive_hub': comprehensive_legal_hub
-    }
-
-# Main search function to integrate with your existing system
-def search_comprehensive_legal_databases(query: str, user=None, auto_detect_areas: bool = True) -> List[Dict]:
-    """
-    Main search function that intelligently searches all relevant legal APIs
-    ADD THIS to your processors/query_processor.py external search section
-    """
-    
-    try:
-        if auto_detect_areas:
-            # Use intelligent routing
-            hub_results = comprehensive_legal_hub.intelligent_search(query)
-            
-            # Flatten results for consistent API response
-            flattened_results = []
-            for area, area_results in hub_results.get('results_by_area', {}).items():
-                if isinstance(area_results, list):
-                    for result in area_results:
-                        result['legal_area'] = area
-                        result['detected_state'] = hub_results.get('detected_state')
-                        flattened_results.append(result)
-            
-            return flattened_results
-        else:
-            # Manual search across all APIs
-            all_results = []
-            detected_state = comprehensive_legal_hub._detect_state_from_query(query)
-            
-            # Search each API category
-            apis = get_comprehensive_legal_apis()
-            
-            for api_name, api_instance in apis.items():
-                if api_name == 'comprehensive_hub':
-                    continue
-                    
-                try:
-                    # Call appropriate search method based on API type
-                    if hasattr(api_instance, 'search_environmental_violations'):
-                        results = api_instance.search_environmental_violations(state=detected_state)
-                    elif hasattr(api_instance, 'search_sec_filings'):
-                        # Extract company name from query
-                        company_match = re.search(r'\b([A-Z][a-zA-Z\s&]+(?:Inc\.|Corp\.|LLC))\b', query)
-                        if company_match:
-                            results = api_instance.search_sec_filings(company_match.group(1))
-                        else:
-                            results = []
-                    elif hasattr(api_instance, 'search_osha_violations'):
-                        results = api_instance.search_osha_violations(state=detected_state)
-                    elif hasattr(api_instance, 'search_patents'):
-                        results = api_instance.search_patents(query)
-                    else:
-                        results = []
-                    
-                    for result in results:
-                        result['api_source'] = api_name
-                        result['detected_state'] = detected_state
-                    
-                    all_results.extend(results)
-                    
-                except Exception as e:
-                    logger.error(f"API {api_name} search failed: {e}")
-            
-            return all_results
-            
-    except Exception as e:
-        logger.error(f"Comprehensive legal search failed: {e}")
-        return []
+state_law_service = StateLawSearchService()
