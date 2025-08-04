@@ -1159,5 +1159,65 @@ def enhance_query(query_text: str, legal_areas: List[str]) -> str:
     
     return enhanced_query
 
+# QUICK PERFORMANCE FIX - Add these to your config.py
+
+# === PERFORMANCE OPTIMIZATION SETTINGS ===
+
+# Reduce API calls and results for faster responses
+PERFORMANCE_OPTIMIZED = True
+
+# Limit number of APIs called simultaneously
+MAX_CONCURRENT_APIS = 3  # Down from unlimited
+
+# Limit results per API to prevent overload
+MAX_RESULTS_PER_API = 5  # Down from 20
+
+# Faster timeouts for APIs
+API_TIMEOUT_SECONDS = 5  # Down from 10-15
+
+# Prioritize APIs by response speed
+FAST_APIS = [
+    "congress_gov",           # Usually fast, your key
+    "federal_register",       # Government API, reliable
+    "justia",                # Fast legal database
+    "cornell_law"            # Academic, usually fast
+]
+
+SLOW_APIS = [
+    "epa_echo",              # Can be slow, large datasets
+    "sec_edgar",             # Large corporate data
+    "courtlistener",         # Can be slow
+    "harvard_caselaw"        # Sometimes slow
+]
+
+# Smart API selection based on query
+SMART_API_ROUTING = {
+    'environmental': {
+        'primary': ['federal_register', 'congress_gov'],  # Fast government APIs
+        'secondary': ['epa_echo'],                        # Only if needed
+        'skip_slow': True
+    },
+    'business': {
+        'primary': ['congress_gov', 'federal_register'],
+        'secondary': ['sec_edgar'],
+        'skip_slow': False
+    },
+    'general_legal': {
+        'primary': ['congress_gov', 'justia', 'cornell_law'],
+        'secondary': ['courtlistener'],
+        'skip_slow': True
+    }
+}
+
+# Context length limits for faster AI processing
+FAST_CONTEXT_LIMITS = {
+    'environmental': 4000,    # Shorter context for faster processing
+    'immigration': 3000,
+    'business': 3000,
+    'statutory': 5000,        # Keep longer for statutory analysis
+    'general': 2500
+}
+
 # Initialize feature flags when module is imported
 initialize_feature_flags()
+
