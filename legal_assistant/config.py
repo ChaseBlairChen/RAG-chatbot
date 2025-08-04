@@ -1,4 +1,4 @@
-"""Configuration and environment variables - Enhanced for SMB/NGO/Environmental Focus"""
+"""Configuration and environment variables - Enhanced for comprehensive legal research with government APIs"""
 import os
 from typing import List
 from cryptography.fernet import Fernet
@@ -28,17 +28,16 @@ DATA_GOV_API_KEY = "yZAV2yQIyyVzDYCHCw39CUBx98HDQQmHjd9wojRe"
 # === COMPREHENSIVE FREE LEGAL APIS ===
 
 # Core Legal Research APIs
-CASELAW_ACCESS_PROJECT_API = "https://api.case.law/v1"  # Correct
+CASELAW_ACCESS_PROJECT_API = "https://api.case.law/v1"
 COURTLISTENER_API_KEY = os.environ.get("COURTLISTENER_API_KEY", "")
-COURTLISTENER_API_ENDPOINT = "https://www.courtlistener.com/api/rest/v3"  # FIXED: v3, not v4
+COURTLISTENER_API_ENDPOINT = "https://www.courtlistener.com/api/rest/v4"
 JUSTIA_API_ENDPOINT = "https://law.justia.com"
-OPENSTATES_API_ENDPOINT = "https://v3.openstates.org"  # Correct
+OPENSTATES_API_ENDPOINT = "https://v3.openstates.org"
 CORNELL_LAW_ENDPOINT = "https://www.law.cornell.edu"
 GOOGLE_SCHOLAR_LEGAL_ENDPOINT = "https://scholar.google.com"
 
-# Harvard Caselaw Access Project - FREE
-HARVARD_LEGAL_API_KEY = os.environ.get("HARVARD_LEGAL_API_KEY")
-HARVARD_LEGAL_API_ENDPOINT = os.environ.get("HARVARD_LEGAL_API_ENDPOINT", "https://api.case.law/v1")
+# Harvard Caselaw Access Project - FREE (No API key required)
+HARVARD_LEGAL_API_ENDPOINT = "https://api.case.law/v1"
 
 # Google Scholar - Web scraping (be respectful of rate limits)
 GOOGLE_SCHOLAR_ENABLED = os.environ.get("GOOGLE_SCHOLAR_ENABLED", "true").lower() == "true"
@@ -51,24 +50,52 @@ LOC_API_ENDPOINT = "https://www.loc.gov/apis"
 
 # Environmental Law APIs (using your Data.gov API key)
 EPA_ENVIROFACTS_API = "https://www.epa.gov/enviro/envirofacts-data-service-api"
-EPA_AIR_QUALITY_API = "https://www.airnowapi.org/aq"  # FIXED: Uses Data.gov key
+EPA_AIR_QUALITY_API = "https://www.airnowapi.org/aq"
 EPA_WATER_QUALITY_API = "https://www.waterqualitydata.us"
 NOAA_CLIMATE_API = "https://www.ncdc.noaa.gov/cdo-web/webservices/v2"
 USGS_WATER_API = "https://waterservices.usgs.gov"
 NASA_ENVIRONMENTAL_API = "https://api.nasa.gov"
 EIA_ENERGY_API = "https://www.eia.gov/opendata"
 
-# FIXED: API Key assignments for environmental APIs
+# API Key assignments for environmental APIs
 EPA_API_KEY = DATA_GOV_API_KEY
 NOAA_API_KEY = DATA_GOV_API_KEY  
 NASA_API_KEY = DATA_GOV_API_KEY
 EIA_API_KEY = DATA_GOV_API_KEY
-AIRNOW_API_KEY = DATA_GOV_API_KEY  # For air quality data
+AIRNOW_API_KEY = DATA_GOV_API_KEY
 
-# ADDED: Missing APIs that should be included
-REGULATIONS_GOV_API = "https://api.regulations.gov/v4"  # Separate registration needed
-AIRNOW_API = "https://www.airnowapi.org"  # Air quality data - separate registration
-FTC_API = "https://www.ftc.gov/developer"  # Consumer protection data
+# Additional government APIs
+REGULATIONS_GOV_API = "https://api.regulations.gov/v4"
+AIRNOW_API = "https://www.airnowapi.org"
+FTC_API = "https://www.ftc.gov/developer"
+
+# === FREE & AFFORDABLE LEGAL DATABASES (HIGH PRIORITY) ===
+
+# CourtListener - FREE comprehensive legal database
+COURTLISTENER_API_ENDPOINT = "https://www.courtlistener.com/api/rest/v4/"
+
+# Harvard Caselaw Access Project - FREE
+HARVARD_LEGAL_API_KEY = os.environ.get("HARVARD_LEGAL_API_KEY")
+HARVARD_LEGAL_API_ENDPOINT = os.environ.get("HARVARD_LEGAL_API_ENDPOINT", "https://api.case.law/v1")
+
+# Justia - FREE legal database
+JUSTIA_API_ENDPOINT = "https://law.justia.com/api/"
+
+# === GOVERNMENT & REGULATORY APIS (FREE) ===
+
+# Federal Register API - FREE
+FEDERAL_REGISTER_API_ENDPOINT = "https://www.federalregister.gov/api/v1/"
+
+# Congress.gov API - FREE
+CONGRESS_API_ENDPOINT = "https://api.congress.gov/v3/"
+
+# SEC EDGAR API - FREE
+SEC_EDGAR_API_ENDPOINT = "https://data.sec.gov/api/"
+
+# EPA Environmental Data - FREE
+EPA_API_ENDPOINT = "https://www.epa.gov/enviro/web-services"
+
+# === ENVIRONMENTAL & CLIMATE LAW SPECIFIC ===
 
 # Climate Policy Initiative API
 CLIMATE_POLICY_API_ENDPOINT = "https://climatepolicyinitiative.org/api/"
@@ -80,6 +107,35 @@ ELI_API_ENDPOINT = os.environ.get("ELI_API_ENDPOINT")
 # Carbon Disclosure Project API
 CDP_API_KEY = os.environ.get("CDP_API_KEY")
 CDP_API_ENDPOINT = "https://data.cdp.net/api/"
+
+# === INTERNATIONAL & NGO RESOURCES ===
+
+# UN Treaty Collection
+UN_TREATY_API_ENDPOINT = "https://treaties.un.org/api/"
+
+# World Bank Open Data API - FREE
+WORLD_BANK_API_ENDPOINT = "https://api.worldbank.org/v2/"
+
+# === SMB-FOCUSED RESOURCES ===
+
+# SBA (Small Business Administration) API - FREE
+SBA_API_ENDPOINT = "https://api.sba.gov/"
+
+# USPTO (Patent/Trademark) API - FREE
+USPTO_API_ENDPOINT = "https://developer.uspto.gov/api-catalog"
+
+# Business.gov API (if available)
+BUSINESS_GOV_API_ENDPOINT = os.environ.get("BUSINESS_GOV_API_ENDPOINT")
+
+# === STATE & LOCAL GOVERNMENT ===
+
+# Many states have open data portals - configure as needed
+STATE_APIS = {
+    "california": "https://data.ca.gov/api/",
+    "new_york": "https://data.ny.gov/api/",
+    "texas": "https://data.texas.gov/api/",
+    # Add more states as needed
+}
 
 # Immigration Law APIs
 USCIS_CASE_STATUS_API = "https://egov.uscis.gov/casestatus"
@@ -110,7 +166,7 @@ EEOC_DATA_API = "https://www.eeoc.gov/statistics"
 # Intellectual Property APIs
 USPTO_PATENT_API = "https://patents.uspto.gov/api"
 USPTO_TRADEMARK_API = "https://tsdrapi.uspto.gov"
-GOOGLE_PATENTS_API = "https://patents.google.com"  # FIXED: No formal API - web scraping only
+GOOGLE_PATENTS_ENDPOINT = "https://patents.google.com"
 
 # Healthcare Law APIs
 FDA_DRUG_API = "https://api.fda.gov/drug"
@@ -123,39 +179,11 @@ FBI_CRIME_DATA_API = "https://api.usa.gov/crime/fbi/cde"
 BJS_API = "https://bjs.ojp.gov/api"
 NCVS_API = "https://crime-data-explorer.app.cloud.gov/api"
 
-# === INTERNATIONAL & NGO RESOURCES ===
-
-# UN Treaty Collection
-UN_TREATY_API_ENDPOINT = "https://treaties.un.org/api/"
-
-# World Bank Open Data API - FREE
-WORLD_BANK_API_ENDPOINT = "https://api.worldbank.org/v2/"
-WORLD_BANK_LEGAL_API = "https://datahelpdesk.worldbank.org/knowledgebase"
-
 # International Law APIs
+UN_TREATY_API = "https://treaties.un.org/api"
+WORLD_BANK_LEGAL_API = "https://datahelpdesk.worldbank.org/knowledgebase"
 ICJ_API = "https://www.icj-cij.org"
 EUR_LEX_API = "https://eur-lex.europa.eu"
-
-# === SMB-FOCUSED RESOURCES ===
-
-# SBA (Small Business Administration) API - FREE
-SBA_API_ENDPOINT = "https://api.sba.gov/"
-
-# USPTO (Patent/Trademark) API - FREE
-USPTO_API_ENDPOINT = "https://developer.uspto.gov/api-catalog"
-
-# Business.gov API (if available)
-BUSINESS_GOV_API_ENDPOINT = os.environ.get("BUSINESS_GOV_API_ENDPOINT")
-
-# === STATE & LOCAL GOVERNMENT ===
-
-# Many states have open data portals - configure as needed
-STATE_APIS = {
-    "california": "https://data.ca.gov/api/",
-    "new_york": "https://data.ny.gov/api/",
-    "texas": "https://data.texas.gov/api/",
-    # Add more states as needed
-}
 
 # Immigration Features
 SUPPORTED_LANGUAGES = ["en", "es", "zh", "ar", "fr", "hi", "pt", "ru", "bn", "ur"]
@@ -293,9 +321,14 @@ API_RATE_LIMITS = {
     "EPA": {"requests_per_hour": 200, "burst": 10},
     "GOOGLE_SCHOLAR": {"requests_per_hour": 20, "burst": 2},  # Be very conservative
     
-    # ADDED: Missing rate limits
+    # Core legal APIs
     "CASELAW_ACCESS_PROJECT": {"requests_per_hour": 1000, "burst": 100},
     "OPENSTATES": {"requests_per_hour": 100, "burst": 10},
+    "CORNELL_LAW": {"requests_per_hour": 200, "burst": 5},
+    "JUSTIA": {"requests_per_hour": 150, "burst": 5},
+    "GOOGLE_SCHOLAR_LEGAL": {"requests_per_hour": 10, "burst": 2},
+    
+    # Government APIs
     "REGULATIONS_GOV": {"requests_per_hour": 250, "burst": 25},
     "AIRNOW": {"requests_per_hour": 500, "burst": 50},
     "FTC": {"requests_per_hour": 100, "burst": 10},
@@ -322,7 +355,7 @@ API_RATE_LIMITS = {
     
     # IP APIs
     "USPTO_PATENT": {"requests_per_hour": 100, "burst": 10},
-    "GOOGLE_PATENTS": {"requests_per_hour": 20, "burst": 2},  # Web scraping only
+    "GOOGLE_PATENTS": {"requests_per_hour": 20, "burst": 2},
     
     # Healthcare APIs
     "FDA_DRUG": {"requests_per_hour": 200, "burst": 20},
@@ -773,7 +806,6 @@ STANDARD_RESPONSE_FIELDS = {
 
 # === ENHANCED FEATURE FLAGS ===
 class FeatureFlags:
-    # Existing flags...
     AI_ENABLED: bool = bool(OPENROUTER_API_KEY)
     AIOHTTP_AVAILABLE: bool = False
     OPEN_SOURCE_NLP_AVAILABLE: bool = False
@@ -836,9 +868,11 @@ class FeatureFlags:
     AUTO_STATE_DETECTION: bool = True
     MULTI_API_SEARCH: bool = True
     COMPREHENSIVE_LEGAL_RESEARCH: bool = True
+    STATE_LAW_RESEARCH_ENABLED: bool = True
+    GOVERNMENT_DATA_RESEARCH: bool = True
 
 def initialize_comprehensive_features():
-    """Initialize all comprehensive legal research features"""
+    """Initialize all comprehensive legal research features with API testing"""
     
     print("🚀 Initializing Comprehensive Legal Research System...")
     
@@ -1002,25 +1036,37 @@ def initialize_feature_flags():
         print("⚠️ PDFPlumber not available - install pdfplumber")
     
     try:
-        import unstructured
+        from unstructured.partition.auto import partition
         FeatureFlags.UNSTRUCTURED_AVAILABLE = True
         print("✅ Unstructured available for document parsing")
     except ImportError:
         FeatureFlags.UNSTRUCTURED_AVAILABLE = False
-        print("⚠️ Unstructured not available - install unstructured")
+        print("⚠️ Unstructured not available - install unstructured[all-docs]")
+    
+    # Update AI enabled flag
+    FeatureFlags.AI_ENABLED = bool(FeatureFlags.AIOHTTP_AVAILABLE and OPENROUTER_API_KEY)
+    
+    print(f"Document processing status: PyMuPDF={FeatureFlags.PYMUPDF_AVAILABLE}, pdfplumber={FeatureFlags.PDFPLUMBER_AVAILABLE}, Unstructured={FeatureFlags.UNSTRUCTURED_AVAILABLE}")
 
     # Check API availability
     print("🔍 Checking API availability...")
     if FeatureFlags.COURTLISTENER_AVAILABLE:
         print("✅ CourtListener API available (free legal database)")
-    if FeatureFlags.HARVARD_LEGAL_API_KEY:
-        print("✅ Harvard Legal API configured")
-    if FeatureFlags.CONGRESS_GOV_AVAILABLE:
+    
+    # Harvard Caselaw is always available (free, no key required)
+    FeatureFlags.HARVARD_LEGAL_AVAILABLE = True
+    print("✅ Harvard Caselaw Access Project available (free)")
+    
+    if CONGRESS_API_KEY:
+        FeatureFlags.CONGRESS_AVAILABLE = True
         print("✅ Congress.gov API configured")
-    if FeatureFlags.ENVIRONMENTAL_RESEARCH_ENABLED:
+    else:
+        FeatureFlags.CONGRESS_AVAILABLE = False
+    
+    if FeatureFlags.ENVIRONMENTAL_APIS_AVAILABLE:
         print("✅ Environmental APIs available (EPA, Federal Register)")
 
-    # Initialize comprehensive features
+    # Now run the comprehensive feature initialization
     return initialize_comprehensive_features()
 
 # === ADDITIONAL UTILITY FUNCTIONS ===
