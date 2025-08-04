@@ -953,3 +953,131 @@ def search_comprehensive_legal_databases(query: str, user=None, auto_detect_area
     except Exception as e:
         logger.error(f"Comprehensive legal search failed: {e}")
         return []
+
+
+# ADD THIS OPTIMIZED FUNCTION TO YOUR comprehensive_legal_apis.py
+
+def search_comprehensive_legal_databases_optimized(query: str, user=None, max_results: int = 10) -> List[Dict]:
+    """
+    OPTIMIZED search function that limits API calls and results for faster responses
+    REPLACE the existing search_comprehensive_legal_databases function with this
+    """
+    
+    try:
+        # Detect legal areas for smart routing
+        legal_areas = comprehensive_legal_hub._detect_legal_areas(query)
+        detected_state = comprehensive_legal_hub._detect_state_from_query(query)
+        
+        logger.info(f"OPTIMIZED: Detected areas: {legal_areas[:2]}, State: {detected_state}")  # Limit logging
+        
+        # Use smart routing to limit API calls
+        if 'environmental' in legal_areas:
+            # For environmental queries, prioritize fast government APIs
+            logger.info("🌿 FAST Environmental search - limiting to key APIs")
+            
+            # Only search the most relevant and fastest APIs
+            env_results = []
+            
+            # 1. Quick federal law search (fast)
+            try:
+                from ..services.external_db_service import search_external_databases
+                fed_results = search_external_databases(query, ["congress_gov", "federal_register"], user)
+                env_results.extend(fed_results[:3])  # Limit to top 3
+                logger.info(f"Federal env results: {len(fed_results[:3])}")
+            except Exception as e:
+                logger.error(f"Federal env search failed: {e}")
+            
+            # 2. Only search EPA if we have few results (conditional)
+            if len(env_results) < 2:
+                try:
+                    epa_results = comprehensive_legal_hub.environmental.search_environmental_violations(
+                        state=detected_state
+                    )
+                    for result in epa_results[:3]:  # Limit EPA results
+                        result['legal_area'] = 'environmental'
+                        result['detected_state'] = detected_state
+                    env_results.extend(epa_results[:3])
+                    logger.info(f"EPA results: {len(epa_results[:3])}")
+                except Exception as e:
+                    logger.error(f"EPA search failed: {e}")
+            
+            return env_results[:max_results]
+        
+        elif 'immigration' in legal_areas:
+            # For immigration, check for receipt number first
+            logger.info("🗽 FAST Immigration search")
+            
+            receipt_match = re.search(r'[A-Z]{3}\d{10}', query)
+            if receipt_match:
+                # Direct USCIS case status lookup
+                try:
+                    case_status = comprehensive_legal_hub.immigration.check_case_status(receipt_match.group())
+                    if case_status:
+                        case_status['legal_area'] = 'immigration'
+                        return [case_status]
+                except Exception as e:
+                    logger.error(f"USCIS status check failed: {e}")
+            
+            # Otherwise, quick federal immigration law search
+            try:
+                from ..services.external_db_service import search_external_databases
+                imm_results = search_external_databases(query, ["congress_gov", "federal_register"], user)
+                return imm_results[:max_results]
+            except Exception as e:
+                logger.error(f"Immigration search failed: {e}")
+                return []
+        
+        else:
+            # For general legal queries, use only fast APIs
+            logger.info("⚖️ FAST General legal search")
+            
+            try:
+                from ..services.external_db_service import search_external_databases
+                # Use only the fastest, most reliable APIs
+                fast_apis = ["congress_gov", "justia", "cornell_law"]
+                results = search_external_databases(query, fast_apis, user)
+                
+                for result in results:
+                    result['legal_area'] = 'general_legal'
+                    result['detected_state'] = detected_state
+                
+                return results[:max_results]
+            except Exception as e:
+                logger.error(f"General legal search failed: {e}")
+                return []
+            
+    except Exception as e:
+        logger.error(f"OPTIMIZED search failed: {e}")
+        return []
+
+# ADD THIS TO ComprehensiveLegalHub class
+def fast_environmental_search(self, query: str, state: str = None) -> List[Dict]:
+    """Fast environmental search with limited API calls"""
+    results = []
+    
+    try:
+        # Only search EPA violations if we have a specific state
+        if state:
+            env_violations = self.environmental.search_environmental_violations(
+                state=state, violation_type="CAA"  # Focus on Clean Air Act
+            )
+            results.extend(env_violations[:3])  # Limit to top 3
+        
+        return results
+    except Exception as e:
+        logger.error(f"Fast environmental search failed: {e}")
+        return []
+
+def fast_business_search(self, query: str, company_name: str = None) -> List[Dict]:
+    """Fast business search with limited scope"""
+    results = []
+    
+    try:
+        if company_name:
+            sec_results = self.business.search_sec_filings(company_name)
+            results.extend(sec_results[:2])  # Limit to top 2
+        
+        return results
+    except Exception as e:
+        logger.error(f"Fast business search failed: {e}")
+        return []
