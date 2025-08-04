@@ -403,12 +403,9 @@ def should_search_comprehensive_databases(question: str, search_scope: str) -> b
     
     return detect_legal_search_intent(question) or detect_statutory_question(question)
 
-# REPLACE the enhanced_external_search_with_comprehensive_apis function 
-# in your query_processor.py with this OPTIMIZED version:
-
-def enhanced_external_search_with_comprehensive_apis_optimized(question: str, query_types: List[str], 
-                                                              search_external: bool) -> Tuple[str, List[Dict]]:
-    """OPTIMIZED external search - limits API calls and results for faster response"""
+def enhanced_external_search_with_comprehensive_apis(question: str, query_types: List[str], 
+                                                    search_external: bool) -> Tuple[str, List[Dict]]:
+    """Enhanced external search using comprehensive legal APIs and government databases"""
     
     if not search_external:
         return None, []
@@ -417,233 +414,74 @@ def enhanced_external_search_with_comprehensive_apis_optimized(question: str, qu
     external_source_info = []
     
     try:
-        logger.info("🚀 OPTIMIZED: Fast comprehensive search...")
+        logger.info("🔍 Searching comprehensive legal databases and government APIs...")
         
-        # 1. SMART API SELECTION - Only call the most relevant APIs
-        if 'environmental' in query_types:
-            logger.info("🌿 Environmental query - using FAST mode")
-            
-            # For environmental queries, prioritize speed over comprehensiveness
+        # 1. Search comprehensive APIs if available (government data, enforcement, etc.)
+        if COMPREHENSIVE_APIS_AVAILABLE:
             try:
-                # Quick federal law search (your Congress API is fast)
-                from ..services.external_db_service import search_external_databases
-                
-                # Limit to fastest environmental APIs
-                fast_env_results = search_external_databases(
-                    question, 
-                    ["congress_gov", "federal_register"],  # Only fast APIs
-                    None
+                comprehensive_results = search_comprehensive_legal_databases(
+                    query=question, 
+                    auto_detect_areas=True
                 )
                 
-                if fast_env_results:
-                    logger.info(f"📚 Found {len(fast_env_results)} federal environmental results")
+                if comprehensive_results:
+                    logger.info(f"🏛️ Found {len(comprehensive_results)} results from government APIs")
                     
-                    # Format results quickly
-                    external_context, external_source_info = format_external_results_with_citations(
-                        fast_env_results[:5]  # Limit to top 5
-                    )
-                
-                # Only search EPA if we need more specific data
-                if len(fast_env_results) < 3 and COMPREHENSIVE_APIS_AVAILABLE:
-                    logger.info("🔍 Adding EPA enforcement data...")
-                    try:
-                        from ..services.comprehensive_legal_apis import comprehensive_legal_hub
-                        
-                        # Quick EPA search with state detection
-                        detected_state = comprehensive_legal_hub._detect_state_from_query(question)
-                        if detected_state:
-                            epa_results = comprehensive_legal_hub.environmental.search_environmental_violations(
-                                state=detected_state
-                            )
-                            
-                            if epa_results:
-                                # Format EPA results
-                                epa_context, epa_source_info = format_comprehensive_results_with_citations(
-                                    epa_results[:3]  # Limit to top 3
-                                )
-                                
-                                if external_context:
-                                    external_context = f"{external_context}\n\n{epa_context}"
-                                else:
-                                    external_context = epa_context
-                                external_source_info.extend(epa_source_info)
-                                
-                    except Exception as e:
-                        logger.error(f"EPA search failed: {e}")
-                        
-            except Exception as e:
-                logger.error(f"Environmental search failed: {e}")
-        
-        elif 'immigration' in query_types:
-            logger.info("🗽 Immigration query - using FAST mode")
-            
-            # Check for receipt number first
-            receipt_match = re.search(r'[A-Z]{3}\d{10}', question)
-            
-            if receipt_match and COMPREHENSIVE_APIS_AVAILABLE:
-                logger.info("📋 Direct USCIS case status lookup...")
-                try:
-                    from ..services.comprehensive_legal_apis import comprehensive_legal_hub
-                    case_status = comprehensive_legal_hub.immigration.check_case_status(receipt_match.group())
-                    
-                    if case_status:
-                        # Format USCIS result
-                        external_context, external_source_info = format_comprehensive_results_with_citations([case_status])
-                except Exception as e:
-                    logger.error(f"USCIS search failed: {e}")
-            
-            # Quick federal immigration law search
-            if not external_context:
-                try:
-                    from ..services.external_db_service import search_external_databases
-                    imm_results = search_external_databases(question, ["congress_gov"], None)
-                    
-                    if imm_results:
-                        external_context, external_source_info = format_external_results_with_citations(
-                            imm_results[:5]
-                        )
-                except Exception as e:
-                    logger.error(f"Immigration law search failed: {e}")
-        
-        else:
-            # For general legal queries, use only the fastest APIs
-            logger.info("⚖️ General legal query - using FAST mode")
-            
-            try:
-                from ..services.external_db_service import search_external_databases
-                
-                # Use only the fastest APIs for general queries
-                fast_apis = ["congress_gov", "justia"]  # Your fastest working APIs
-                
-                general_results = search_external_databases(question, fast_apis, None)
-                
-                if general_results:
-                    external_context, external_source_info = format_external_results_with_citations(
-                        general_results[:5]  # Limit to top 5
+                    # Format comprehensive results with proper citations
+                    comp_context, comp_source_info = format_comprehensive_results_with_citations(
+                        comprehensive_results
                     )
                     
+                    if comp_context:
+                        external_context = comp_context
+                        external_source_info.extend(comp_source_info)
+                        
             except Exception as e:
-                logger.error(f"General legal search failed: {e}")
+                logger.error(f"Comprehensive API search failed: {e}")
         
-        # Final fallback - if nothing found, try basic search
+        # 2. Search traditional legal databases for legal context
+        try:
+            # Use enhanced search with detected query types
+            traditional_results = search_free_legal_databases_enhanced(
+                question, None, query_types
+            )
+            
+            if traditional_results:
+                logger.info(f"📚 Found {len(traditional_results)} results from traditional legal databases")
+                
+                # Format traditional results
+                traditional_context, traditional_source_info = format_external_results_with_citations(
+                    traditional_results
+                )
+                
+                # Combine contexts
+                if external_context and traditional_context:
+                    external_context = f"{external_context}\n\n{traditional_context}"
+                    external_source_info.extend(traditional_source_info)
+                elif traditional_context and not external_context:
+                    external_context = traditional_context
+                    external_source_info = traditional_source_info
+                    
+        except Exception as e:
+            logger.error(f"Traditional legal database search failed: {e}")
+        
+        # 3. Fallback to basic search if nothing found
         if not external_context:
-            logger.info("🔄 Final fallback to basic search...")
+            logger.info("🔄 Falling back to basic legal database search...")
             try:
                 basic_results = search_free_legal_databases(question, None)
                 if basic_results:
                     external_context, external_source_info = format_external_results_with_citations(
-                        basic_results[:3]  # Very limited fallback
+                        basic_results
                     )
             except Exception as e:
-                logger.error(f"Basic fallback search failed: {e}")
+                logger.error(f"Basic external search also failed: {e}")
     
     except Exception as e:
-        logger.error(f"OPTIMIZED external search failed: {e}")
+        logger.error(f"Enhanced external search failed completely: {e}")
     
     return external_context, external_source_info
 
-# ALSO ADD this timeout protection to your AI service
-def call_openrouter_api_with_timeout(prompt: str, api_key: str = None, max_tokens: int = 1000) -> str:
-    """AI API call with timeout protection and shorter responses"""
-    if not api_key:
-        api_key = OPENROUTER_API_KEY
-    
-    if not api_key:
-        return "AI features are not configured. Please set OPENAI_API_KEY environment variable."
-    
-    headers = {
-        "Authorization": f"Bearer {api_key}",
-        "Content-Type": "application/json",
-        "HTTP-Referer": "http://localhost:8000",
-        "X-Title": "Legal Assistant"
-    }
-    
-    # Use only the fastest, most reliable models
-    fast_models = [
-        "deepseek/deepseek-chat",                    # Usually very fast
-        "microsoft/phi-3-mini-128k-instruct:free",  # Fast and efficient
-        "meta-llama/llama-3.2-3b-instruct:free"     # Good speed/quality balance
-    ]
-    
-    for model in fast_models:
-        try:
-            payload = {
-                "model": model,
-                "messages": [
-                    {
-                        "role": "system", 
-                        "content": "You are a legal assistant. Provide concise, accurate answers."
-                    },
-                    {
-                        "role": "user", 
-                        "content": prompt[:8000]  # Limit prompt length for speed
-                    }
-                ],
-                "temperature": 0.3,  # Lower temperature for faster, more focused responses
-                "max_tokens": max_tokens  # Limit response length
-            }
-            
-            response = requests.post(
-                OPENAI_API_BASE + "/chat/completions", 
-                headers=headers, 
-                json=payload, 
-                timeout=30  # Shorter timeout
-            )
-            response.raise_for_status()
-            
-            result = response.json()
-            if 'choices' in result and len(result['choices']) > 0:
-                logger.info(f"✅ FAST response from model: {model}")
-                return result['choices'][0]['message']['content'].strip()
-                
-        except requests.exceptions.Timeout:
-            logger.error(f"Model {model} timed out, trying next...")
-            continue
-        except Exception as e:
-            logger.error(f"Model {model} failed: {e}")
-            continue
-    
-    return "I'm experiencing technical difficulties. Please try a simpler question or try again later."
-
-# UPDATE your process_query function with these optimizations:
-
-def process_query_optimized_section():
-    """
-    REPLACE the external search section in your process_query function with this:
-    """
-    
-    # OPTIMIZED external database search
-    external_context = None
-    external_source_info = []
-    
-    if search_external:
-        # Use the optimized search function
-        external_context, external_source_info = enhanced_external_search_with_comprehensive_apis_optimized(
-            question, query_types, search_external
-        )
-        
-        if external_context:
-            sources_searched.append("optimized_comprehensive_databases")
-    
-    # Optimized context length based on query type
-    if 'environmental' in query_types:
-        max_context_length = 4000
-    elif 'immigration' in query_types:
-        max_context_length = 3000
-    elif is_statutory:
-        max_context_length = 5000
-    else:
-        max_context_length = 3000
-    
-    # Use optimized AI call
-    if FeatureFlags.AI_ENABLED and OPENROUTER_API_KEY:
-        response_text = call_openrouter_api_with_timeout(
-            prompt, 
-            OPENROUTER_API_KEY,
-            max_tokens=800  # Shorter responses for speed
-        )
-    else:
-        response_text = f"Based on the retrieved documents:\n\n{context_text[:2000]}..."  # Truncate for speed
 def format_comprehensive_results_with_citations(comprehensive_results: List[Dict]) -> Tuple[str, List[Dict]]:
     """Format comprehensive API results with proper citations and government data emphasis"""
     
@@ -1510,4 +1348,3 @@ COMPREHENSIVE COUNTRY CONDITIONS RESEARCH FOR {country.upper()}:
             sources_searched=[],
             retrieval_method="error"
         )
-
