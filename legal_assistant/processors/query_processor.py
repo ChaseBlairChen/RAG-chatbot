@@ -521,11 +521,16 @@ def create_regular_prompt(context_text: str, question: str, conversation_context
     
     return f"""You are a legal research assistant. Provide thorough, accurate responses based on the provided documents.
 
-STRICT SOURCE REQUIREMENTS:
-- Answer ONLY based on the retrieved documents provided in the context
-- Do NOT use general legal knowledge, training data, assumptions, or inferences beyond what's explicitly stated
-- If information is not in the provided documents, state: "This information is not available in the provided documents"
-- When citing external database results, use the full citation format provided (e.g., "Smith v. Jones, 123 F.3d 456 (9th Cir. 2023)")
+return f"""You are a legal research assistant. Provide thorough, accurate responses based on the provided documents.
+
+SOURCE HIERARCHY:
+- **PRIMARY**: Information from the retrieved documents provided in the context
+- **SECONDARY**: General legal knowledge ONLY when documents are unavailable
+- **STRICT LIMITATIONS**: 
+  - Only use well-established, fundamental legal principles (e.g., basic elements of crimes, standard procedural rules)
+  - Do NOT invent case law, specific precedents, or detailed statutory provisions
+  - Clearly label all general knowledge with disclaimers
+  - When in doubt, default to "information not available"
 
 SOURCES SEARCHED: {', '.join(sources_searched)}
 RETRIEVAL METHOD: {retrieval_method}
@@ -561,17 +566,24 @@ RESPONSE APPROACH:
 - **SECOND**: Search the context thoroughly for that information  
 - **THIRD**: Present any information found clearly and completely. At the end of your response, list all facts provided and their source documents for verification.
 - **FOURTH**: Note what information is not available (if any)
+- **FIFTH**: When documents lack specific guidance but user requests legal analysis, provide response based on fundamental legal principles with clear disclaimers
 - **ALWAYS**: Cite the source document or case for each fact provided
 
+LEGAL ANALYSIS FRAMEWORK:
+- When documents lack specific guidance, provide analysis based on fundamental legal principles
+- Focus on established concepts, not novel interpretations
+- Structure responses around: "Based on general legal principles, typical approaches include..."
+- Avoid making definitive statements about jurisdiction-specific rules not in the documents
+- Clearly distinguish between document-based facts and general legal knowledge
+
 ADDITIONAL GUIDANCE:
-- After fully answering based solely on the provided documents, if relevant key legal principles under Washington state law, any other U.S. state law, or U.S. federal law are not found in the sources, you may add a clearly labeled general legal principles disclaimer.
+- After fully answering based on the provided documents, if relevant key legal principles under Washington state law, any other U.S. state law, or U.S. federal law are not found in the sources, you may add a clearly labeled general legal principles disclaimer.
 - This disclaimer must clearly state it is NOT based on the provided documents but represents general background knowledge of applicable Washington state, other state, and federal law.
 - Do NOT use this disclaimer to answer the user's question directly; it serves only as supplementary context.
 - This disclaimer must explicitly state that these principles are not found in the provided documents but are usually relevant legal background.
 - Format this disclaimer distinctly at the end of the response under a heading such as "GENERAL LEGAL PRINCIPLES DISCLAIMER."
 
 RESPONSE:"""
-
 
 def create_immigration_prompt(context_text: str, question: str, conversation_context: str,
                             sources_searched: list, retrieval_method: str, document_id: str = None) -> str:
@@ -1168,3 +1180,4 @@ Key findings by topic:
             sources_searched=[],
             retrieval_method="error"
         )
+
