@@ -98,6 +98,11 @@ class CornellLegalAPI:
         
         return []
     
+    def search(self, query: str, filters: Optional[Dict] = None) -> List[Dict]:
+        """Unified search method"""
+        state = filters.get('state', 'Washington') if filters else 'Washington'
+        return self.search_state_code(state, query)
+    
     def _search_generic_cornell(self, query: str, state: str) -> List[Dict]:
         """Generic Cornell search when state-specific not available"""
         try:
@@ -307,6 +312,11 @@ class OpenStatesAPI:
         
         return []
     
+    def search(self, query: str, filters: Optional[Dict] = None) -> List[Dict]:
+        """Unified search method"""
+        state = filters.get('state', 'Washington') if filters else 'Washington'
+        return self.search_bills(state, query)
+    
     def _get_jurisdiction(self, state: str) -> Optional[str]:
         """Get OpenStates jurisdiction code for state"""
         return self.state_jurisdictions.get(state.lower())
@@ -428,6 +438,11 @@ class JustiaLegalAPI:
         
         return []
     
+    def search(self, query: str, filters: Optional[Dict] = None) -> List[Dict]:
+        """Unified search method"""
+        state = filters.get('state', 'Washington') if filters else 'Washington'
+        return self.search_state_law(state, query)
+    
     def _determine_relevant_codes(self, query: str) -> List[str]:
         """Determine which code sections are relevant to query"""
         query_lower = query.lower()
@@ -503,6 +518,11 @@ class GoogleScholarLegalAPI:
             logger.error(f"Google Scholar search failed: {e}")
         
         return []
+    
+    def search(self, query: str, filters: Optional[Dict] = None) -> List[Dict]:
+        """Unified search method"""
+        state = filters.get('state') if filters else None
+        return self.search_case_law(query, state)
 
 class LegalInformationAPI:
     """Aggregate multiple free legal APIs"""
