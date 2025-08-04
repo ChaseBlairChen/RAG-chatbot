@@ -1063,7 +1063,7 @@ def initialize_feature_flags():
     else:
         FeatureFlags.CONGRESS_AVAILABLE = False
     
-    if FeatureFlags.ENVIRONMENTAL_APIS_AVAILABLE:
+    if DATA_GOV_API_KEY:
         print("✅ Environmental APIs available (EPA, Federal Register)")
 
     # Now run the comprehensive feature initialization
