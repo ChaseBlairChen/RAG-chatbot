@@ -1,7 +1,7 @@
 # legal_assistant/api/routers/external.py - COMPLETE ENHANCED VERSION
 """Enhanced external database endpoints with comprehensive legal API support"""
 import logging
-from typing import List, Optional
+from typing import List, Optional, Dict
 from fastapi import APIRouter, Form, Query, Depends, HTTPException
 from urllib.parse import quote
 
@@ -1091,3 +1091,4 @@ def _get_quality_checkpoints(practice_area: str) -> List[str]:
         general_checkpoints.extend(area_specific[practice_area.lower()])
     
     return general_checkpoints
+
