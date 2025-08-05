@@ -9,11 +9,6 @@ import logging
 import requests
 from typing import Optional, Dict, Any, List
 
-# Assuming these are defined in a 'config' module.
-# Example:
-# AI_MODELS = ["openai/gpt-4o", "anthropic/claude-3-opus"]
-# OPENROUTER_API_KEY = "sk-..."
-# OPENAI_API_BASE = "https://openrouter.ai/api/v1"
 from ..config import AI_MODELS, OPENROUTER_API_KEY, OPENAI_API_BASE, APP_REFERER, APP_TITLE
 
 # Configure logging for the module
@@ -26,11 +21,11 @@ class OpenRouterService:
 
     def __init__(
         self,
-        api_key: str = OPENROUTER_API_KEY,
-        api_base: str = OPENAI_API_BASE,
-        models: List[str] = AI_MODELS,
-        referer: str = APP_REFERER,
-        title: str = APP_TITLE,
+        api_key: str = None,
+        api_base: str = None,
+        models: List[str] = None,
+        referer: str = None,
+        title: str = None,
         timeout: int = 60
     ):
         """
@@ -44,19 +39,19 @@ class OpenRouterService:
             title: The X-Title header for the API call.
             timeout: The request timeout in seconds.
         """
-        if not api_key:
-            raise ValueError("API key is not configured. Please set the OPENROUTER_API_KEY.")
-            
-        self.api_key = api_key
-        self.api_base = api_base
-        self.models = models
+        self.api_key = api_key or OPENROUTER_API_KEY
+        self.api_base = api_base or OPENAI_API_BASE
+        self.models = models or AI_MODELS
         self.timeout = timeout
         
+        if not self.api_key:
+            logger.warning("API key is not configured. Please set the OPENROUTER_API_KEY.")
+            
         self.headers = {
             "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json",
-            "HTTP-Referer": referer,
-            "X-Title": title
+            "HTTP-Referer": referer or APP_REFERER,
+            "X-Title": title or APP_TITLE
         }
         
         self._session = requests.Session()
@@ -92,6 +87,9 @@ class OpenRouterService:
         Returns:
             The AI's response as a string, or None if all models fail.
         """
+        if not self.api_key:
+            return "API key not configured. Please set OPENAI_API_KEY environment variable."
+        
         for model in self.models:
             logger.info(f"Attempting to call API with model: {model}")
             try:
@@ -123,6 +121,23 @@ class OpenRouterService:
 
         logger.error("❌ All configured models failed to return a valid response.")
         return None
+
+# FIXED: Add backward compatible function that was missing
+def call_openrouter_api(prompt: str, api_key: str = None, api_base: str = None) -> str:
+    """
+    Backward compatible function for existing code
+    This function was missing and causing import errors
+    """
+    try:
+        service = OpenRouterService(
+            api_key=api_key or OPENROUTER_API_KEY,
+            api_base=api_base or OPENAI_API_BASE
+        )
+        response = service.call_api(prompt)
+        return response or "I apologize, but I couldn't generate a response at this time."
+    except Exception as e:
+        logger.error(f"AI service call failed: {e}")
+        return f"Error generating response: {str(e)}"
 
 # --- Usage Example ---
 if __name__ == "__main__":
