@@ -1,0 +1,65 @@
+# PROPER MongoDB Installation for Ubuntu
+
+# Step 1: Install Redis first (it's simpler)
+sudo apt install -y redis-server
+sudo systemctl start redis-server
+sudo systemctl enable redis-server
+
+# Test Redis
+redis-cli ping
+
+echo "✅ Redis should respond with 'PONG'"
+
+# Step 2: Install MongoDB Community Edition (Official Method)
+
+# Import MongoDB public GPG key
+curl -fsSL https://pgp.mongodb.com/server-7.0.asc | \
+   sudo gpg -o /usr/share/keyrings/mongodb-server-7.0.gpg \
+   --dearmor
+
+# Add MongoDB repository
+echo "deb [ arch=amd64,arm64 signed-by=/usr/share/keyrings/mongodb-server-7.0.gpg ] https://repo.mongodb.org/apt/ubuntu jammy/mongodb-org/7.0 multiverse" | \
+   sudo tee /etc/apt/sources.list.d/mongodb-org-7.0.list
+
+# Update package list
+sudo apt update
+
+# Install MongoDB
+sudo apt install -y mongodb-org
+
+# Start MongoDB
+sudo systemctl start mongod
+sudo systemctl enable mongod
+
+# Test MongoDB
+mongosh --eval "db.runCommand('ping')"
+
+echo "✅ MongoDB should respond with success"
+
+# Step 3: Install Python dependencies for NoSQL
+pip install motor pymongo beanie redis
+
+echo "🎯 All NoSQL services installed and ready!"
+
+# Step 4: Verify everything is working
+echo "=== Service Status ==="
+sudo systemctl status mongod --no-pager -l
+sudo systemctl status redis-server --no-pager -l
+
+echo "=== Connection Tests ==="
+echo "MongoDB test:"
+mongosh --eval "db.runCommand('ping')" --quiet
+
+echo "Redis test:"
+redis-cli ping
+
+echo "=== Python Package Test ==="
+python3 -c "
+try:
+    import motor.motor_asyncio
+    import redis
+    import beanie
+    print('✅ All Python NoSQL packages available')
+except ImportError as e:
+    print(f'❌ Missing package: {e}')
+"
