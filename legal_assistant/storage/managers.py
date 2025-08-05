@@ -1,48 +1,551 @@
-"""Global state management with document processing status and cleanup"""
+
+"""
+Enhanced storage managers with NoSQL support and fallback compatibility.
+Maintains exact same interface as your current in-memory managers.
+"""
 import asyncio
-from typing import Dict, Optional, List, Any
 from datetime import datetime, timedelta
-import logging
+from typing import Dict, Optional, List, Any
+
+from .nosql_models import (
+    UserDocument, UploadedFileDocument, ProcessingStatusDocument,
+    ConversationDocument, ImmigrationCaseDocument
+)
+from .nosql_manager import get_nosql_manager
 
 logger = logging.getLogger(__name__)
 
-# Global state stores
+class EnhancedStorageManager:
+    """
+    Enhanced storage manager with NoSQL support and in-memory fallback.
+    Maintains backward compatibility with existing code.
+    """
+    
+    def __init__(self):
+        self.nosql_manager = None
+        self._initialized = False
+        
+        # Maintain in-memory storage for compatibility
+        self.conversations = {}
+        self.uploaded_files = {}
+        self.user_sessions = {}
+        self.document_processing_status = {}
+        self.immigration_cases = {}
+        self.deadline_alerts = {}
+    
+    async def initialize(self):
+        """Initialize NoSQL connections"""
+        if not self._initialized:
+            self.nosql_manager = await get_nosql_manager()
+            self._initialized = True
+            
+            # Migrate existing in-memory data if any
+            await self._migrate_existing_data()
+    
+    async def _migrate_existing_data(self):
+        """Migrate existing in-memory data to NoSQL"""
+        if not self.nosql_manager.mongodb_available:
+            return
+        
+        try:
+            # Migrate uploaded files
+            for file_id, file_data in self.uploaded_files.items():
+                await self.save_uploaded_file(file_id, file_data)
+            
+            # Migrate conversations
+            for session_id, conv_data in self.conversations.items():
+                await self.save_conversation(session_id, conv_data)
+            
+            logger.info("✅ Migrated existing data to MongoDB")
+            
+        except Exception as e:
+            logger.error(f"Data migration failed: {e}")
+    
+    # === USER MANAGEMENT ===
+    
+    async def get_user(self, user_id: str) -> Optional[Dict]:
+        """Get user data with NoSQL/fallback support"""
+        if self.nosql_manager and self.nosql_manager.mongodb_available:
+            try:
+                user_doc = await UserDocument.find_one(UserDocument.user_id == user_id)
+                if user_doc:
+                    return user_doc.dict()
+            except Exception as e:
+                logger.error(f"MongoDB user lookup failed: {e}")
+        
+        # Fallback to in-memory
+        return self.user_sessions.get(user_id)
+    
+    async def save_user(self, user_id: str, user_data: Dict):
+        """Save user data with NoSQL/fallback support"""
+        if self.nosql_manager and self.nosql_manager.mongodb_available:
+            try:
+                user_doc = await UserDocument.find_one(UserDocument.user_id == user_id)
+                if user_doc:
+                    # Update existing
+                    for key, value in user_data.items():
+                        setattr(user_doc, key, value)
+                    user_doc.last_active = datetime.utcnow()
+                    await user_doc.save()
+                else:
+                    # Create new
+                    new_user = UserDocument(user_id=user_id, **user_data)
+                    await new_user.save()
+                
+                logger.debug(f"User {user_id} saved to MongoDB")
+                
+            except Exception as e:
+                logger.error(f"MongoDB user save failed: {e}")
+                # Fall back to in-memory
+                self.user_sessions[user_id] = user_data
+        else:
+            # Use in-memory storage
+            self.user_sessions[user_id] = user_data
+    
+    # === DOCUMENT MANAGEMENT ===
+    
+    async def save_uploaded_file(self, file_id: str, file_data: Dict):
+        """Save uploaded file metadata with NoSQL/fallback support"""
+        if self.nosql_manager and self.nosql_manager.mongodb_available:
+            try:
+                # Check if exists
+                existing = await UploadedFileDocument.find_one(UploadedFileDocument.file_id == file_id)
+                
+                if existing:
+                    # Update existing
+                    for key, value in file_data.items():
+                        if hasattr(existing, key):
+                            setattr(existing, key, value)
+                    await existing.save()
+                else:
+                    # Create new
+                    file_doc = UploadedFileDocument(file_id=file_id, **file_data)
+                    await file_doc.save()
+                
+                logger.debug(f"File {file_id} saved to MongoDB")
+                
+            except Exception as e:
+                logger.error(f"MongoDB file save failed: {e}")
+                # Fall back to in-memory
+                self.uploaded_files[file_id] = file_data
+        else:
+            # Use in-memory storage
+            self.uploaded_files[file_id] = file_data
+    
+    async def get_uploaded_file(self, file_id: str) -> Optional[Dict]:
+        """Get uploaded file metadata"""
+        if self.nosql_manager and self.nosql_manager.mongodb_available:
+            try:
+                file_doc = await UploadedFileDocument.find_one(UploadedFileDocument.file_id == file_id)
+                if file_doc:
+                    return file_doc.dict()
+            except Exception as e:
+                logger.error(f"MongoDB file lookup failed: {e}")
+        
+        # Fallback to in-memory
+        return self.uploaded_files.get(file_id)
+    
+    async def get_user_files(self, user_id: str) -> List[Dict]:
+        """Get all files for a user"""
+        if self.nosql_manager and self.nosql_manager.mongodb_available:
+            try:
+                file_docs = await UploadedFileDocument.find(
+                    UploadedFileDocument.user_id == user_id
+                ).sort(-UploadedFileDocument.uploaded_at).to_list()
+                
+                return [doc.dict() for doc in file_docs]
+                
+            except Exception as e:
+                logger.error(f"MongoDB user files lookup failed: {e}")
+        
+        # Fallback to in-memory
+        user_files = []
+        for file_id, file_data in self.uploaded_files.items():
+            if file_data.get('user_id') == user_id:
+                user_files.append({**file_data, 'file_id': file_id})
+        
+        # Sort by upload date
+        user_files.sort(key=lambda x: x.get('uploaded_at', datetime.min), reverse=True)
+        return user_files
+    
+    async def delete_uploaded_file(self, file_id: str) -> bool:
+        """Delete uploaded file metadata"""
+        deleted = False
+        
+        if self.nosql_manager and self.nosql_manager.mongodb_available:
+            try:
+                result = await UploadedFileDocument.find_one(
+                    UploadedFileDocument.file_id == file_id
+                ).delete()
+                deleted = result.deleted_count > 0
+                
+            except Exception as e:
+                logger.error(f"MongoDB file delete failed: {e}")
+        
+        # Also remove from in-memory
+        if file_id in self.uploaded_files:
+            del self.uploaded_files[file_id]
+            deleted = True
+        
+        return deleted
+    
+    # === PROCESSING STATUS MANAGEMENT ===
+    
+    async def set_processing_status(self, file_id: str, status: str, progress: int = 0,
+                                  message: str = "", details: Dict = None, error: str = None):
+        """Set processing status with NoSQL/fallback support"""
+        
+        status_data = {
+            'file_id': file_id,
+            'status': status,
+            'progress': progress,
+            'message': message,
+            'details': details or {},
+            'updated_at': datetime.utcnow()
+        }
+        
+        if error:
+            status_data['error'] = error
+            status_data['failed_at'] = datetime.utcnow()
+        
+        if status == 'completed':
+            status_data['completed_at'] = datetime.utcnow()
+        
+        if self.nosql_manager and self.nosql_manager.mongodb_available:
+            try:
+                # Upsert processing status
+                existing = await ProcessingStatusDocument.find_one(
+                    ProcessingStatusDocument.file_id == file_id
+                )
+                
+                if existing:
+                    for key, value in status_data.items():
+                        if hasattr(existing, key):
+                            setattr(existing, key, value)
+                    await existing.save()
+                else:
+                    status_doc = ProcessingStatusDocument(**status_data)
+                    await status_doc.save()
+                
+            except Exception as e:
+                logger.error(f"MongoDB status save failed: {e}")
+                # Fall back to in-memory
+                self.document_processing_status[file_id] = status_data
+        else:
+            # Use in-memory storage
+            self.document_processing_status[file_id] = status_data
+    
+    async def get_processing_status(self, file_id: str) -> Optional[Dict]:
+        """Get processing status"""
+        if self.nosql_manager and self.nosql_manager.mongodb_available:
+            try:
+                status_doc = await ProcessingStatusDocument.find_one(
+                    ProcessingStatusDocument.file_id == file_id
+                )
+                if status_doc:
+                    return status_doc.dict()
+            except Exception as e:
+                logger.error(f"MongoDB status lookup failed: {e}")
+        
+        # Fallback to in-memory
+        return self.document_processing_status.get(file_id)
+    
+    # === CONVERSATION MANAGEMENT ===
+    
+    async def add_to_conversation(self, session_id: str, role: str, content: str, sources: Optional[List] = None):
+        """Add message to conversation with NoSQL/fallback support"""
+        
+        message = {
+            'role': role,
+            'content': content,
+            'timestamp': datetime.utcnow().isoformat(),
+            'sources': sources or []
+        }
+        
+        if self.nosql_manager and self.nosql_manager.mongodb_available:
+            try:
+                conv_doc = await ConversationDocument.find_one(
+                    ConversationDocument.session_id == session_id
+                )
+                
+                if conv_doc:
+                    conv_doc.messages.append(message)
+                    conv_doc.last_accessed = datetime.utcnow()
+                    await conv_doc.save()
+                else:
+                    # Create new conversation
+                    new_conv = ConversationDocument(
+                        session_id=session_id,
+                        messages=[message],
+                        created_at=datetime.utcnow(),
+                        last_accessed=datetime.utcnow()
+                    )
+                    await new_conv.save()
+                
+            except Exception as e:
+                logger.error(f"MongoDB conversation save failed: {e}")
+                # Fall back to in-memory
+                if session_id not in self.conversations:
+                    self.conversations[session_id] = {
+                        'messages': [],
+                        'created_at': datetime.utcnow(),
+                        'last_accessed': datetime.utcnow()
+                    }
+                self.conversations[session_id]['messages'].append(message)
+                self.conversations[session_id]['last_accessed'] = datetime.utcnow()
+        else:
+            # Use in-memory storage
+            if session_id not in self.conversations:
+                self.conversations[session_id] = {
+                    'messages': [],
+                    'created_at': datetime.utcnow(),
+                    'last_accessed': datetime.utcnow()
+                }
+            self.conversations[session_id]['messages'].append(message)
+            self.conversations[session_id]['last_accessed'] = datetime.utcnow()
+    
+    async def get_conversation_context(self, session_id: str, max_length: int = 2000) -> str:
+        """Get conversation context"""
+        messages = []
+        
+        if self.nosql_manager and self.nosql_manager.mongodb_available:
+            try:
+                conv_doc = await ConversationDocument.find_one(
+                    ConversationDocument.session_id == session_id
+                )
+                if conv_doc:
+                    messages = conv_doc.messages
+            except Exception as e:
+                logger.error(f"MongoDB conversation lookup failed: {e}")
+        
+        # Fallback to in-memory
+        if not messages and session_id in self.conversations:
+            messages = self.conversations[session_id]['messages']
+        
+        if not messages:
+            return ""
+        
+        # Format recent messages
+        context_parts = []
+        recent_messages = messages[-4:]  # Last 4 messages
+        
+        for msg in recent_messages:
+            role = msg['role'].upper()
+            content = msg['content']
+            if len(content) > 800:
+                content = content[:800] + "..."
+            context_parts.append(f"{role}: {content}")
+        
+        if context_parts:
+            return "Previous conversation:\n" + "\n".join(context_parts)
+        return ""
+    
+    # === REDIS CACHING METHODS ===
+    
+    async def cache_set(self, key: str, value: Any, ttl: int = 3600):
+        """Set cache value with TTL"""
+        if self.nosql_manager and self.nosql_manager.redis_available:
+            try:
+                import json
+                await self.nosql_manager.redis_client.set(
+                    key, json.dumps(value), ex=ttl
+                )
+            except Exception as e:
+                logger.error(f"Redis cache set failed: {e}")
+    
+    async def cache_get(self, key: str) -> Optional[Any]:
+        """Get cache value"""
+        if self.nosql_manager and self.nosql_manager.redis_available:
+            try:
+                import json
+                data = await self.nosql_manager.redis_client.get(key)
+                if data:
+                    return json.loads(data)
+            except Exception as e:
+                logger.error(f"Redis cache get failed: {e}")
+        return None
+    
+    # === CLEANUP METHODS ===
+    
+    async def cleanup_old_data(self):
+        """Clean up old data from NoSQL and in-memory storage"""
+        
+        if self.nosql_manager and self.nosql_manager.mongodb_available:
+            try:
+                # Clean up old conversations (older than 1 hour)
+                cutoff = datetime.utcnow() - timedelta(hours=1)
+                await ConversationDocument.find(
+                    ConversationDocument.last_accessed < cutoff
+                ).delete()
+                
+                # Clean up old processing status (older than 24 hours)
+                status_cutoff = datetime.utcnow() - timedelta(hours=24)
+                await ProcessingStatusDocument.find(
+                    ProcessingStatusDocument.started_at < status_cutoff,
+                    ProcessingStatusDocument.status.in_(["completed", "failed"])
+                ).delete()
+                
+                logger.info("✅ MongoDB cleanup completed")
+                
+            except Exception as e:
+                logger.error(f"MongoDB cleanup failed: {e}")
+        
+        # Also clean up in-memory storage
+        await self._cleanup_memory_storage()
+    
+    async def _cleanup_memory_storage(self):
+        """Clean up in-memory storage"""
+        try:
+            # Clean up old conversations
+            cutoff = datetime.utcnow() - timedelta(hours=1)
+            expired_sessions = [
+                session_id for session_id, data in self.conversations.items()
+                if data.get('last_accessed', datetime.utcnow()) < cutoff
+            ]
+            for session_id in expired_sessions:
+                del self.conversations[session_id]
+            
+            # Clean up old processing status
+            status_cutoff = datetime.utcnow() - timedelta(hours=24)
+            expired_status = [
+                file_id for file_id, status in self.document_processing_status.items()
+                if status.get('completed_at') and 
+                datetime.fromisoformat(status['completed_at']) < status_cutoff
+            ]
+            for file_id in expired_status:
+                del self.document_processing_status[file_id]
+            
+            if expired_sessions or expired_status:
+                logger.info(f"Cleaned up {len(expired_sessions)} conversations and {len(expired_status)} statuses")
+                
+        except Exception as e:
+            logger.error(f"Memory cleanup failed: {e}")
+    
+    # === STATISTICS AND MONITORING ===
+    
+    async def get_system_stats(self) -> Dict[str, Any]:
+        """Get comprehensive system statistics"""
+        stats = {
+            'timestamp': datetime.utcnow().isoformat(),
+            'storage_backend': 'mongodb' if self.nosql_manager and self.nosql_manager.mongodb_available else 'memory',
+            'redis_available': self.nosql_manager and self.nosql_manager.redis_available
+        }
+        
+        if self.nosql_manager and self.nosql_manager.mongodb_available:
+            try:
+                # MongoDB statistics
+                stats['mongodb_stats'] = {
+                    'users': await UserDocument.count(),
+                    'uploaded_files': await UploadedFileDocument.count(),
+                    'active_processing': await ProcessingStatusDocument.find(
+                        ProcessingStatusDocument.status == "processing"
+                    ).count(),
+                    'conversations': await ConversationDocument.count(),
+                    'immigration_cases': await ImmigrationCaseDocument.count()
+                }
+                
+            except Exception as e:
+                logger.error(f"MongoDB stats failed: {e}")
+                stats['mongodb_error'] = str(e)
+        
+        # In-memory statistics
+        stats['memory_stats'] = {
+            'conversations': len(self.conversations),
+            'uploaded_files': len(self.uploaded_files),
+            'user_sessions': len(self.user_sessions),
+            'processing_status': len(self.document_processing_status)
+        }
+        
+        return stats
+
+# Global enhanced storage manager
+_enhanced_storage = None
+
+async def get_enhanced_storage() -> EnhancedStorageManager:
+    """Get or create enhanced storage manager"""
+    global _enhanced_storage
+    if _enhanced_storage is None:
+        _enhanced_storage = EnhancedStorageManager()
+        await _enhanced_storage.initialize()
+    return _enhanced_storage
+
+# === BACKWARD COMPATIBLE FUNCTIONS ===
+# These maintain the same interface your existing code expects
+
+# Global variables for backward compatibility (will be populated from NoSQL)
 conversations: Dict[str, Dict] = {}
 uploaded_files: Dict[str, Dict] = {}
 user_sessions: Dict[str, Any] = {}
-document_processing_status: Dict[str, Dict] = {}  # Track processing status
-
-# Immigration-specific storage
+document_processing_status: Dict[str, Dict] = {}
 immigration_cases: Dict[str, Any] = {}
 deadline_alerts: Dict[str, Any] = {}
-resource_library: Dict[str, Any] = {}
-case_documents: Dict[str, List[str]] = {}  # case_id -> [document_ids]
-translation_queue: Dict[str, Dict] = {}
 
-# Database connection cache (for UserContainerManager integration)
-database_cache: Dict[str, Any] = {}
+async def _sync_from_nosql():
+    """Sync data from NoSQL to global variables for backward compatibility"""
+    try:
+        storage = await get_enhanced_storage()
+        
+        # Sync key data structures
+        global conversations, uploaded_files, user_sessions, document_processing_status
+        conversations = storage.conversations
+        uploaded_files = storage.uploaded_files
+        user_sessions = storage.user_sessions
+        document_processing_status = storage.document_processing_status
+        
+    except Exception as e:
+        logger.error(f"NoSQL sync failed: {e}")
 
 def add_to_conversation(session_id: str, role: str, content: str, sources: Optional[List] = None):
-    """Add message to conversation"""
-    if session_id not in conversations:
-        conversations[session_id] = {
-            'messages': [],
-            'created_at': datetime.utcnow(),
-            'last_accessed': datetime.utcnow()
+    """BACKWARD COMPATIBLE: Add message to conversation"""
+    # Create async task for NoSQL operation
+    async def _async_add():
+        storage = await get_enhanced_storage()
+        await storage.add_to_conversation(session_id, role, content, sources)
+    
+    # Run async operation
+    try:
+        loop = asyncio.get_event_loop()
+        if loop.is_running():
+            asyncio.create_task(_async_add())
+        else:
+            asyncio.run(_async_add())
+    except Exception as e:
+        logger.error(f"Async conversation add failed: {e}")
+        # Fallback to direct in-memory update
+        if session_id not in conversations:
+            conversations[session_id] = {
+                'messages': [],
+                'created_at': datetime.utcnow(),
+                'last_accessed': datetime.utcnow()
+            }
+        
+        message = {
+            'role': role,
+            'content': content,
+            'timestamp': datetime.utcnow().isoformat(),
+            'sources': sources or []
         }
-    
-    message = {
-        'role': role,
-        'content': content,
-        'timestamp': datetime.utcnow().isoformat(),
-        'sources': sources or []
-    }
-    
-    conversations[session_id]['messages'].append(message)
-    conversations[session_id]['last_accessed'] = datetime.utcnow()
+        conversations[session_id]['messages'].append(message)
+        conversations[session_id]['last_accessed'] = datetime.utcnow()
 
 def get_conversation_context(session_id: str, max_length: int = 2000) -> str:
-    """Get conversation context for a session"""
+    """BACKWARD COMPATIBLE: Get conversation context"""
+    # Try to get from enhanced storage
+    try:
+        async def _async_get():
+            storage = await get_enhanced_storage()
+            return await storage.get_conversation_context(session_id, max_length)
+        
+        loop = asyncio.get_event_loop()
+        if loop.is_running():
+            # Can't await in sync context, use fallback
+            pass
+        else:
+            return asyncio.run(_async_get())
+    except:
+        pass
+    
+    # Fallback to in-memory
     if session_id not in conversations:
         return ""
     
@@ -62,357 +565,21 @@ def get_conversation_context(session_id: str, max_length: int = 2000) -> str:
     return ""
 
 def cleanup_expired_conversations():
-    """Clean up expired conversations"""
-    now = datetime.utcnow()
-    expired_sessions = [
-        session_id for session_id, data in conversations.items()
-        if now - data['last_accessed'] > timedelta(hours=1)
-    ]
-    for session_id in expired_sessions:
-        del conversations[session_id]
-    if expired_sessions:
-        logger.info(f"Cleaned up {len(expired_sessions)} expired conversations")
-
-# Document processing status management
-def set_processing_status(file_id: str, status: str, progress: int = 0, details: str = ""):
-    """Set processing status for a document"""
-    document_processing_status[file_id] = {
-        'status': status,
-        'progress': progress,
-        'details': details,
-        'updated_at': datetime.utcnow().isoformat(),
-        'started_at': document_processing_status.get(file_id, {}).get('started_at', datetime.utcnow().isoformat())
-    }
+    """BACKWARD COMPATIBLE: Clean up expired conversations"""
+    async def _async_cleanup():
+        storage = await get_enhanced_storage()
+        await storage.cleanup_old_data()
     
-    if status in ['completed', 'failed']:
-        document_processing_status[file_id]['completed_at'] = datetime.utcnow().isoformat()
-
-def get_processing_status(file_id: str) -> Optional[Dict]:
-    """Get processing status for a document"""
-    return document_processing_status.get(file_id)
-
-def clear_processing_status(file_id: str):
-    """Clear processing status for a document"""
-    if file_id in document_processing_status:
-        del document_processing_status[file_id]
-
-# Database cache management
-def cache_database_connection(user_id: str, db_connection: Any):
-    """Cache a database connection for a user"""
-    database_cache[user_id] = {
-        'connection': db_connection,
-        'cached_at': datetime.utcnow(),
-        'last_used': datetime.utcnow()
-    }
-    logger.debug(f"Cached database connection for user {user_id}")
-
-def get_cached_database(user_id: str) -> Optional[Any]:
-    """Get cached database connection for a user"""
-    if user_id in database_cache:
-        cache_entry = database_cache[user_id]
-        cache_entry['last_used'] = datetime.utcnow()
-        logger.debug(f"Retrieved cached database connection for user {user_id}")
-        return cache_entry['connection']
-    return None
-
-def clear_database_cache(user_id: str = None):
-    """Clear database cache for specific user or all users"""
-    if user_id:
-        if user_id in database_cache:
-            del database_cache[user_id]
-            logger.info(f"Cleared database cache for user {user_id}")
-    else:
-        database_cache.clear()
-        logger.info("Cleared all database cache")
-
-def get_cache_info() -> Dict:
-    """Get information about current cache state"""
-    return {
-        'cached_users': list(database_cache.keys()),
-        'cache_size': len(database_cache),
-        'total_conversations': len(conversations),
-        'active_processing': len([s for s in document_processing_status.values() if s.get('status') == 'processing']),
-        'user_sessions': len(user_sessions)
-    }
-
-# Immigration case management
-def create_immigration_case(case_id: str, case_data: Dict):
-    """Create a new immigration case"""
-    immigration_cases[case_id] = {
-        **case_data,
-        'created_at': datetime.utcnow().isoformat(),
-        'updated_at': datetime.utcnow().isoformat(),
-        'status': 'active'
-    }
-    case_documents[case_id] = []
-
-def update_immigration_case(case_id: str, updates: Dict):
-    """Update an immigration case"""
-    if case_id in immigration_cases:
-        immigration_cases[case_id].update(updates)
-        immigration_cases[case_id]['updated_at'] = datetime.utcnow().isoformat()
-
-def get_immigration_case(case_id: str) -> Optional[Dict]:
-    """Get an immigration case"""
-    return immigration_cases.get(case_id)
-
-def add_case_document(case_id: str, document_id: str):
-    """Add document to a case"""
-    if case_id not in case_documents:
-        case_documents[case_id] = []
-    if document_id not in case_documents[case_id]:
-        case_documents[case_id].append(document_id)
-
-def get_case_documents(case_id: str) -> List[str]:
-    """Get documents for a case"""
-    return case_documents.get(case_id, [])
-
-# Deadline alerts management
-def add_deadline_alert(alert_id: str, case_id: str, deadline: datetime, alert_type: str, description: str):
-    """Add a deadline alert"""
-    deadline_alerts[alert_id] = {
-        'case_id': case_id,
-        'deadline': deadline.isoformat(),
-        'alert_type': alert_type,
-        'description': description,
-        'created_at': datetime.utcnow().isoformat(),
-        'status': 'active'
-    }
-
-def get_upcoming_deadlines(days_ahead: int = 30) -> List[Dict]:
-    """Get upcoming deadlines"""
-    cutoff_date = datetime.utcnow() + timedelta(days=days_ahead)
-    upcoming = []
-    
-    for alert_id, alert in deadline_alerts.items():
-        if alert['status'] == 'active':
-            deadline = datetime.fromisoformat(alert['deadline'])
-            if deadline <= cutoff_date:
-                upcoming.append({
-                    'alert_id': alert_id,
-                    **alert,
-                    'days_until': (deadline - datetime.utcnow()).days
-                })
-    
-    return sorted(upcoming, key=lambda x: x['deadline'])
-
-# Translation queue management
-def add_to_translation_queue(task_id: str, source_text: str, source_lang: str, target_lang: str, priority: str = 'normal'):
-    """Add translation task to queue"""
-    translation_queue[task_id] = {
-        'source_text': source_text,
-        'source_lang': source_lang,
-        'target_lang': target_lang,
-        'priority': priority,
-        'status': 'queued',
-        'created_at': datetime.utcnow().isoformat(),
-        'updated_at': datetime.utcnow().isoformat()
-    }
-
-def update_translation_status(task_id: str, status: str, translated_text: str = None):
-    """Update translation task status"""
-    if task_id in translation_queue:
-        translation_queue[task_id]['status'] = status
-        translation_queue[task_id]['updated_at'] = datetime.utcnow().isoformat()
-        if translated_text:
-            translation_queue[task_id]['translated_text'] = translated_text
-            translation_queue[task_id]['completed_at'] = datetime.utcnow().isoformat()
-
-# Session management
-def create_user_session(session_id: str, user_data: Dict):
-    """Create a user session"""
-    user_sessions[session_id] = {
-        **user_data,
-        'created_at': datetime.utcnow(),
-        'last_active': datetime.utcnow(),
-        'status': 'active'
-    }
-
-def update_session_activity(session_id: str):
-    """Update session last activity"""
-    if session_id in user_sessions:
-        user_sessions[session_id]['last_active'] = datetime.utcnow()
-
-def get_user_session(session_id: str) -> Optional[Dict]:
-    """Get user session"""
-    if session_id in user_sessions:
-        update_session_activity(session_id)
-        return user_sessions[session_id]
-    return None
-
-# Comprehensive cleanup function
-async def cleanup_old_data():
-    """Periodic cleanup of old data"""
-    while True:
-        try:
-            logger.info("Starting periodic cleanup...")
-            
-            # Clean up old processing status (24 hours)
-            cutoff_processing = datetime.utcnow() - timedelta(hours=24)
-            cleaned_processing = 0
-            for file_id, status in list(document_processing_status.items()):
-                if status.get('completed_at'):
-                    completed = datetime.fromisoformat(status['completed_at'])
-                    if completed < cutoff_processing:
-                        del document_processing_status[file_id]
-                        cleaned_processing += 1
-            
-            # Clean up old sessions (8 hours)
-            cutoff_sessions = datetime.utcnow() - timedelta(hours=8)
-            cleaned_sessions = 0
-            for session_id, data in list(user_sessions.items()):
-                last_active = data.get('last_active', datetime.utcnow())
-                if last_active < cutoff_sessions:
-                    del user_sessions[session_id]
-                    cleaned_sessions += 1
-            
-            # Clean up old conversations (1 hour)
-            cleanup_expired_conversations()
-            
-            # Clean up old database cache (2 hours unused)
-            cutoff_cache = datetime.utcnow() - timedelta(hours=2)
-            cleaned_cache = 0
-            for user_id, cache_data in list(database_cache.items()):
-                last_used = cache_data.get('last_used', datetime.utcnow())
-                if last_used < cutoff_cache:
-                    del database_cache[user_id]
-                    cleaned_cache += 1
-            
-            # Clean up completed translation tasks (48 hours)
-            cutoff_translation = datetime.utcnow() - timedelta(hours=48)
-            cleaned_translations = 0
-            for task_id, task in list(translation_queue.items()):
-                if task.get('status') == 'completed' and task.get('completed_at'):
-                    completed = datetime.fromisoformat(task['completed_at'])
-                    if completed < cutoff_translation:
-                        del translation_queue[task_id]
-                        cleaned_translations += 1
-            
-            # Clean up old deadline alerts (past deadlines older than 30 days)
-            cutoff_alerts = datetime.utcnow() - timedelta(days=30)
-            cleaned_alerts = 0
-            for alert_id, alert in list(deadline_alerts.items()):
-                deadline = datetime.fromisoformat(alert['deadline'])
-                if deadline < cutoff_alerts:
-                    del deadline_alerts[alert_id]
-                    cleaned_alerts += 1
-            
-            # Log cleanup results
-            if any([cleaned_processing, cleaned_sessions, cleaned_cache, cleaned_translations, cleaned_alerts]):
-                logger.info(f"Cleanup completed: "
-                          f"Processing: {cleaned_processing}, "
-                          f"Sessions: {cleaned_sessions}, "
-                          f"Cache: {cleaned_cache}, "
-                          f"Translations: {cleaned_translations}, "
-                          f"Alerts: {cleaned_alerts}")
-            
-        except Exception as e:
-            logger.error(f"Cleanup error: {e}")
-        
-        # Wait 1 hour before next cleanup
-        await asyncio.sleep(3600)
-
-# Statistics and monitoring
-def get_system_stats() -> Dict:
-    """Get comprehensive system statistics"""
-    now = datetime.utcnow()
-    
-    # Processing status stats
-    processing_stats = {}
-    for status in document_processing_status.values():
-        status_type = status.get('status', 'unknown')
-        processing_stats[status_type] = processing_stats.get(status_type, 0) + 1
-    
-    # Session activity stats
-    active_sessions = sum(1 for session in user_sessions.values() 
-                         if now - session.get('last_active', now) < timedelta(hours=1))
-    
-    # Immigration case stats
-    case_stats = {}
-    for case in immigration_cases.values():
-        case_status = case.get('status', 'unknown')
-        case_stats[case_status] = case_stats.get(case_status, 0) + 1
-    
-    # Translation queue stats
-    translation_stats = {}
-    for task in translation_queue.values():
-        task_status = task.get('status', 'unknown')
-        translation_stats[task_status] = translation_stats.get(task_status, 0) + 1
-    
-    return {
-        'timestamp': now.isoformat(),
-        'conversations': {
-            'total': len(conversations),
-            'messages': sum(len(conv['messages']) for conv in conversations.values())
-        },
-        'document_processing': processing_stats,
-        'sessions': {
-            'total': len(user_sessions),
-            'active': active_sessions
-        },
-        'database_cache': {
-            'cached_connections': len(database_cache)
-        },
-        'immigration_cases': case_stats,
-        'translation_queue': translation_stats,
-        'deadline_alerts': {
-            'total': len(deadline_alerts),
-            'active': sum(1 for alert in deadline_alerts.values() if alert.get('status') == 'active')
-        },
-        'uploaded_files': len(uploaded_files)
-    }
-
-# Initialization function
-def initialize_storage_manager():
-    """Initialize the storage manager and start cleanup task"""
-    logger.info("Initializing storage manager...")
-    
-    # Start the cleanup task
     try:
-        loop = asyncio.get_event_loop()
-        if loop.is_running():
-            # If loop is already running, create task
-            asyncio.create_task(cleanup_old_data())
-        else:
-            # If no loop is running, start one
-            asyncio.run(cleanup_old_data())
-    except RuntimeError:
-        # Handle case where event loop is already running
-        asyncio.create_task(cleanup_old_data())
-    
-    logger.info("Storage manager initialized with cleanup task")
+        asyncio.create_task(_async_cleanup())
+    except Exception as e:
+        logger.error(f"Async cleanup failed: {e}")
+        # Fallback to in-memory cleanup
+        now = datetime.utcnow()
+        expired_sessions = [
+            session_id for session_id, data in conversations.items()
+            if now - data.get('last_accessed', now) > timedelta(hours=1)
+        ]
+        for session_id in expired_sessions:
+            del conversations[session_id]
 
-# Emergency cleanup function
-def emergency_cleanup():
-    """Emergency cleanup function for critical memory situations"""
-    logger.warning("Performing emergency cleanup...")
-    
-    # Clear all non-essential caches
-    database_cache.clear()
-    
-    # Keep only recent conversations (last 30 minutes)
-    cutoff = datetime.utcnow() - timedelta(minutes=30)
-    recent_conversations = {
-        session_id: data for session_id, data in conversations.items()
-        if data['last_accessed'] > cutoff
-    }
-    conversations.clear()
-    conversations.update(recent_conversations)
-    
-    # Clear completed processing status
-    active_processing = {
-        file_id: status for file_id, status in document_processing_status.items()
-        if status.get('status') not in ['completed', 'failed']
-    }
-    document_processing_status.clear()
-    document_processing_status.update(active_processing)
-    
-    # Clear old translation tasks
-    active_translations = {
-        task_id: task for task_id, task in translation_queue.items()
-        if task.get('status') in ['queued', 'processing']
-    }
-    translation_queue.clear()
-    translation_queue.update(active_translations)
-    
-    logger.warning("Emergency cleanup completed")
