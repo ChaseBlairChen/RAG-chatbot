@@ -210,21 +210,6 @@ Identify standard legal provisions that are NOT present:
 - Insurance requirements
 **Only list if you've confirmed they're actually missing after checking the entire document**
 
-## CRITICAL AMBIGUITIES
-Identify any vague or undefined terms that could cause disputes:
-- Undefined technical terms
-- Ambiguous deadlines ("promptly", "reasonable time")
-- Unclear scope definitions
-- Missing calculation methods
-**Copy the ambiguous language exactly as it appears in the document**
-
-HALLUCINATION PREVENTION CHECKLIST:
-Before making any claim, verify:
-✓ Is this explicitly written in the document?
-✓ Can I copy the exact words supporting this?
-✓ Am I adding any external legal knowledge?
-✓ Have I checked the entire document for this information?
-
 DOCUMENT TEXT TO ANALYZE:
 {context_text}
 
@@ -233,8 +218,6 @@ IMPORTANT REMINDERS:
 - Do not suggest what "should" be in the document based on legal standards
 - Do not interpret or infer beyond what is explicitly written
 - Every factual claim must include the exact words from the document
-- If the document seems incomplete, note what sections are present vs missing
-- When quoting: Copy the text exactly as it appears, word-for-word, inside quotation marks
 
 BEGIN ANALYSIS:"""
     
