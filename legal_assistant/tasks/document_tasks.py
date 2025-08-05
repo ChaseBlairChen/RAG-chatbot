@@ -1,768 +1,358 @@
-# legal_assistant/services/document_processor.py - COMPLETE WORKING VERSION
 """
-Enhanced document processing service with Strategy pattern, multiple PDF processing methods,
-OCR support, and full backward compatibility with existing Legal Assistant API.
+Background tasks for document processing with enhanced progress tracking and error handling.
 """
-import os
-import io
 import logging
-import tempfile
 import time
-from typing import Tuple, List, Dict, Callable, Optional, Any
-from contextlib import contextmanager
+from datetime import datetime
+from typing import Dict, Any, Optional
 
-from pydantic import BaseModel, Field
-
-from ..config import FeatureFlags
-from ..core.exceptions import DocumentProcessingError
+from ..services.document_processor import SafeDocumentProcessor
+from ..services.container_manager import get_container_manager
+from ..storage.managers import uploaded_files, document_processing_status
 
 logger = logging.getLogger(__name__)
 
-# --- Enhanced Models ---
+# Processing status constants
+PROGRESS_EXTRACTING = 10
+PROGRESS_CHUNKING_START = 30
+PROGRESS_CHUNKING_END = 90
+PROGRESS_COMPLETE = 100
+MIN_CONTENT_LENGTH = 50
 
-class ProcessingResult(BaseModel):
-    """Structured result of a document processing operation"""
-    content: str
-    page_count: int = Field(..., ge=0)
-    warnings: List[str] = Field(default_factory=list)
-    processing_method: str = ""
-    extraction_quality: float = Field(default=1.0, ge=0.0, le=1.0)
-
-# --- Enhanced Document Processor ---
-
-class EnhancedDocumentProcessor:
+async def process_document_background(
+    file_id: str,
+    file_content: bytes,
+    file_ext: str,
+    filename: str,
+    user_id: str
+):
     """
-    Enhanced document processor using Strategy pattern for extensibility and reliability.
+    Background document processing task with enhanced status tracking
     """
+    start_time = time.time()
     
-    def __init__(self):
-        # Strategy Pattern: Map file extensions to handler methods
-        self.handlers: Dict[str, Callable] = {
-            '.txt': self._process_text,
-            '.pdf': self._process_pdf,
-            '.docx': self._process_docx,
-        }
+    try:
+        logger.info(f"🚀 Starting background processing for {filename} (user: {user_id})")
         
-        # PDF processing strategies in order of preference
-        self.pdf_strategies = [
-            ("unstructured", self._pdf_handler_unstructured, FeatureFlags.UNSTRUCTURED_AVAILABLE),
-            ("pymupdf_enhanced", self._pdf_handler_pymupdf_enhanced, FeatureFlags.PYMUPDF_AVAILABLE),
-            ("pdfplumber", self._pdf_handler_pdfplumber, FeatureFlags.PDFPLUMBER_AVAILABLE),
-            ("pymupdf_basic", self._pdf_handler_pymupdf_basic, FeatureFlags.PYMUPDF_AVAILABLE),
-            ("ocr", self._pdf_handler_ocr, FeatureFlags.OCR_AVAILABLE),
-        ]
-        
-        available_strategies = sum(1 for _, _, available in self.pdf_strategies if available)
-        logger.info(f"✅ EnhancedDocumentProcessor initialized with {available_strategies} PDF strategies available")
-    
-    def process(self, file_content: bytes, filename: str) -> ProcessingResult:
-        """
-        Process a document from its content bytes and filename.
-        Single public entry point with comprehensive error handling.
-        """
-        start_time = time.time()
-        logger.info(f"Processing '{filename}', size: {len(file_content)} bytes")
-        
-        file_ext = os.path.splitext(filename)[1].lower()
-        handler = self.handlers.get(file_ext, self._process_unsupported_as_text)
-        
-        try:
-            result = handler(file_content, filename)
-            
-            # Assess extraction quality
-            quality_score = self._assess_extraction_quality(result.content, filename)
-            result.extraction_quality = quality_score
-            
-            if quality_score < 0.5:
-                result.warnings.append("Low quality extraction detected - consider manual review")
-                logger.warning(f"Low quality extraction for '{filename}': {quality_score:.2f}")
-            
-            processing_time = time.time() - start_time
-            logger.info(f"✅ Processed '{filename}' in {processing_time:.2f}s: "
-                       f"{len(result.content)} chars, {result.page_count} pages, "
-                       f"quality={quality_score:.2f}")
-            
-            return result
-            
-        except Exception as e:
-            logger.error(f"❌ Failed to process '{filename}': {e}", exc_info=True)
-            raise DocumentProcessingError(f"Document processing failed for '{file_ext}': {e}") from e
-    
-    # --- Handler Methods (Strategies) ---
-    
-    def _process_text(self, content_bytes: bytes, filename: str) -> ProcessingResult:
-        """Process plain text files with multiple encoding support"""
-        try:
-            # Try multiple encodings for better compatibility
-            encodings = ['utf-8', 'latin-1', 'cp1252', 'iso-8859-1']
-            content = None
-            encoding_used = None
-            
-            for encoding in encodings:
-                try:
-                    content = content_bytes.decode(encoding, errors='ignore')
-                    encoding_used = encoding
-                    break
-                except UnicodeDecodeError:
-                    continue
-            
-            if content is None:
-                content = content_bytes.decode('utf-8', errors='replace')
-                encoding_used = 'utf-8-with-replacement'
-            
-            page_count = self._estimate_pages_from_text(content)
-            
-            warnings = []
-            if encoding_used != 'utf-8':
-                warnings.append(f"Used {encoding_used} encoding instead of UTF-8")
-            
-            return ProcessingResult(
-                content=content, 
-                page_count=page_count,
-                processing_method=f"text_{encoding_used}",
-                warnings=warnings
-            )
-            
-        except Exception as e:
-            raise DocumentProcessingError(f"Text processing failed: {e}")
-    
-    def _process_docx(self, content_bytes: bytes, filename: str) -> ProcessingResult:
-        """Process DOCX files with multiple strategies"""
-        
-        # Strategy 1: Unstructured.io (most powerful)
-        if FeatureFlags.UNSTRUCTURED_AVAILABLE:
-            try:
-                logger.debug("Attempting DOCX processing with Unstructured.io")
-                with self._temp_file(content_bytes, ".docx") as temp_path:
-                    from unstructured.partition.auto import partition
-                    elements = partition(filename=temp_path)
-                
-                text_content = []
-                for element in elements:
-                    if hasattr(element, 'text') and element.text:
-                        text_content.append(element.text)
-                
-                content = "\n\n".join(text_content)
-                page_count = self._estimate_pages_from_text(content)
-                
-                return ProcessingResult(
-                    content=content, 
-                    page_count=page_count,
-                    processing_method="unstructured_docx"
-                )
-                
-            except Exception as e:
-                logger.warning(f"Unstructured.io DOCX processing failed: {e}")
-        
-        # Strategy 2: python-docx (fallback)
-        try:
-            from docx import Document
-            doc = Document(io.BytesIO(content_bytes))
-            
-            text_content = []
-            
-            # Extract text from paragraphs
-            for paragraph in doc.paragraphs:
-                if paragraph.text.strip():
-                    text_content.append(paragraph.text)
-            
-            # Extract text from tables
-            table_count = 0
-            for table in doc.tables:
-                table_count += 1
-                for row in table.rows:
-                    row_text = []
-                    for cell in row.cells:
-                        if cell.text.strip():
-                            row_text.append(cell.text.strip())
-                    if row_text:
-                        text_content.append("\t".join(row_text))
-            
-            content = "\n\n".join(text_content)
-            page_count = self._estimate_pages_from_text(content)
-            
-            warnings = []
-            if table_count > 0:
-                warnings.append(f"Extracted {table_count} tables")
-            
-            return ProcessingResult(
-                content=content, 
-                page_count=page_count,
-                processing_method="python_docx",
-                warnings=warnings
-            )
-            
-        except ImportError:
-            raise DocumentProcessingError("python-docx not available and Unstructured.io failed")
-        except Exception as e:
-            raise DocumentProcessingError(f"DOCX processing failed: {e}")
-    
-    def _process_pdf(self, content_bytes: bytes, filename: str) -> ProcessingResult:
-        """Process PDF files using multiple strategies with intelligent fallback"""
-        
-        warnings = []
-        
-        for strategy_name, method, is_available in self.pdf_strategies:
-            if not is_available:
-                logger.debug(f"Skipping PDF strategy '{strategy_name}' (not available)")
-                continue
-            
-            try:
-                logger.debug(f"Attempting PDF processing with '{strategy_name}'")
-                result = method(content_bytes, filename)
-                
-                if result and result.content.strip() and len(result.content.strip()) > 50:
-                    logger.info(f"✅ PDF processed successfully with '{strategy_name}'")
-                    result.warnings.extend(warnings)
-                    result.processing_method = strategy_name
-                    return result
-                else:
-                    warning_msg = f"Strategy '{strategy_name}' produced insufficient content"
-                    warnings.append(warning_msg)
-                    logger.warning(warning_msg)
-                    
-            except Exception as e:
-                warning_msg = f"Strategy '{strategy_name}' failed: {str(e)}"
-                warnings.append(warning_msg)
-                logger.warning(f"PDF processing with '{strategy_name}' failed: {e}")
-        
-        # If all strategies failed
-        error_msg = f"All {len(self.pdf_strategies)} PDF processing strategies failed"
-        logger.error(f"{error_msg}. Warnings: {'; '.join(warnings)}")
-        raise DocumentProcessingError(f"{error_msg}. Last errors: {'; '.join(warnings[-3:])}")
-    
-    def _process_unsupported_as_text(self, content_bytes: bytes, filename: str) -> ProcessingResult:
-        """Handle unsupported file types by attempting text extraction"""
-        file_ext = os.path.splitext(filename)[1].lower()
-        warnings = [f"Unsupported file type '{file_ext}'. Attempting to process as plain text."]
-        
-        try:
-            result = self._process_text(content_bytes, filename)
-            result.warnings.extend(warnings)
-            result.processing_method = "unsupported_as_text"
-            return result
-        except Exception as e:
-            raise DocumentProcessingError(f"Could not process unsupported file type '{file_ext}': {e}")
-    
-    # --- PDF Strategy Implementations ---
-    
-    def _pdf_handler_unstructured(self, content_bytes: bytes, filename: str) -> ProcessingResult:
-        """Unstructured.io PDF processing (highest quality)"""
-        with self._temp_file(content_bytes, ".pdf") as temp_path:
-            from unstructured.partition.auto import partition
-            elements = partition(filename=temp_path, strategy="hi_res")
-        
-        text_content = []
-        page_count = 0
-        
-        for element in elements:
-            if hasattr(element, 'text') and element.text:
-                text_content.append(element.text)
-            
-            if hasattr(element, 'metadata') and element.metadata:
-                if hasattr(element.metadata, 'page_number'):
-                    page_count = max(page_count, element.metadata.page_number)
-        
-        content = "\n\n".join(text_content)
-        
-        if page_count == 0:
-            page_count = self._estimate_pages_from_text(content)
-        
-        return ProcessingResult(
-            content=content, 
-            page_count=page_count,
-            processing_method="unstructured_hi_res"
-        )
-    
-    def _pdf_handler_pymupdf_enhanced(self, content_bytes: bytes, filename: str) -> ProcessingResult:
-        """Enhanced PyMuPDF processing with layout preservation"""
-        import fitz
-        
-        doc = fitz.open(stream=content_bytes, filetype="pdf")
-        all_text = []
-        page_count = len(doc)
-        low_quality_pages = 0
-        
-        for page_num in range(page_count):
-            page = doc.load_page(page_num)
-            
-            # Try to get text with layout preservation
-            try:
-                text_dict = page.get_text("dict")
-                page_text = self._reconstruct_layout_from_dict(text_dict)
-            except Exception:
-                page_text = ""
-            
-            # If text is too short, might be scanned or have issues
-            if len(page_text.strip()) < 50:
-                # Fallback to simple text extraction
-                page_text = page.get_text()
-                if len(page_text.strip()) < 50:
-                    low_quality_pages += 1
-            
-            all_text.append(f"\n--- Page {page_num + 1} ---\n{page_text}")
-        
-        doc.close()
-        
-        content = "\n".join(all_text)
-        
-        warnings = []
-        if low_quality_pages > 0:
-            warnings.append(f"{low_quality_pages} pages had little text - may need OCR")
-        
-        return ProcessingResult(
-            content=content, 
-            page_count=page_count,
-            processing_method="pymupdf_enhanced",
-            warnings=warnings
-        )
-    
-    def _pdf_handler_pymupdf_basic(self, content_bytes: bytes, filename: str) -> ProcessingResult:
-        """Basic PyMuPDF processing"""
-        import fitz
-        
-        doc = fitz.open(stream=content_bytes, filetype="pdf")
-        all_text = []
-        
-        for page_num in range(len(doc)):
-            page = doc.load_page(page_num)
-            text = page.get_text()
-            all_text.append(f"\n--- Page {page_num + 1} ---\n{text}")
-        
-        page_count = len(doc)
-        doc.close()
-        
-        content = "\n".join(all_text)
-        
-        return ProcessingResult(
-            content=content, 
-            page_count=page_count,
-            processing_method="pymupdf_basic"
-        )
-    
-    def _pdf_handler_pdfplumber(self, content_bytes: bytes, filename: str) -> ProcessingResult:
-        """PDFPlumber processing with enhanced table extraction"""
-        import pdfplumber
-        
-        all_text = []
-        table_count = 0
-        
-        with pdfplumber.open(io.BytesIO(content_bytes)) as pdf:
-            for i, page in enumerate(pdf.pages):
-                text = page.extract_text() or ""
-                
-                # Enhanced table extraction
-                tables = page.extract_tables()
-                if tables:
-                    for table in tables:
-                        table_count += 1
-                        # Better table formatting
-                        table_rows = []
-                        for row in table:
-                            clean_row = [str(cell).strip() if cell else "" for cell in row]
-                            if any(clean_row):  # Only add non-empty rows
-                                table_rows.append("\t".join(clean_row))
-                        
-                        if table_rows:
-                            text += f"\n\n[Table {table_count}]\n" + "\n".join(table_rows) + "\n"
-                
-                all_text.append(f"\n--- Page {i + 1} ---\n{text}")
-            
-            page_count = len(pdf.pages)
-        
-        content = "\n".join(all_text)
-        
-        warnings = []
-        if table_count > 0:
-            warnings.append(f"Extracted {table_count} tables")
-        
-        return ProcessingResult(
-            content=content, 
-            page_count=page_count,
-            processing_method="pdfplumber_with_tables",
-            warnings=warnings
-        )
-    
-    def _pdf_handler_ocr(self, content_bytes: bytes, filename: str) -> ProcessingResult:
-        """OCR processing for scanned PDFs"""
-        try:
-            import pytesseract
-            from pdf2image import convert_from_bytes
-            from PIL import Image
-            
-            # Convert PDF to images with better quality
-            images = convert_from_bytes(content_bytes, dpi=300, first_page=1, last_page=None)
-            all_text = []
-            ocr_failures = 0
-            
-            for i, image in enumerate(images):
-                try:
-                    # Preprocess image for better OCR
-                    processed_image = self._preprocess_image_for_ocr(image)
-                    
-                    # Perform OCR with optimized settings
-                    text = pytesseract.image_to_string(
-                        processed_image, 
-                        lang='eng', 
-                        config='--psm 6 -c tessedit_char_whitelist=0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz.,!?()-:;"\' '
-                    )
-                    
-                    if text.strip():
-                        all_text.append(f"\n--- Page {i + 1} (OCR) ---\n{text}")
-                    else:
-                        ocr_failures += 1
-                        all_text.append(f"\n--- Page {i + 1} (OCR - NO TEXT DETECTED) ---\n")
-                    
-                except Exception as e:
-                    ocr_failures += 1
-                    logger.warning(f"OCR failed for page {i + 1}: {e}")
-                    all_text.append(f"\n--- Page {i + 1} (OCR FAILED) ---\n")
-            
-            content = "\n".join(all_text)
-            
-            warnings = ["Document processed using OCR - accuracy may vary"]
-            if ocr_failures > 0:
-                warnings.append(f"OCR failed on {ocr_failures} pages")
-            
-            return ProcessingResult(
-                content=content, 
-                page_count=len(images),
-                processing_method="ocr_tesseract",
-                warnings=warnings
-            )
-            
-        except ImportError:
-            raise DocumentProcessingError("OCR libraries not installed. Install pytesseract and pdf2image")
-        except Exception as e:
-            raise DocumentProcessingError(f"OCR processing failed: {e}")
-    
-    def _preprocess_image_for_ocr(self, image):
-        """Preprocess image to improve OCR accuracy"""
-        try:
-            from PIL import ImageEnhance, ImageFilter
-            
-            # Convert to grayscale
-            if image.mode != 'L':
-                image = image.convert('L')
-            
-            # Enhance contrast
-            enhancer = ImageEnhance.Contrast(image)
-            image = enhancer.enhance(1.2)
-            
-            # Enhance sharpness
-            sharpness_enhancer = ImageEnhance.Sharpness(image)
-            image = sharpness_enhancer.enhance(1.1)
-            
-            # Remove noise with median filter
-            image = image.filter(ImageFilter.MedianFilter(size=3))
-            
-            return image
-        except Exception as e:
-            logger.warning(f"Image preprocessing failed: {e}")
-            return image  # Return original if preprocessing fails
-    
-    def _reconstruct_layout_from_dict(self, text_dict: Dict) -> str:
-        """Reconstruct text layout from PyMuPDF dict output"""
-        blocks = []
-        
-        try:
-            sorted_blocks = sorted(
-                text_dict.get("blocks", []), 
-                key=lambda b: (b.get("bbox", [0])[1], b.get("bbox", [0])[0])
-            )
-            
-            for block in sorted_blocks:
-                if block.get("type") == 0:  # Text block
-                    block_lines = []
-                    
-                    for line in block.get("lines", []):
-                        line_text = []
-                        for span in line.get("spans", []):
-                            span_text = span.get("text", "")
-                            if span_text.strip():
-                                line_text.append(span_text)
-                        
-                        if line_text:
-                            block_lines.append(" ".join(line_text))
-                    
-                    if block_lines:
-                        blocks.append("\n".join(block_lines))
-            
-            return "\n\n".join(blocks)
-            
-        except Exception as e:
-            logger.warning(f"Layout reconstruction failed: {e}")
-            return ""
-    
-    def _assess_extraction_quality(self, text: str, filename: str) -> float:
-        """Assess the quality of text extraction (0.0 to 1.0)"""
-        if not text or len(text.strip()) < 50:
-            return 0.0
-        
-        quality_score = 1.0
-        text_length = len(text)
-        
-        # Check for Unicode errors
-        unicode_error_ratio = text.count('�') / text_length
-        if unicode_error_ratio > 0.01:  # More than 1% errors
-            quality_score -= min(0.4, unicode_error_ratio * 20)
-        
-        # Check content-to-whitespace ratio
-        content_ratio = len(text.strip()) / text_length
-        if content_ratio < 0.3:  # More than 70% whitespace
-            quality_score -= 0.3
-        
-        # Check for reasonable word structure
-        import re
-        word_count = len(re.findall(r'\b\w+\b', text))
-        if word_count == 0:
-            quality_score = 0.0
-        elif word_count < 20:
-            quality_score -= 0.2
-        
-        # Check for repeated characters (OCR artifacts)
-        repeated_chars = len(re.findall(r'(.)\1{5,}', text))
-        if repeated_chars > 10:
-            quality_score -= 0.3
-        
-        # Check for reasonable sentence structure
-        sentence_count = len(re.findall(r'[.!?]+', text))
-        if sentence_count == 0 and len(text) > 200:
-            quality_score -= 0.2
-        
-        # File type specific checks
-        if filename.endswith('.pdf') and len(text) < 200:
-            quality_score -= 0.4  # Very short PDF extraction is suspicious
-        
-        return max(0.0, min(1.0, quality_score))
-    
-    def _estimate_pages_from_text(self, text: str) -> int:
-        """Enhanced page estimation based on content analysis"""
-        if not text or len(text.strip()) == 0:
-            return 0
-        
-        # Multiple estimation methods for better accuracy
-        word_count = len(text.split())
-        char_count = len(text)
-        line_count = len(text.split('\n'))
-        
-        # Different estimates based on content metrics
-        pages_by_words = max(1, word_count // 250)   # ~250 words per page (legal docs are dense)
-        pages_by_chars = max(1, char_count // 1800)  # ~1800 chars per page 
-        pages_by_lines = max(1, line_count // 35)    # ~35 lines per page
-        
-        # Use weighted average instead of median for better accuracy
-        estimates = [pages_by_words, pages_by_chars, pages_by_lines]
-        weights = [0.4, 0.4, 0.2]  # Words and chars are more reliable than lines
-        
-        weighted_estimate = sum(est * weight for est, weight in zip(estimates, weights))
-        estimated_pages = round(weighted_estimate)
-        
-        # Apply reasonable bounds
-        return max(1, min(estimated_pages, 1000))
-    
-    @contextmanager
-    def _temp_file(self, content_bytes: bytes, suffix: str):
-        """Context manager for safe temporary file handling"""
-        fd = None
-        temp_path = None
-        
-        try:
-            fd, temp_path = tempfile.mkstemp(suffix=suffix)
-            os.write(fd, content_bytes)
-            os.close(fd)
-            fd = None  # Mark as closed
-            yield temp_path
-        finally:
-            if fd is not None:
-                try:
-                    os.close(fd)
-                except OSError:
-                    pass
-            if temp_path and os.path.exists(temp_path):
-                try:
-                    os.unlink(temp_path)
-                except OSError:
-                    pass
-
-# --- Backward Compatible Interface ---
-
-class SafeDocumentProcessor:
-    """
-    BACKWARD COMPATIBLE: Maintains the exact same interface your app currently expects.
-    This is a drop-in replacement for your existing SafeDocumentProcessor.
-    """
-    
-    _enhanced_processor = None
-    
-    @classmethod
-    def _get_processor(cls):
-        """Get or create enhanced processor instance"""
-        if cls._enhanced_processor is None:
-            cls._enhanced_processor = EnhancedDocumentProcessor()
-        return cls._enhanced_processor
-    
-    @staticmethod
-    def process_document_safe(file) -> Tuple[str, int, List[str]]:
-        """
-        BACKWARD COMPATIBLE: Process uploaded document safely
-        Returns: (content, pages_processed, warnings)
-        """
-        try:
-            filename = getattr(file, 'filename', 'unknown')
-            file_content = file.file.read()
-            
-            # Use enhanced processor
-            processor = SafeDocumentProcessor._get_processor()
-            result = processor.process(file_content, filename)
-            
-            # Reset file pointer for compatibility
-            file.file.seek(0)
-            
-            return result.content, result.page_count, result.warnings
-            
-        except DocumentProcessingError as e:
-            logger.error(f"Document processing error: {e}")
-            return "Error processing document", 0, [f"Processing failed: {str(e)}"]
-        except Exception as e:
-            logger.error(f"Unexpected error processing document: {e}")
-            return "Error processing document", 0, [f"Unexpected error: {str(e)}"]
-    
-    @staticmethod
-    def quick_validate(file_content: bytes, file_ext: str) -> Tuple[str, int, List[str]]:
-        """
-        BACKWARD COMPATIBLE: Quick validation to check if document can be processed
-        """
-        try:
-            # Create a temporary filename for validation
-            temp_filename = f"validation_sample{file_ext}"
-            
-            # For quick validation, process first 20KB only
-            sample_size = min(20480, len(file_content))
-            sample_content = file_content[:sample_size]
-            
-            processor = SafeDocumentProcessor._get_processor()
-            result = processor.process(sample_content, temp_filename)
-            
-            # Return preview for validation
-            preview_content = result.content[:1000] if len(result.content) > 1000 else result.content
-            
-            # Estimate full document pages based on sample
-            if sample_size < len(file_content):
-                scaling_factor = len(file_content) / sample_size
-                estimated_pages = max(1, round(result.page_count * scaling_factor))
-            else:
-                estimated_pages = result.page_count
-            
-            return preview_content, estimated_pages, result.warnings
-            
-        except Exception as e:
-            logger.error(f"Quick validation error: {e}")
-            return "", 0, [f"Validation error: {str(e)}"]
-    
-    @staticmethod
-    def process_document_from_bytes(file_content: bytes, filename: str, file_ext: str) -> Tuple[str, int, List[str]]:
-        """
-        BACKWARD COMPATIBLE: Process document from bytes (for background processing)
-        """
-        try:
-            processor = SafeDocumentProcessor._get_processor()
-            result = processor.process(file_content, filename)
-            
-            logger.info(f"Background processing complete: {len(result.content)} chars, "
-                       f"{result.page_count} pages, {len(result.warnings)} warnings, "
-                       f"quality={result.extraction_quality:.2f}")
-            
-            return result.content, result.page_count, result.warnings
-            
-        except DocumentProcessingError as e:
-            logger.error(f"Document processing error: {e}")
-            return "", 0, [f"Processing failed: {str(e)}"]
-        except Exception as e:
-            logger.error(f"Error processing document from bytes: {e}", exc_info=True)
-            return "", 0, [f"Unexpected error: {str(e)}"]
-    
-    @staticmethod
-    def get_processing_capabilities() -> Dict[str, bool]:
-        """Return current processing capabilities for different methods"""
-        return {
-            'unstructured_available': FeatureFlags.UNSTRUCTURED_AVAILABLE,
-            'pymupdf_available': FeatureFlags.PYMUPDF_AVAILABLE,
-            'pdfplumber_available': FeatureFlags.PDFPLUMBER_AVAILABLE,
-            'ocr_available': FeatureFlags.OCR_AVAILABLE,
-            'docx_available': True,
-            'supported_formats': ['.txt', '.pdf', '.docx'],
-            'processor_version': 'enhanced_v2',
-            'strategies_available': {
-                'pdf_unstructured': FeatureFlags.UNSTRUCTURED_AVAILABLE,
-                'pdf_pymupdf_enhanced': FeatureFlags.PYMUPDF_AVAILABLE,
-                'pdf_pdfplumber': FeatureFlags.PDFPLUMBER_AVAILABLE,
-                'pdf_ocr': FeatureFlags.OCR_AVAILABLE,
-                'docx_unstructured': FeatureFlags.UNSTRUCTURED_AVAILABLE,
-                'text_multi_encoding': True
+        # Step 1: Initial Status - Extracting
+        document_processing_status[file_id] = {
+            'status': 'extracting',
+            'progress': PROGRESS_EXTRACTING,
+            'message': "Extracting text from document...",
+            'started_at': datetime.utcnow().isoformat(),
+            'details': {
+                'filename': filename,
+                'file_size': len(file_content),
+                'user_id': user_id
             }
         }
+        
+        # Step 2: Enhanced Document Processing
+        processing_start = time.time()
+        
+        try:
+            content, pages_processed, warnings = SafeDocumentProcessor.process_document_from_bytes(
+                file_content, filename, file_ext
+            )
+            
+            extraction_time = time.time() - processing_start
+            logger.info(f"📄 Extraction completed in {extraction_time:.2f}s: "
+                       f"{len(content)} characters, {pages_processed} pages")
+            
+        except Exception as extraction_error:
+            logger.error(f"❌ Document extraction failed for {filename}: {extraction_error}")
+            
+            document_processing_status[file_id] = {
+                'status': 'failed',
+                'progress': 0,
+                'message': "Document extraction failed - file may be corrupted or unsupported",
+                'error': str(extraction_error),
+                'details': {'extraction_time': time.time() - processing_start}
+            }
+            
+            # Update uploaded_files for API compatibility
+            if file_id in uploaded_files:
+                uploaded_files[file_id]['status'] = 'failed'
+            
+            return  # Exit early on extraction failure
+        
+        # Step 3: Validate Content Quality
+        content_quality = _assess_content_quality(content)
+        
+        if content_quality < 0.3:
+            logger.warning(f"⚠️ Low content quality ({content_quality:.2f}) for {filename}")
+            warnings.append(f"Low extraction quality detected: {content_quality:.2f}/1.0")
+        
+        if len(content.strip()) < MIN_CONTENT_LENGTH:
+            error_msg = f"Content too short: {len(content.strip())} chars (minimum: {MIN_CONTENT_LENGTH})"
+            logger.error(error_msg)
+            
+            document_processing_status[file_id] = {
+                'status': 'failed',
+                'progress': 0,
+                'message': "Document content validation failed",
+                'error': error_msg,
+                'details': {'content_length': len(content.strip())}
+            }
+            
+            if file_id in uploaded_files:
+                uploaded_files[file_id]['status'] = 'failed'
+            
+            return
+        
+        # Step 4: Chunking & Embedding Status
+        document_processing_status[file_id] = {
+            'status': 'chunking_and_embedding',
+            'progress': PROGRESS_CHUNKING_START,
+            'message': f"Creating searchable chunks from {pages_processed} pages...",
+            'details': {
+                'pages': pages_processed,
+                'content_length': len(content),
+                'extraction_quality': content_quality,
+                'warnings_count': len(warnings)
+            }
+        }
+        
+        # Step 5: Enhanced Metadata Preparation
+        metadata = {
+            'source': filename,
+            'file_id': file_id,
+            'upload_date': datetime.utcnow().isoformat(),
+            'user_id': user_id,
+            'file_type': file_ext,
+            'pages': pages_processed,
+            'file_size': len(file_content),
+            'content_length': len(content),
+            'processing_warnings': warnings,
+            'extraction_quality': content_quality
+        }
+        
+        # Step 6: Chunking with Progress Tracking
+        def progress_callback(embedding_progress: int):
+            """Enhanced progress callback with better status updates"""
+            scaled_progress = PROGRESS_CHUNKING_START + int(
+                (embedding_progress / 100.0) * (PROGRESS_CHUNKING_END - PROGRESS_CHUNKING_START)
+            )
+            
+            # More descriptive messages based on progress
+            if embedding_progress < 25:
+                message = f"Analyzing document structure... ({embedding_progress}%)"
+            elif embedding_progress < 50:
+                message = f"Creating text chunks... ({embedding_progress}%)"
+            elif embedding_progress < 75:
+                message = f"Generating embeddings... ({embedding_progress}%)"
+            else:
+                message = f"Finalizing searchable index... ({embedding_progress}%)"
+            
+            document_processing_status[file_id] = {
+                'status': 'chunking_and_embedding',
+                'progress': min(scaled_progress, PROGRESS_CHUNKING_END),
+                'message': message,
+                'details': {'embedding_progress': embedding_progress}
+            }
+        
+        # Process document asynchronously
+        chunking_start = time.time()
+        
+        try:
+            container_manager = get_container_manager()
+            chunks_created = await container_manager.add_document_to_container_async(
+                user_id,
+                content,
+                metadata,
+                file_id,
+                progress_callback=progress_callback
+            )
+            
+            chunking_time = time.time() - chunking_start
+            logger.info(f"📊 Chunking completed in {chunking_time:.2f}s: {chunks_created} chunks created")
+            
+        except Exception as chunking_error:
+            logger.error(f"❌ Chunking failed for {filename}: {chunking_error}")
+            
+            document_processing_status[file_id] = {
+                'status': 'failed',
+                'progress': 0,
+                'message': "Document chunking and embedding failed",
+                'error': str(chunking_error),
+                'details': {'chunking_time': time.time() - chunking_start}
+            }
+            
+            if file_id in uploaded_files:
+                uploaded_files[file_id]['status'] = 'failed'
+            
+            return
+        
+        # Step 7: Final Success Status
+        total_processing_time = time.time() - start_time
+        
+        final_details = {
+            'pages_processed': pages_processed,
+            'chunks_created': chunks_created,
+            'processing_time': total_processing_time,
+            'extraction_time': extraction_time,
+            'chunking_time': chunking_time,
+            'content_length': len(content),
+            'extraction_quality': content_quality,
+            'warnings_count': len(warnings)
+        }
+        
+        document_processing_status[file_id] = {
+            'status': 'completed',
+            'progress': PROGRESS_COMPLETE,
+            'message': f"Successfully processed {pages_processed} pages into {chunks_created} searchable chunks",
+            'details': final_details
+        }
+        
+        # Update uploaded_files for full API compatibility
+        if file_id in uploaded_files:
+            uploaded_files[file_id].update({
+                'status': 'completed',
+                'pages_processed': pages_processed,
+                'chunks_created': chunks_created,
+                'processing_time': total_processing_time,
+                'content_length': len(content),
+                'extraction_quality': content_quality
+            })
+        
+        logger.info(f"🎉 Document {file_id} ({filename}) processing completed successfully!")
+        logger.info(f"   📊 Stats: {pages_processed} pages → {chunks_created} chunks in {total_processing_time:.2f}s")
+        logger.info(f"   🎯 Quality: {content_quality:.2f}/1.0, Warnings: {len(warnings)}")
+        
+    except Exception as e:
+        # Handle any truly unexpected errors
+        processing_time = time.time() - start_time
+        error_message = str(e)
+        
+        logger.error(f"💥 CRITICAL ERROR processing document {file_id}: {error_message}", exc_info=True)
+        
+        document_processing_status[file_id] = {
+            'status': 'failed',
+            'progress': 0,
+            'message': "Critical processing error occurred",
+            'error': f"Critical error: {error_message}",
+            'details': {
+                'processing_time': processing_time,
+                'error_type': type(e).__name__
+            }
+        }
+        
+        # Ensure uploaded_files is updated
+        if file_id in uploaded_files:
+            uploaded_files[file_id]['status'] = 'failed'
 
-# =============================================================================
-# USAGE AND TESTING
-# =============================================================================
+# --- ENHANCED BACKGROUND PROCESSING VARIANT ---
 
-def test_enhanced_processor():
-    """Test function to validate the enhanced processor works"""
+async def process_document_background_enhanced(
+    file_id: str,
+    file_content: bytes,
+    file_ext: str,
+    filename: str,
+    user_id: str,
+    processing_options: Optional[Dict[str, Any]] = None
+):
+    """
+    ENHANCED VERSION: Process document with additional features while maintaining compatibility
+    """
+    # This is the same as process_document_background but with enhanced options support
+    processing_options = processing_options or {}
     
-    # Test with different file types
-    test_cases = [
-        ("test.txt", b"This is a test document with some content."),
-        ("test.pdf", None),  # Would need actual PDF bytes
-        ("test.docx", None), # Would need actual DOCX bytes
-    ]
-    
-    processor = EnhancedDocumentProcessor()
-    
-    for filename, content in test_cases:
-        if content:
-            try:
-                result = processor.process(content, filename)
-                print(f"✅ {filename}: {len(result.content)} chars, "
-                      f"{result.page_count} pages, quality={result.extraction_quality:.2f}")
-            except Exception as e:
-                print(f"❌ {filename}: {e}")
-
-# Test backward compatibility
-def test_backward_compatibility():
-    """Test that existing API still works"""
-    
-    # This should work exactly like your current code
-    content, pages, warnings = SafeDocumentProcessor.process_document_from_bytes(
-        b"Test content", "test.txt", ".txt"
+    # For now, just call the standard version
+    # In the future, you could add special processing based on options
+    await process_document_background(
+        file_id, file_content, file_ext, filename, user_id
     )
+
+# --- Utility Functions ---
+
+def _assess_content_quality(content: str) -> float:
+    """Assess the quality of extracted content (0.0 to 1.0)"""
+    if not content or len(content.strip()) < 50:
+        return 0.0
     
-    print(f"Backward compatibility test: {len(content)} chars, {pages} pages, {len(warnings)} warnings")
+    quality_score = 1.0
+    
+    # Check for unicode replacement characters
+    unicode_error_ratio = content.count('�') / len(content)
+    if unicode_error_ratio > 0.01:  # More than 1% errors
+        quality_score -= min(0.5, unicode_error_ratio * 10)
+    
+    # Check content-to-whitespace ratio
+    content_ratio = len(content.strip()) / len(content)
+    if content_ratio < 0.3:  # More than 70% whitespace
+        quality_score -= 0.3
+    
+    # Check for reasonable word structure
+    import re
+    word_count = len(re.findall(r'\b\w+\b', content))
+    if word_count == 0:
+        quality_score = 0.0
+    elif word_count < 10:
+        quality_score -= 0.3
+    
+    return max(0.0, min(1.0, quality_score))
 
-"""
-INTEGRATION STEPS:
+def update_progress(file_id: str, progress: int):
+    """
+    LEGACY COMPATIBLE: Update processing progress for existing code
+    """
+    # Get current status to preserve other fields
+    current_status = document_processing_status.get(file_id, {})
+    current_message = current_status.get('message', 'Processing...')
+    current_status_type = current_status.get('status', 'processing')
+    
+    # Update with new progress
+    document_processing_status[file_id] = {
+        **current_status,
+        'status': current_status_type,
+        'progress': min(PROGRESS_CHUNKING_START + int(progress * 0.5), PROGRESS_CHUNKING_END),
+        'message': current_message,
+        'updated_at': datetime.utcnow().isoformat()
+    }
 
-1. REPLACE your current services/document_processor.py with this code
-2. ADD redis>=4.5.0 to requirements.txt (optional - fallback works without Redis)
-3. NO OTHER CHANGES NEEDED
+# --- API Compatibility Functions ---
 
-IMMEDIATE BENEFITS:
-✅ Multiple PDF processing strategies (5 different methods)
-✅ Better error handling and recovery
-✅ Quality assessment for all extractions
-✅ Enhanced table extraction from PDFs and DOCX
-✅ OCR support for scanned documents
-✅ Better encoding support for text files
-✅ Strategy pattern for easy extension
-✅ 100% backward compatibility
-
-PERFORMANCE IMPACT:
-📈 30-50% better PDF extraction success rate
-📈 Better handling of complex layouts and tables
-📈 Quality scoring helps identify problematic documents
-📈 More reliable processing with graceful fallbacks
-📈 Better resource management (no file handle leaks)
-
-The enhanced processor will immediately improve your document processing
-reliability while maintaining 100% compatibility with existing code!
-"""
+def get_enhanced_document_status(file_id: str) -> Dict[str, Any]:
+    """
+    Get enhanced document status that works with existing API endpoints
+    """
+    # Get status from processing status
+    status_data = document_processing_status.get(file_id)
+    
+    if not status_data:
+        # Check uploaded_files as final fallback
+        if file_id in uploaded_files:
+            file_data = uploaded_files[file_id]
+            return {
+                'file_id': file_id,
+                'filename': file_data.get('filename', ''),
+                'status': file_data.get('status', 'unknown'),
+                'progress': 100 if file_data.get('status') == 'completed' else 0,
+                'message': 'Processing completed' if file_data.get('status') == 'completed' else 'Status unknown',
+                'pages_processed': file_data.get('pages_processed', 0),
+                'chunks_created': file_data.get('chunks_created', 0),
+                'processing_time': file_data.get('processing_time', 0),
+                'errors': []
+            }
+        
+        return {
+            'file_id': file_id,
+            'status': 'not_found',
+            'progress': 0,
+            'message': 'Document not found in processing queue',
+            'errors': ['Document not found']
+        }
+    
+    # Format for API compatibility
+    return {
+        'file_id': file_id,
+        'status': status_data.get('status', 'unknown'),
+        'progress': status_data.get('progress', 0),
+        'message': status_data.get('message', ''),
+        'pages_processed': status_data.get('details', {}).get('pages_processed', 0),
+        'chunks_created': status_data.get('details', {}).get('chunks_created', 0),
+        'processing_time': status_data.get('details', {}).get('processing_time', 0),
+        'errors': [status_data.get('error')] if status_data.get('error') else [],
+        'extraction_quality': status_data.get('details', {}).get('extraction_quality', 1.0),
+        'processing_method': status_data.get('details', {}).get('processing_method', 'unknown')
+    }
