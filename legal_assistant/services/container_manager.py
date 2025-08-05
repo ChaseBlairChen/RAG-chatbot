@@ -23,7 +23,6 @@ from langchain.text_splitter import RecursiveCharacterTextSplitter
 from ..config import USER_CONTAINERS_PATH, FAST_EMBEDDING_MODELS
 from ..core.exceptions import ContainerError
 from ..core.dependencies import get_embeddings, get_nlp
-from ..utils.text_processing import remove_duplicate_documents
 
 logger = logging.getLogger(__name__)
 
@@ -385,7 +384,7 @@ class UserContainerManager:
                     'bill_number': bill_number,
                     'chunk_index': len(chunks),
                     'part_number': j + 1,
-                    'contains_bills': bill_number  # Add this for search
+                    'contains_bills': bill_number  # Added for better search
                 })
                 chunks.append({'text': sub_chunk_text, 'metadata': chunk_metadata})
                 
@@ -455,7 +454,7 @@ class UserContainerManager:
                 logger.warning(f"No database available for user {user_id}")
                 return []
             
-            # Use enhanced semantic search for now
+            # Use enhanced semantic search
             return self._enhanced_semantic_search(user_db, user_id, query, k, file_id)
 
         except Exception as e:
