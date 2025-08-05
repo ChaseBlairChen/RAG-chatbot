@@ -585,3 +585,9 @@ def cleanup_expired_conversations():
             del conversations[session_id]
 
 
+
+# Immigration storage
+immigration_cases: Dict[str, Any] = {}
+case_documents: Dict[str, List[str]] = {}
+deadline_alerts: Dict[str, Any] = {}
+resource_library: Dict[str, Any] = {}
