@@ -25,7 +25,7 @@ class QueryResponse(BaseModel):
     response: Optional[str] = None
     error: Optional[str] = None
     context_found: bool = False
-    sources: Optional[list] = None
+    sources: Optional[List[Dict]] = None
     session_id: str
     confidence_score: float = 0.0
     expand_available: bool = False
@@ -70,67 +70,51 @@ class DocumentUploadResponse(BaseModel):
     session_id: str
     user_id: str
     container_id: str
-    status: str = "completed"  # NEW: Add status field
+    status: str = "completed"
 
 class ConversationHistory(BaseModel):
     session_id: str
     messages: List[Dict[str, Any]]
 
-# Add these imports at the top
-from .enums import DocumentCategory, ImmigrationFormType, CaseType
-
-# Add these new models at the end of the file
-
+# Immigration-related models (simplified)
 class ImmigrationCase(BaseModel):
     """Immigration case model"""
     case_id: str
-    case_type: CaseType
+    case_type: str
     client_id: str
     priority_date: Optional[datetime] = None
     filing_date: Optional[datetime] = None
     status: str = "pending"
     assigned_attorney: Optional[str] = None
-    deadlines: List[Dict[str, Any]] = []
-    forms: List[str] = []
-    evidence_checklist: Dict[str, bool] = {}
-    notes: Optional[str] = None
-    language: str = "en"
-    requires_translation: bool = False
 
 class DeadlineAlert(BaseModel):
     """Deadline tracking model"""
     deadline_id: str
     case_id: str
-    deadline_type: str  # visa_expiration, rfe_response, etc.
+    deadline_type: str
     due_date: datetime
     description: str
-    priority: str = "normal"  # low, normal, high, critical
-    completed: bool = False
-    reminder_sent: bool = False
+    priority: str = "normal"
 
 class DocumentClassification(BaseModel):
     """Document classification result"""
     document_id: str
-    category: DocumentCategory
-    form_type: Optional[ImmigrationFormType] = None
+    category: str
     language: str
     requires_translation: bool
-    extracted_data: Dict[str, Any] = {}
     confidence: float
 
 class BatchProcessingRequest(BaseModel):
-    """Batch processing for multiple cases"""
+    """Batch processing request"""
     case_ids: List[str]
-    operation: str  # analyze, extract, generate
-    target_forms: List[ImmigrationFormType] = []
+    operation: str
     options: Dict[str, Any] = {}
 
 class CountryConditionsRequest(BaseModel):
-    """Request for country conditions research"""
+    """Country conditions research request"""
     country: str
     topics: List[str] = ["persecution", "government", "human_rights", "violence"]
     date_range: Optional[str] = "last_2_years"
-    case_type: Optional[CaseType] = None
 
 class ResourceLibraryItem(BaseModel):
     """Resource library entry"""
@@ -142,4 +126,3 @@ class ResourceLibraryItem(BaseModel):
     tags: List[str]
     last_updated: datetime
     downloads: int = 0
-
