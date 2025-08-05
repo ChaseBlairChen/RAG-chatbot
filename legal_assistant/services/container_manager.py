@@ -93,6 +93,11 @@ class UserContainerManager:
         container_path = os.path.join(self.base_path, container_id)
         return container_id, container_path
 
+    def get_container_id(self, user_id: str) -> str:
+        """Get container ID for user"""
+        container_id, _ = self._get_container_path(user_id)
+        return container_id
+
     def _create_database(self, user_id: str) -> Chroma:
         """
         Internal method to create a new Chroma database connection for a user.
@@ -157,6 +162,14 @@ class UserContainerManager:
             return db
         except (ContainerError, Exception) as e:
             logger.error(f"❌ Critical error: Could not create container for user {user_id}: {e}")
+            return None
+
+    def get_user_database_safe(self, user_id: str) -> Optional[Chroma]:
+        """Safe database getter that doesn't raise exceptions"""
+        try:
+            return self.get_user_database(user_id)
+        except Exception as e:
+            logger.error(f"Failed to get database for user {user_id}: {e}")
             return None
 
     def clear_cache(self, user_id: Optional[str] = None):
@@ -257,6 +270,54 @@ class UserContainerManager:
             logger.error(f"❌ Error during document addition: {traceback.format_exc()}")
             raise ContainerError(f"An unexpected error occurred during document processing: {e}") from e
 
+    def add_document_to_container_sync(
+        self,
+        user_id: str,
+        document_text: str,
+        metadata: Dict,
+        file_id: Optional[str] = None
+    ) -> int:
+        """
+        Synchronous version of add_document_to_container for compatibility.
+        """
+        try:
+            # Run the async version in a new event loop
+            return asyncio.run(self.add_document_to_container_async(
+                user_id, document_text, metadata, file_id
+            ))
+        except Exception as e:
+            logger.error(f"Sync document addition failed: {e}")
+            raise ContainerError(f"Failed to add document synchronously: {e}")
+
+    def enhanced_search_user_container(self, user_id: str, query: str, context: str, 
+                                     k: int = 15, document_id: str = None) -> List[Tuple]:
+        """Enhanced search with document filtering"""
+        try:
+            user_db = self.get_user_database_safe(user_id)
+            if not user_db:
+                return []
+            
+            # Apply document filter if specified
+            filter_dict = {"file_id": document_id} if document_id else None
+            
+            # Perform search
+            results = user_db.similarity_search_with_score(query, k=k, filter=filter_dict)
+            
+            # Add metadata
+            for doc, score in results:
+                doc.metadata['source_type'] = 'user_container'
+            
+            return results
+            
+        except Exception as e:
+            logger.error(f"Enhanced search failed: {e}")
+            return []
+
+    def search_user_container(self, user_id: str, query: str, k: int = 10, 
+                             document_id: str = None) -> List[Tuple]:
+        """Basic search method"""
+        return self.enhanced_search_user_container(user_id, query, "", k, document_id)
+
     def _intelligent_chunking_with_context(self, text: str, metadata: Dict) -> List[Dict]:
         """
         Improved chunking method that detects document type and uses appropriate
@@ -323,7 +384,8 @@ class UserContainerManager:
                     'chunk_type': 'legislative_bill_part',
                     'bill_number': bill_number,
                     'chunk_index': len(chunks),
-                    'part_number': j + 1
+                    'part_number': j + 1,
+                    'contains_bills': bill_number  # Add this for search
                 })
                 chunks.append({'text': sub_chunk_text, 'metadata': chunk_metadata})
                 
@@ -393,13 +455,7 @@ class UserContainerManager:
                 logger.warning(f"No database available for user {user_id}")
                 return []
             
-            # The original code's custom hybrid search is overly complex and
-            # inefficient (especially the bill-specific search).
-            # A more robust solution is to use a direct similarity search with
-            # expanded queries, which is a common and effective technique.
-            
-            # You can re-implement a cleaner hybrid search here, but for now,
-            # let's simplify to a more effective enhanced semantic search.
+            # Use enhanced semantic search for now
             return self._enhanced_semantic_search(user_db, user_id, query, k, file_id)
 
         except Exception as e:
@@ -420,28 +476,123 @@ class UserContainerManager:
         nlp = get_nlp()
         expanded_query = query
         if nlp:
-            doc = nlp(query)
-            for ent in doc.ents:
-                # Expand the query with key entities to capture more contextually relevant documents
-                if ent.label_ in ["ORG", "PERSON", "LAW", "DATE"]:
-                    expanded_query += f" {ent.text}"
+            try:
+                doc = nlp(query)
+                for ent in doc.ents:
+                    # Expand the query with key entities to capture more contextually relevant documents
+                    if ent.label_ in ["ORG", "PERSON", "LAW", "DATE"]:
+                        expanded_query += f" {ent.text}"
+            except Exception as e:
+                logger.warning(f"NLP processing failed: {e}")
 
         expanded_results = user_db.similarity_search_with_score(expanded_query, k=k, filter=filter_dict)
         
         # 3. Combine and deduplicate results
         all_results = direct_results + expanded_results
         
-        # NOTE: The original `remove_duplicate_documents` utility is not provided,
-        # so this is a placeholder. A simple way to deduplicate is by document content.
+        # Simple deduplication by content
         unique_results: Dict[str, Tuple[Document, float]] = {}
         for doc, score in all_results:
-            if doc.page_content not in unique_results or score > unique_results[doc.page_content][1]:
-                unique_results[doc.page_content] = (doc, score)
+            content_key = doc.page_content[:100]  # Use first 100 chars as key
+            if content_key not in unique_results or score > unique_results[content_key][1]:
+                unique_results[content_key] = (doc, score)
                 
         final_results = list(unique_results.values())
         final_results.sort(key=lambda x: x[1], reverse=True)
         
         return final_results[:k]
+
+    def search_for_bill(self, user_id: str, bill_number: str, k: int = 10) -> List[Tuple]:
+        """
+        Search specifically for bill information with enhanced metadata filtering
+        """
+        try:
+            user_db = self.get_user_database_safe(user_id)
+            if not user_db:
+                return []
+            
+            # Try multiple search strategies for bill numbers
+            search_queries = [
+                bill_number,
+                bill_number.replace(" ", ""),
+                f"bill {bill_number}",
+                f"{bill_number} sponsors",
+                f"{bill_number} status"
+            ]
+            
+            all_results = []
+            
+            for query in search_queries:
+                try:
+                    results = user_db.similarity_search_with_score(query, k=k)
+                    all_results.extend(results)
+                except Exception as e:
+                    logger.warning(f"Bill search query '{query}' failed: {e}")
+            
+            # Deduplicate and sort
+            unique_results = {}
+            for doc, score in all_results:
+                content_key = doc.page_content[:100]
+                if content_key not in unique_results or score > unique_results[content_key][1]:
+                    unique_results[content_key] = (doc, score)
+            
+            final_results = list(unique_results.values())
+            final_results.sort(key=lambda x: x[1], reverse=True)
+            
+            return final_results[:k]
+            
+        except Exception as e:
+            logger.error(f"Bill search failed: {e}")
+            return []
+
+    def get_document_count(self, user_id: str) -> int:
+        """Get total number of documents in user's container"""
+        try:
+            user_db = self.get_user_database_safe(user_id)
+            if not user_db:
+                return 0
+            
+            collection = user_db.get()
+            return len(collection.get('ids', []))
+            
+        except Exception as e:
+            logger.error(f"Failed to get document count: {e}")
+            return 0
+
+    def get_user_stats(self, user_id: str) -> Dict[str, Any]:
+        """Get statistics for user's container"""
+        try:
+            user_db = self.get_user_database_safe(user_id)
+            if not user_db:
+                return {"error": "No database available"}
+            
+            collection = user_db.get()
+            documents = collection.get('documents', [])
+            metadatas = collection.get('metadatas', [])
+            
+            # Calculate stats
+            stats = {
+                'total_chunks': len(documents),
+                'total_characters': sum(len(doc) for doc in documents),
+                'unique_files': len(set(meta.get('file_id', '') for meta in metadatas if meta.get('file_id'))),
+                'document_types': {},
+                'avg_chunk_size': 0
+            }
+            
+            # Count document types
+            for meta in metadatas:
+                doc_type = meta.get('chunk_type', 'unknown')
+                stats['document_types'][doc_type] = stats['document_types'].get(doc_type, 0) + 1
+            
+            # Calculate average chunk size
+            if documents:
+                stats['avg_chunk_size'] = stats['total_characters'] / len(documents)
+            
+            return stats
+            
+        except Exception as e:
+            logger.error(f"Failed to get user stats: {e}")
+            return {"error": str(e)}
 
 # --- Global Instance and Initialization ---
 _container_manager: Optional[UserContainerManager] = None
@@ -454,4 +605,12 @@ def get_container_manager() -> UserContainerManager:
     global _container_manager
     if _container_manager is None:
         _container_manager = UserContainerManager(USER_CONTAINERS_PATH)
+    return _container_manager
+
+def initialize_container_manager():
+    """Initialize the container manager"""
+    global _container_manager
+    if _container_manager is None:
+        _container_manager = UserContainerManager(USER_CONTAINERS_PATH)
+    logger.info("✅ Container manager initialized")
     return _container_manager
