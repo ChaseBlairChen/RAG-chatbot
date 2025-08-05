@@ -15,43 +15,152 @@ embeddings: Optional[HuggingFaceEmbeddings] = None
 sentence_model_name: Optional[str] = None
 
 def initialize_nlp_models():
-    """Initialize NLP models with error handling"""
+    """Initialize NLP models with comprehensive error handling"""
     global nlp, sentence_model, embeddings, sentence_model_name
     
-    # Load spaCy with fallback
+    logger.info("🔄 Initializing NLP models...")
+    
+    # Load spaCy with graceful fallback
     try:
         nlp = spacy.load("en_core_web_sm")
         logger.info("✅ spaCy model loaded successfully")
+    except IOError:
+        logger.warning("⚠️ spaCy model 'en_core_web_sm' not found")
+        logger.info("   Install with: python -m spacy download en_core_web_sm")
+        nlp = None
     except Exception as e:
-        logger.warning(f"spaCy model not available: {e}")
+        logger.error(f"❌ Failed to load spaCy model: {e}")
         nlp = None
     
-    # Load sentence transformer with fallback
+    # Load sentence transformer with priority fallback
+    logger.info("🔄 Loading sentence transformer model...")
     for model_name in EMBEDDING_MODELS:
         try:
+            logger.info(f"   Trying {model_name}...")
             sentence_model = SentenceTransformer(model_name)
             sentence_model_name = model_name
-            logger.info(f"✅ Loaded sentence model: {model_name}")
+            logger.info(f"✅ Loaded powerful sentence model: {model_name}")
             break
         except Exception as e:
-            logger.warning(f"Failed to load {model_name}: {e}")
+            logger.warning(f"   Failed to load {model_name}: {e}")
             continue
     
     if sentence_model is None:
         logger.error("❌ Failed to load any sentence transformer model")
         sentence_model_name = "none"
     
-    # Load embeddings with fallback
+    # Load embeddings with comprehensive fallback
+    logger.info("🔄 Loading embeddings...")
     try:
         if sentence_model_name and sentence_model_name != "none":
             embeddings = HuggingFaceEmbeddings(model_name=sentence_model_name)
             logger.info(f"✅ Loaded embeddings with: {sentence_model_name}")
         else:
-            embeddings = HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2")
-            logger.info("⚠️ Using fallback embeddings: all-MiniLM-L6-v2")
+            # Try fallback models
+            for fallback_model in FAST_EMBEDDING_MODELS:
+                try:
+                    embeddings = HuggingFaceEmbeddings(model_name=fallback_model)
+                    logger.info(f"✅ Using fallback embeddings: {fallback_model}")
+                    break
+                except Exception as e:
+                    logger.warning(f"   Fallback {fallback_model} failed: {e}")
+            
+            if embeddings is None:
+                # Final fallback
+                embeddings = HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2")
+                logger.warning("⚠️ Using final fallback embeddings: all-MiniLM-L6-v2")
+                
     except Exception as e:
-        logger.error(f"Failed to load embeddings: {e}")
+        logger.error(f"❌ Failed to load embeddings: {e}")
         embeddings = None
+    
+    # Summary
+    models_loaded = sum([
+        nlp is not None,
+        sentence_model is not None, 
+        embeddings is not None
+    ])
+    
+    logger.info(f"📊 NLP Initialization Summary: {models_loaded}/3 models loaded successfully")
+    if models_loaded < 3:
+        logger.warning(f"⚠️ Some NLP features may be limited. Consider installing missing dependencies.")
+
+def initialize_feature_flags():
+    """Initialize feature availability flags"""
+    logger.info("🔍 Checking feature availability...")
+    
+    # Check aiohttp for AI features
+    try:
+        import aiohttp
+        FeatureFlags.AIOHTTP_AVAILABLE = True
+        logger.info("✅ aiohttp available - HTTP client features enabled")
+    except ImportError:
+        FeatureFlags.AIOHTTP_AVAILABLE = False
+        logger.warning("⚠️ aiohttp not available - install with: pip install aiohttp")
+    
+    # Check open source NLP
+    try:
+        import torch
+        from transformers import pipeline
+        FeatureFlags.OPEN_SOURCE_NLP_AVAILABLE = True
+        logger.info("✅ Open-source NLP models available")
+    except ImportError as e:
+        FeatureFlags.OPEN_SOURCE_NLP_AVAILABLE = False
+        logger.warning(f"⚠️ Open-source NLP models not available: {e}")
+        logger.info("   Install with: pip install transformers torch")
+    
+    # Check PDF processors
+    try:
+        import fitz
+        FeatureFlags.PYMUPDF_AVAILABLE = True
+        logger.info("✅ PyMuPDF available - enhanced PDF extraction enabled")
+    except ImportError:
+        FeatureFlags.PYMUPDF_AVAILABLE = False
+        logger.warning("⚠️ PyMuPDF not available - install with: pip install PyMuPDF")
+    
+    try:
+        import pdfplumber
+        FeatureFlags.PDFPLUMBER_AVAILABLE = True
+        logger.info("✅ pdfplumber available - table extraction enabled")
+    except ImportError:
+        FeatureFlags.PDFPLUMBER_AVAILABLE = False
+        logger.warning("⚠️ pdfplumber not available - install with: pip install pdfplumber")
+    
+    try:
+        from unstructured.partition.auto import partition
+        FeatureFlags.UNSTRUCTURED_AVAILABLE = True
+        logger.info("✅ Unstructured.io available - advanced document processing enabled")
+    except ImportError:
+        FeatureFlags.UNSTRUCTURED_AVAILABLE = False
+        logger.warning("⚠️ Unstructured.io not available - install with: pip install unstructured[all-docs]")
+    
+    # Check OCR capabilities
+    try:
+        import pytesseract
+        from pdf2image import convert_from_bytes
+        FeatureFlags.OCR_AVAILABLE = True
+        logger.info("✅ OCR support available - can process scanned documents")
+    except ImportError:
+        FeatureFlags.OCR_AVAILABLE = False
+        logger.warning("⚠️ OCR not available - install pytesseract and pdf2image for scanned PDFs")
+    
+    # Update AI enabled flag
+    FeatureFlags.AI_ENABLED = bool(FeatureFlags.AIOHTTP_AVAILABLE and OPENROUTER_API_KEY)
+    
+    # Summary
+    features_enabled = sum([
+        FeatureFlags.AI_ENABLED,
+        FeatureFlags.PYMUPDF_AVAILABLE,
+        FeatureFlags.PDFPLUMBER_AVAILABLE,
+        FeatureFlags.UNSTRUCTURED_AVAILABLE,
+        FeatureFlags.OCR_AVAILABLE
+    ])
+    
+    logger.info(f"📊 Features Summary: {features_enabled}/5 advanced features available")
+    logger.info(f"🤖 AI Status: {'ENABLED' if FeatureFlags.AI_ENABLED else 'DISABLED - Set OPENAI_API_KEY to enable'}")
+    logger.info(f"📄 Document Processing: PyMuPDF={FeatureFlags.PYMUPDF_AVAILABLE}, "
+               f"pdfplumber={FeatureFlags.PDFPLUMBER_AVAILABLE}, "
+               f"Unstructured={FeatureFlags.UNSTRUCTURED_AVAILABLE}")
 
 def get_nlp():
     """Get NLP instance"""
@@ -68,107 +177,3 @@ def get_embeddings():
 def get_sentence_model_name():
     """Get sentence model name"""
     return sentence_model_name
-
-# ===== legal_assistant/services/ai_service.py =====
-"""AI/LLM Integration Service"""
-import logging
-import requests
-from typing import Optional, Dict, Any, List
-
-from ..config import AI_MODELS, OPENROUTER_API_KEY, OPENAI_API_BASE, APP_REFERER, APP_TITLE
-
-logger = logging.getLogger(__name__)
-
-class OpenRouterService:
-    """A service for making API calls to OpenRouter with fallback models"""
-
-    def __init__(
-        self,
-        api_key: str = None,
-        api_base: str = None,
-        models: List[str] = None,
-        timeout: int = 60
-    ):
-        """Initialize the OpenRouter service"""
-        self.api_key = api_key or OPENROUTER_API_KEY
-        self.api_base = api_base or OPENAI_API_BASE
-        self.models = models or AI_MODELS
-        self.timeout = timeout
-        
-        if not self.api_key:
-            logger.warning("OpenRouter API key not configured")
-            
-        self.headers = {
-            "Authorization": f"Bearer {self.api_key}",
-            "Content-Type": "application/json",
-            "HTTP-Referer": APP_REFERER,
-            "X-Title": APP_TITLE
-        }
-        
-        self._session = requests.Session()
-        self._session.headers.update(self.headers)
-
-    def _create_payload(self, prompt: str, model: str) -> Dict[str, Any]:
-        """Creates the JSON payload for the chat completion request"""
-        return {
-            "model": model,
-            "messages": [
-                {
-                    "role": "system",
-                    "content": "You are a legal assistant. Respond only to the current query."
-                },
-                {
-                    "role": "user",
-                    "content": prompt
-                }
-            ],
-            "temperature": 0.5,
-            "max_tokens": 2000
-        }
-
-    def call_api(self, prompt: str) -> Optional[str]:
-        """Call the OpenRouter API with fallback models"""
-        if not self.api_key:
-            return "API key not configured. Please set OPENAI_API_KEY environment variable."
-        
-        for model in self.models:
-            logger.info(f"Attempting API call with model: {model}")
-            try:
-                payload = self._create_payload(prompt, model)
-                response = self._session.post(
-                    f"{self.api_base}/chat/completions",
-                    json=payload,
-                    timeout=self.timeout
-                )
-                
-                response.raise_for_status()
-                result = response.json()
-                
-                if 'choices' in result and result['choices']:
-                    ai_response = result['choices'][0]['message']['content'].strip()
-                    logger.info(f"✅ Response received from model: {model}")
-                    return ai_response
-                else:
-                    logger.warning(f"API call to {model} succeeded but returned no choices")
-                    
-            except requests.exceptions.RequestException as e:
-                logger.error(f"Network error with model {model}: {e}")
-            except (KeyError, IndexError, TypeError) as e:
-                logger.error(f"Malformed response from model {model}: {e}")
-
-        logger.error("❌ All configured models failed")
-        return None
-
-# Backward compatible function
-def call_openrouter_api(prompt: str, api_key: str = None, api_base: str = None) -> str:
-    """Backward compatible function for existing code"""
-    try:
-        service = OpenRouterService(
-            api_key=api_key or OPENROUTER_API_KEY,
-            api_base=api_base or OPENAI_API_BASE
-        )
-        response = service.call_api(prompt)
-        return response or "I apologize, but I couldn't generate a response at this time."
-    except Exception as e:
-        logger.error(f"AI service call failed: {e}")
-        return f"Error generating response: {str(e)}"
