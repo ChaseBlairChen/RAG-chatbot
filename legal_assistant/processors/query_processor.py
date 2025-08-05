@@ -287,7 +287,7 @@ class QueryProcessor:
         
         self.logger.info(f"Feature availability: {self.features}")
     
-    # === ENHANCED TIMEOUT HANDLING METHODS ===
+    # === MAIN PROCESSING METHOD ===
     
     async def process_query_with_enhanced_timeout(
         self, 
@@ -543,20 +543,6 @@ class QueryProcessor:
         
         return final_response
     
-    # === LEGACY ASYNC METHOD FOR BACKWARD COMPATIBILITY ===
-    
-    async def process_query_async(self, question: str, session_id: str, user_id: Optional[str], 
-                                search_scope: str, response_style: str = "balanced", 
-                                use_enhanced_rag: bool = True, document_id: str = None, 
-                                search_external: bool = None, timeout_seconds: int = 25) -> QueryResponse:
-        """
-        Legacy async method - redirects to enhanced timeout handling
-        """
-        return await self.process_query_with_enhanced_timeout(
-            question, session_id, user_id, search_scope, response_style,
-            use_enhanced_rag, document_id, search_external
-        )
-    
     # === CORE PROCESSING METHODS ===
     
     def _build_query_context(self, question: str, session_id: str, user_id: Optional[str],
@@ -808,17 +794,21 @@ class QueryProcessor:
         if search_scope == "user_only":
             return False
         
+        # FIXED: Disable external search for EPA queries to prevent timeouts
+        if any(term in question.lower() for term in ['epa', 'environmental', 'air quality', 'violation']):
+            return False
+        
         # Check for government data needs
         if self._detect_government_data_need(question):
             return True
         
         # Check for legal areas that benefit from comprehensive search
-        comprehensive_areas = ['environmental', 'business', 'labor', 'healthcare', 'criminal', 'immigration', 'housing']
+        comprehensive_areas = ['business', 'labor', 'healthcare', 'criminal', 'immigration', 'housing']
         if any(area in query_types for area in comprehensive_areas):
             return True
         
         # Check for enforcement/compliance questions
-        enforcement_keywords = ['violation', 'enforcement', 'compliance', 'citation', 'penalty', 'recall']
+        enforcement_keywords = ['enforcement', 'compliance', 'citation', 'penalty', 'recall']
         if any(keyword in question.lower() for keyword in enforcement_keywords):
             return True
         
@@ -925,63 +915,39 @@ class QueryProcessor:
         )
     
     async def _search_external_databases(self, question: str, query_types: List[str]) -> Tuple[Optional[str], List[Dict]]:
-    """FIXED: Fast external search with timeout protection"""
-    
-    # Skip external search for EPA queries - they're slow and return no useful results
-    if any(term in question.lower() for term in ['epa', 'environmental', 'air quality', 'violation']):
-        self.logger.info("🚀 EPA query detected - skipping slow external APIs")
-        return None, []
-    
-    try:
-        from ..services.external_db_service import get_fast_external_optimizer
+        """FIXED: Fast external search with timeout protection"""
         
-        optimizer = get_fast_external_optimizer()
-        external_results = await optimizer.search_external_fast(question, None)
+        # Skip external search for EPA queries - they're slow and return no useful results
+        if any(term in question.lower() for term in ['epa', 'environmental', 'air quality', 'violation']):
+            self.logger.info("🚀 EPA query detected - skipping slow external APIs")
+            return None, []
         
-        if external_results:
-            self.logger.info(f"🏛️ Found {len(external_results)} results from fast external search")
-            
-            # Simple formatting for speed
-            formatted_text = "\n\n## External Sources Found:\n"
-            for result in external_results[:3]:
-                formatted_text += f"• {result.get('title', 'Unknown')} ({result.get('source_database', 'Unknown')})\n"
-            
-            source_info = [{
-                'file_name': result.get('title', 'Unknown'),
-                'source_type': 'external_fast',
-                'database': result.get('source_database', 'unknown'),
-                'relevance': 0.7,
-                'url': result.get('url', '')
-            } for result in external_results[:3]]
-            
-            return formatted_text, source_info
-        
-    except Exception as e:
-        self.logger.error(f"Fast external search failed: {e}")
-    
-    return None, []    
-    
-    async def _search_traditional_legal_databases(self, question: str) -> Tuple[Optional[str], List[Dict]]:
-        """Fallback search using traditional legal databases"""
         try:
-            from ..services.external_db_service import search_free_legal_databases_enhanced
+            from ..services.external_db_service import get_fast_external_optimizer
             
-            traditional_results = search_free_legal_databases_enhanced(
-                question, None, []
-            )
+            optimizer = get_fast_external_optimizer()
+            external_results = await optimizer.search_external_fast(question, None)
             
-            if traditional_results:
-                self.logger.info(f"📚 Found {len(traditional_results)} results from traditional legal databases")
+            if external_results:
+                self.logger.info(f"🏛️ Found {len(external_results)} results from fast external search")
                 
-                # Format traditional results
-                traditional_context, traditional_source_info = self._format_external_results_with_citations(
-                    traditional_results
-                )
+                # Simple formatting for speed
+                formatted_text = "\n\n## External Sources Found:\n"
+                for result in external_results[:3]:
+                    formatted_text += f"• {result.get('title', 'Unknown')} ({result.get('source_database', 'Unknown')})\n"
                 
-                return traditional_context, traditional_source_info
+                source_info = [{
+                    'file_name': result.get('title', 'Unknown'),
+                    'source_type': 'external_fast',
+                    'database': result.get('source_database', 'unknown'),
+                    'relevance': 0.7,
+                    'url': result.get('url', '')
+                } for result in external_results[:3]]
                 
+                return formatted_text, source_info
+            
         except Exception as e:
-            self.logger.error(f"Traditional legal database search failed: {e}")
+            self.logger.error(f"Fast external search failed: {e}")
         
         return None, []
     
@@ -1051,7 +1017,7 @@ COMPREHENSIVE COUNTRY CONDITIONS RESEARCH FOR {country.upper()}:
     
     def _process_context(self, search_results: SearchResults) -> Tuple[str, List[Dict]]:
         """Process and format context for LLM"""
-        max_context_length = 8000 if QueryType.STATUTORY.value in search_results.internal_results else 6000
+        max_context_length = 8000 if QueryType.STATUTORY.value in [t for t in search_results.sources_searched if 'statutory' in t] else 6000
         
         context_text, source_info = format_context_for_llm(
             search_results.internal_results, 
@@ -1267,22 +1233,6 @@ COMPREHENSIVE COUNTRY CONDITIONS RESEARCH FOR {country.upper()}:
 
 DETECTED LEGAL AREAS: {legal_areas_text}
 
-SOURCE HIERARCHY & AUTHORITY:
-- **HIGHEST AUTHORITY** (Official Government Sources): 
-  🏛️ Federal enforcement databases (EPA, SEC, DOL, FDA, USCIS, FBI)
-  🏛️ Official legislative sources (Congress.gov, Federal Register)
-  🏛️ Government statistical and regulatory data
-
-- **VERY HIGH AUTHORITY** (Legal Authorities):
-  🎓 Federal and state statutes from authoritative academic sources
-  🎓 Court decisions from Harvard Caselaw Access Project and CourtListener
-  📚 Federal regulations and administrative guidance
-
-- **HIGH AUTHORITY** (Reliable Legal Sources):
-  📊 Professional legal databases (Justia, Cornell Law)
-  📊 State legislative tracking (OpenStates)
-  📊 Legal academic resources
-
 ANTI-HALLUCINATION REQUIREMENTS:
 🚫 ONLY answer based on the provided context and sources
 🚫 If information is NOT in the sources, say "This information is not available in the provided documents"
@@ -1291,40 +1241,25 @@ ANTI-HALLUCINATION REQUIREMENTS:
 
 SOURCES SEARCHED: {', '.join(search_results.sources_searched)}
 RETRIEVAL METHOD: {search_results.retrieval_method}
-{f"DOCUMENT FILTER: Specific document {query_context.document_id}" if query_context.document_id else "DOCUMENT SCOPE: All available sources including government databases"}
-
-RESPONSE STYLE: {query_context.response_style}
 
 CONVERSATION HISTORY:
 {query_context.conversation_context}
 
-COMPREHENSIVE LEGAL CONTEXT (Government databases, enforcement data, legal authorities):
+LEGAL CONTEXT:
 {context_text}
 
 USER QUESTION:
 {query_context.original_question}
 
-REQUIRED RESPONSE FORMAT:
-## 📋 Direct Answer
+RESPONSE FORMAT:
+## Direct Answer
 [Your main answer based ONLY on the provided sources]
 
-## 🔑 Key Supporting Points
+## Key Supporting Points
 [Bullet points from the sources that support your answer]
 
-## 📚 Sources Referenced
+## Sources Referenced
 [List the specific documents/databases that support your answer]
-
-## 🎯 Confidence Assessment
-[High/Medium/Low] - [Brief explanation based on source quality and coverage]
-
-RESPONSE INSTRUCTIONS:
-- Lead with government data when available (enforcement actions, violations, official statistics)
-- Provide specific, actionable information from official sources with concrete examples
-- Include enforcement patterns and compliance guidance from government databases
-- Explain the underlying legal framework using primary legal authorities
-- Note jurisdictional differences and enforcement variations by agency/state
-- Include practical compliance steps based on real enforcement examples
-- Cite official sources with authority indicators for maximum credibility
 
 RESPONSE:"""
     
@@ -1334,172 +1269,139 @@ RESPONSE:"""
         
         return f"""You are an immigration legal assistant with access to official USCIS data, visa bulletins, and immigration law databases.
 
-IMMIGRATION-SPECIFIC AUTHORITY SOURCES:
-🏛️ **Official Government**: USCIS case status, State Dept visa bulletins, immigration court data
-🎓 **Legal Authorities**: Immigration statutes, regulations, and federal court decisions
-📊 **Professional Resources**: Immigration law databases and practice guides
-
 ANTI-HALLUCINATION REQUIREMENTS:
 🚫 ONLY answer based on the provided context and sources
 🚫 If information is NOT in the sources, say "This information is not available in the provided documents"
 🚫 NEVER make up processing times, case outcomes, or legal requirements
-🚫 When uncertain about immigration law, clearly state limitations
 
 IMPORTANT IMMIGRATION CONTEXT:
-- Always note that immigration law is complex and changes frequently
-- Processing times and requirements vary by service center and case type
-- Country conditions can change rapidly affecting asylum claims
+- Immigration law is complex and changes frequently
+- Processing times vary by service center and case type
 - Each case is unique and requires individual assessment
 
 SOURCES SEARCHED: {', '.join(search_results.sources_searched)}
-RETRIEVAL METHOD: {search_results.retrieval_method}
 
 CONVERSATION HISTORY:
 {query_context.conversation_context}
 
-IMMIGRATION CONTEXT (including official government data):
+IMMIGRATION CONTEXT:
 {context_text}
 
 USER QUESTION:
 {query_context.original_question}
 
-REQUIRED RESPONSE FORMAT:
-## 📋 Direct Answer
+RESPONSE FORMAT:
+## Direct Answer
 [Your main answer based ONLY on the provided sources]
 
-## 🔑 Key Immigration Points
+## Key Immigration Points
 [Specific points from immigration sources]
 
-## 📚 Official Sources Referenced
-[Government sources and legal authorities cited]
-
-## ⚠️ Important Immigration Disclaimers
-[Relevant warnings about processing times, legal complexity, etc.]
-
-RESPONSE INSTRUCTIONS:
-- Provide practical, actionable guidance based on official sources
-- Include specific form numbers, deadlines, and current processing information
-- Note any recent policy changes or enforcement priorities
-- Always include disclaimer about consulting an immigration attorney
+## Important Disclaimers
+[Relevant warnings about legal complexity, etc.]
 
 RESPONSE:"""
     
     def _create_statutory_prompt(self, context_text: str, query_context: QueryContext,
                                search_results: SearchResults) -> str:
-        """Create an enhanced prompt specifically for statutory analysis"""
+        """Create enhanced prompt for statutory analysis using your complex prompt"""
         
-        return f"""You are a legal research assistant specializing in statutory analysis. Your job is to extract COMPLETE, SPECIFIC information from legal documents.
-
-STRICT SOURCE REQUIREMENTS:
-- Answer ONLY based on the retrieved documents provided in the context
-- Do NOT use general legal knowledge, training data, assumptions, or inferences beyond what's explicitly stated
-- If information is not in the provided documents, state: "This information is not available in the provided documents"
-- When citing external database results, use the full citation format provided
-
-🔴 CRITICAL: You MUST extract actual numbers, durations, and specific requirements. NEVER use placeholders like "[duration not specified]" or "[requirements not listed]".
-
-🔥 CRITICAL FAILURE PREVENTION:
-- If you write "[duration not specified]" you have FAILED at your job
-- If you write "[duties not specified]" you have FAILED at your job  
-- If you write "[requirements not listed]" you have FAILED at your job
-- READ EVERY WORD of the context before claiming information is missing
-- The human is counting on you to find the actual requirements
-
-MANDATORY EXTRACTION RULES:
-1. 📖 READ EVERY WORD of the provided context before claiming anything is missing
-2. 🔢 EXTRACT ALL NUMBERS: durations (60 minutes), quantities (25 people), percentages, dollar amounts
-3. 📝 QUOTE EXACT LANGUAGE: Use quotation marks for statutory text
-4. 📋 LIST ALL REQUIREMENTS: Number each requirement found (1., 2., 3., etc.)
-5. 🎯 BE SPECIFIC: Include section numbers, subsection letters, paragraph numbers
-6. ⚠️ ONLY claim information is "missing" after thorough analysis of ALL provided text
-
-SOURCES SEARCHED: {', '.join(search_results.sources_searched)}
-RETRIEVAL METHOD: {search_results.retrieval_method}
-{f"DOCUMENT FILTER: Specific document {query_context.document_id}" if query_context.document_id else "DOCUMENT SCOPE: All available documents"}
-
-RESPONSE FORMAT REQUIRED FOR STATUTORY QUESTIONS:
-
-## SPECIFIC REQUIREMENTS FOUND:
-[List each requirement with exact quotes and citations]
-
-## NUMERICAL STANDARDS:
-[Extract ALL numbers, durations, thresholds, limits]
-
-## PROCEDURAL RULES:
-[Detail composition, conduct, attendance, record-keeping rules]
-
-## ROLES AND RESPONSIBILITIES:
-[Define each party's specific duties with citations]
-
-## ENFORCEMENT DATA (if available):
-[Include any government enforcement examples, violations, or compliance guidance]
-
-## INFORMATION NOT FOUND:
-[Only list what is genuinely absent after thorough review]
-
-CONVERSATION HISTORY:
-{query_context.conversation_context}
-
-DOCUMENT CONTEXT TO ANALYZE WORD-BY-WORD:
-{context_text}
-
-USER QUESTION REQUIRING COMPLETE EXTRACTION:
-{query_context.original_question}
-
-RESPONSE:"""
-    
-    def _create_regular_prompt(self, context_text: str, query_context: QueryContext,
-                             search_results: SearchResults) -> str:
-        """Create the regular prompt for non-statutory questions"""
-        
-        return f"""You are a legal research assistant with access to comprehensive legal databases and government enforcement data.
+        return f"""You are a legal research assistant. Provide thorough, accurate responses based on the provided documents.
 
 SOURCE HIERARCHY:
 - **PRIMARY**: Information from the retrieved documents provided in the context
-- **GOVERNMENT DATA**: Official enforcement actions, violations, and regulatory guidance (highest authority)
-- **LEGAL AUTHORITIES**: Statutes, regulations, and case law from authoritative sources
 - **SECONDARY**: General legal knowledge ONLY when documents are unavailable
-
-ANTI-HALLUCINATION REQUIREMENTS:
-🚫 ONLY answer based on the provided context and sources
-🚫 If information is NOT in the sources, say "This information is not available in the provided documents"
-🚫 NEVER make up facts, dates, case names, or legal citations
-🚫 When uncertain, use phrases like "Based on the available information..." or "The documents suggest..."
+- **STRICT LIMITATIONS**: 
+  - Only use well-established, fundamental legal principles (e.g., basic elements of crimes, standard procedural rules)
+  - Do NOT invent case law, specific precedents, or detailed statutory provisions
+  - Clearly label all general knowledge with disclaimers
+  - When in doubt, default to "information not available"
 
 SOURCES SEARCHED: {', '.join(search_results.sources_searched)}
 RETRIEVAL METHOD: {search_results.retrieval_method}
 {f"DOCUMENT FILTER: Specific document {query_context.document_id}" if query_context.document_id else "DOCUMENT SCOPE: All available documents"}
+
+HALLUCINATION CHECK - Before responding, verify:
+1. Is each claim supported by the retrieved documents?
+2. Am I adding information not present in the sources?
+3. If uncertain, default to "information not available"
+
+INSTRUCTIONS FOR THOROUGH ANALYSIS:
+1. **READ CAREFULLY**: Scan the entire context for information that answers the user's question
+2. **EXTRACT COMPLETELY**: When extracting requirements, include FULL details (e.g., "60 minutes" not just "minimum of")
+3. **QUOTE VERBATIM**: For statutory standards, use exact quotes: `"[Exact Text]" (Source)`
+4. **ENUMERATE EXPLICITLY**: Present listed requirements as numbered points with full quotes
+5. **CITE SOURCES**: Reference the document name or case citation for each fact
+6. **BE COMPLETE**: Explicitly note missing standards: "Documents lack full subsection [X]"
+7. **USE DECISIVE PHRASING**: State facts directly ("The statute requires...") - NEVER "documents indicate"
 
 RESPONSE STYLE: {query_context.response_style}
 
 CONVERSATION HISTORY:
 {query_context.conversation_context}
 
-COMPREHENSIVE LEGAL CONTEXT:
+DOCUMENT CONTEXT (ANALYZE THOROUGHLY):
 {context_text}
 
 USER QUESTION:
 {query_context.original_question}
 
-REQUIRED RESPONSE FORMAT:
-## 📋 Direct Answer
+RESPONSE APPROACH:
+- **FIRST**: Identify what specific information the user is asking for. Do not reference any statute, case law, or principle unless it appears verbatim in the context.
+- **SECOND**: Search the context thoroughly for that information  
+- **THIRD**: Present any information found clearly and completely. At the end of your response, list all facts provided and their source documents for verification.
+- **FOURTH**: Note what information is not available (if any)
+- **FIFTH**: When documents lack specific guidance but user requests legal analysis, provide response based on fundamental legal principles with clear disclaimers
+- **ALWAYS**: Cite the source document or case for each fact provided
+
+LEGAL ANALYSIS FRAMEWORK:
+- When documents lack specific guidance, provide analysis based on fundamental legal principles
+- Focus on established concepts, not novel interpretations
+- Structure responses around: "Based on general legal principles, typical approaches include..."
+- Avoid making definitive statements about jurisdiction-specific rules not in the documents
+- Clearly distinguish between document-based facts and general legal knowledge
+
+ADDITIONAL GUIDANCE:
+- After fully answering based on the provided documents, if relevant key legal principles under Washington state law, any other U.S. state law, or U.S. federal law are not found in the sources, you may add a clearly labeled general legal principles disclaimer.
+- This disclaimer must clearly state it is NOT based on the provided documents but represents general background knowledge of applicable Washington state, other state, and federal law.
+- Do NOT use this disclaimer to answer the user's question directly; it serves only as supplementary context.
+- This disclaimer must explicitly state that these principles are not found in the provided documents but are usually relevant legal background.
+- Format this disclaimer distinctly at the end of the response under a heading such as "GENERAL LEGAL PRINCIPLES DISCLAIMER."
+
+RESPONSE:"""
+    
+    def _create_regular_prompt(self, context_text: str, query_context: QueryContext,
+                             search_results: SearchResults) -> str:
+        """Create simple prompt for general questions"""
+        
+        return f"""You are a legal research assistant with access to comprehensive legal databases.
+
+ANTI-HALLUCINATION REQUIREMENTS:
+🚫 ONLY answer based on the provided context and sources
+🚫 If information is NOT in the sources, say "This information is not available in the provided documents"
+🚫 NEVER make up facts, dates, case names, or legal citations
+
+SOURCES SEARCHED: {', '.join(search_results.sources_searched)}
+RESPONSE STYLE: {query_context.response_style}
+
+CONVERSATION HISTORY:
+{query_context.conversation_context}
+
+LEGAL CONTEXT:
+{context_text}
+
+USER QUESTION:
+{query_context.original_question}
+
+RESPONSE FORMAT:
+## Direct Answer
 [Your main answer based ONLY on the provided sources]
 
-## 🔑 Key Supporting Points
+## Key Supporting Points
 [Bullet points from the sources that support your answer]
 
-## 📚 Sources Referenced
+## Sources Referenced
 [List the specific documents that support your answer]
-
-## 🎯 Confidence Assessment
-[High/Medium/Low] - [Brief explanation based on source quality]
-
-RESPONSE APPROACH:
-- **FIRST**: Check for official government data (enforcement actions, violations, compliance guidance)
-- **SECOND**: Provide legal framework from authoritative sources (statutes, regulations, case law)
-- **THIRD**: Include practical compliance guidance based on enforcement patterns
-- **FOURTH**: Note jurisdictional variations and recent developments
-- **ALWAYS**: Cite sources with authority indicators (🏛️ government, 🎓 academic, 📊 legal databases)
 
 RESPONSE:"""
     
@@ -1593,23 +1495,18 @@ RESPONSE:"""
         uncertainty_phrases = [
             "based on the available information",
             "the documents suggest that",
-            "according to the provided sources",
-            "from what i can determine"
+            "according to the provided sources"
         ]
         
         response_lower = response.lower()
         has_uncertainty = any(phrase in response_lower for phrase in uncertainty_phrases)
         
         if not has_uncertainty:
-            # Add uncertainty marker at the beginning of the main content
+            # Add uncertainty marker at the beginning
             lines = response.split('\n')
-            main_content_started = False
-            
             for i, line in enumerate(lines):
-                if line.strip() and not line.startswith('#') and not main_content_started:
-                    if not any(phrase in line.lower() for phrase in uncertainty_phrases):
-                        lines[i] = f"Based on the available information, {line}"
-                    main_content_started = True
+                if line.strip() and not line.startswith('#'):
+                    lines[i] = f"Based on the available information, {line}"
                     break
             
             response = '\n'.join(lines)
@@ -1638,23 +1535,13 @@ RESPONSE:"""
         if QueryType.IMMIGRATION.value in query_context.query_types:
             notices.append("**Immigration Law Notice**: This information is general guidance only. Immigration law is complex and changes frequently. Please consult with an immigration attorney for advice specific to your situation.")
         
-        if (self._detect_government_data_need(query_context.original_question) and 
-            search_results.external_source_info):
-            notices.append("**Government Data Notice**: This response includes official government enforcement data and regulatory information. Always verify current requirements with the relevant agencies.")
-        
         # Add notices to response
         final_response = processing_result.response_text
         if notices:
             final_response += "\n\n" + "\n\n".join(notices)
         
-        # Filter and consolidate sources
+        # Filter relevant sources
         relevant_sources = [s for s in processing_result.sources if s.get('relevance', 0) >= MIN_RELEVANCE_SCORE]
-        consolidated_sources = self._consolidate_sources(relevant_sources)
-        
-        # Add source citations to response if sources exist
-        if consolidated_sources:
-            citations = self._format_source_citations(consolidated_sources)
-            final_response += f"\n\n{citations}"
         
         # Calculate final confidence score
         final_confidence = calculate_confidence_score(
@@ -1669,7 +1556,7 @@ RESPONSE:"""
             response=final_response,
             error=None,
             context_found=bool(search_results.internal_results or search_results.external_context),
-            sources=consolidated_sources,
+            sources=relevant_sources,
             session_id=query_context.session_id,
             confidence_score=float(combined_confidence),
             sources_searched=search_results.sources_searched,
@@ -1677,7 +1564,7 @@ RESPONSE:"""
             retrieval_method=search_results.retrieval_method
         )
     
-    # === CITATION AND FORMATTING METHODS ===
+    # === FORMATTING AND CITATION METHODS ===
     
     def _format_comprehensive_analysis_response(self, comp_result) -> str:
         """Format comprehensive analysis response"""
@@ -1704,403 +1591,6 @@ RESPONSE:"""
 ---
 **Analysis Confidence:** {comp_result.overall_confidence:.1%}
 **Processing Time:** {comp_result.processing_time:.2f} seconds"""
-    
-    def _format_comprehensive_results_with_citations(self, comprehensive_results: List[Dict]) -> Tuple[str, List[Dict]]:
-        """Format comprehensive API results with proper citations"""
-        if not comprehensive_results:
-            return "", []
-        
-        # Group results by legal area and source type
-        results_by_category = {}
-        source_info = []
-        
-        for idx, result in enumerate(comprehensive_results):
-            legal_area = result.get('legal_area', result.get('enforcement_area', 'general'))
-            source_db = result.get('source_database', 'unknown')
-            detected_state = result.get('detected_state', 'Federal')
-            
-            if legal_area not in results_by_category:
-                results_by_category[legal_area] = []
-            
-            results_by_category[legal_area].append(result)
-            
-            # Create source info entry
-            source_info.append({
-                'file_name': self._format_legal_citation(result),
-                'page': None,
-                'relevance': result.get('relevance_score', 0.9),
-                'source_type': 'comprehensive_government_database',
-                'database': source_db,
-                'legal_area': legal_area,
-                'jurisdiction': detected_state,
-                'url': result.get('url', ''),
-                'date': result.get('date', ''),
-                'authority_level': 'very_high' if any(gov in source_db for gov in ['epa', 'sec', 'dol', 'fda', 'uscis', 'fbi']) else 'high'
-            })
-        
-        # Format the context text
-        formatted_text = "\n\n## COMPREHENSIVE LEGAL & GOVERNMENT DATABASE RESULTS:\n"
-        formatted_text += "(Official government enforcement data, regulatory information, and authoritative legal sources)\n\n"
-        
-        for legal_area, area_results in results_by_category.items():
-            if not area_results:
-                continue
-                
-            # Add section header for this legal area
-            area_title = legal_area.replace('_', ' ').title()
-            if area_title.lower() != 'general':
-                formatted_text += f"### {area_title} - Official Data & Legal Framework\n"
-            
-            for idx, result in enumerate(area_results, 1):
-                # Create proper citation
-                citation = self._format_legal_citation(result)
-                
-                formatted_text += f"#### {idx}. {citation}\n"
-                
-                # Add database attribution with authority indicator
-                source_db = result.get('source_database', 'Unknown')
-                if any(gov in source_db for gov in ['epa', 'sec', 'dol', 'fda', 'uscis', 'fbi', 'congress', 'federal_register']):
-                    authority_indicator = "🏛️"
-                    authority_text = "Official U.S. Government Database"
-                elif any(academic in source_db for academic in ['harvard', 'cornell']):
-                    authority_indicator = "🎓"
-                    authority_text = "Academic Legal Institution"
-                else:
-                    authority_indicator = "📊"
-                    authority_text = "Legal Database"
-                
-                formatted_text += f"**Source:** {authority_indicator} {authority_text} - {self._format_database_name(source_db)}\n"
-                
-                # Add jurisdiction info
-                jurisdiction = result.get('detected_state') or result.get('state', 'Federal')
-                formatted_text += f"**Jurisdiction:** {jurisdiction}\n"
-                
-                # Add date if available
-                date = (result.get('date') or result.get('filing_date') or 
-                       result.get('report_date') or result.get('citation_date'))
-                if date:
-                    formatted_text += f"**Date:** {date}\n"
-                
-                # Add government-specific data
-                if 'violation_type' in result:
-                    formatted_text += f"**Violation Type:** {result['violation_type']}\n"
-                if 'penalty' in result and result['penalty']:
-                    formatted_text += f"**Penalty:** {result['penalty']}\n"
-                if 'status' in result and result['status']:
-                    formatted_text += f"**Status:** {result['status']}\n"
-                if 'classification' in result:
-                    formatted_text += f"**Classification:** {result['classification']}\n"
-                if 'company' in result and result['company']:
-                    formatted_text += f"**Company/Facility:** {result['company']}\n"
-                
-                # Add description/summary
-                description = (result.get('description') or result.get('summary') or 
-                             result.get('reason_for_recall') or result.get('snippet', ''))
-                
-                if description:
-                    # Clean and truncate description
-                    clean_description = re.sub(r'\s+', ' ', description).strip()
-                    if len(clean_description) > 400:
-                        clean_description = clean_description[:397] + "..."
-                    formatted_text += f"**Details:** {clean_description}\n"
-                
-                # Add URL for full details
-                if result.get('url'):
-                    formatted_text += f"**Full Information:** [View Official Source]({result['url']})\n"
-                
-                formatted_text += "\n"
-        
-        return formatted_text, source_info
-    
-    def _format_external_results_with_citations(self, external_results: List[Dict]) -> Tuple[str, List[Dict]]:
-        """Format external results with proper citations"""
-        if not external_results:
-            return "", []
-        
-        formatted_text = "\n\n## LEGAL DATABASE RESULTS:\n"
-        formatted_text += "(Results from authoritative legal databases and academic institutions)\n\n"
-        
-        source_info = []
-        
-        for idx, result in enumerate(external_results[:5], 1):  # Limit to top 5 results
-            # Create proper citation
-            citation = self._format_legal_citation(result)
-            
-            formatted_text += f"### {idx}. {citation}\n"
-            
-            # Add database attribution
-            source_db = result.get('source_database', 'Unknown')
-            formatted_text += f"**Database:** {self._format_database_name(source_db)}\n"
-            
-            # Add court and jurisdiction info
-            court = result.get('court', '')
-            jurisdiction = result.get('jurisdiction', '')
-            if court:
-                formatted_text += f"**Court:** {court}\n"
-            if jurisdiction:
-                formatted_text += f"**Jurisdiction:** {jurisdiction}\n"
-            
-            # Add date decided
-            date = result.get('date', '')
-            if date:
-                formatted_text += f"**Date:** {date}\n"
-            
-            # Add relevant excerpt/preview
-            preview = result.get('preview') or result.get('snippet', '') or result.get('description', '')
-            if preview:
-                # Clean up the preview text
-                preview = re.sub(r'\s+', ' ', preview).strip()
-                if len(preview) > 500:
-                    preview = preview[:497] + "..."
-                formatted_text += f"**Relevant Excerpt:** {preview}\n"
-            
-            # Add URL for full text
-            if result.get('url'):
-                formatted_text += f"**Full Text:** [View Source]({result['url']})\n"
-            
-            formatted_text += "\n"
-            
-            # Create source info entry with proper citation
-            source_info.append({
-                'file_name': citation,  # Use the formatted citation as the file name
-                'page': None,
-                'relevance': result.get('relevance_score', 0.8),
-                'source_type': 'external_legal_database',
-                'database': source_db,
-                'url': result.get('url', ''),
-                'court': court,
-                'date': date
-            })
-        
-        return formatted_text, source_info
-    
-    def _format_legal_citation(self, result: Dict) -> str:
-        """Format a legal database result into a proper citation"""
-        source_db = result.get('source_database', '').lower()
-        
-        # Harvard Library Caselaw Access Project format
-        if 'harvard' in source_db or 'caselaw' in source_db:
-            case_name = result.get('title', 'Unknown Case')
-            court = result.get('court', '')
-            date = result.get('date', '')
-            citation = result.get('citation', '')
-            
-            if citation:
-                year = date.split('-')[0] if date else ''
-                return f"{case_name}, {citation} ({court} {year})"
-            else:
-                return f"{case_name} ({court} {date})"
-        
-        # CourtListener format
-        elif 'courtlistener' in source_db:
-            case_name = result.get('title', 'Unknown Case')
-            docket = result.get('docket_number', '')
-            court = result.get('court', '')
-            date = result.get('date', '')
-            
-            if docket:
-                return f"{case_name}, No. {docket} ({court} {date})"
-            else:
-                return f"{case_name} ({court} {date})"
-        
-        # Government database formats
-        elif 'epa' in source_db:
-            facility = result.get('facility_name', result.get('title', 'EPA Action'))
-            location = result.get('location', '')
-            violation = result.get('violation_type', '')
-            date = result.get('date', result.get('citation_date', ''))
-            return f"EPA Enforcement: {facility} {location} - {violation} ({date})"
-        
-        elif 'sec' in source_db:
-            company = result.get('company', result.get('title', 'SEC Filing'))
-            form_type = result.get('form_type', 'Filing')
-            date = result.get('filing_date', result.get('date', ''))
-            return f"SEC {form_type}: {company} ({date})"
-        
-        elif 'osha' in source_db or 'dol' in source_db:
-            company = result.get('company', result.get('title', 'DOL Action'))
-            violation = result.get('violation_type', 'Violation')
-            date = result.get('citation_date', result.get('date', ''))
-            return f"OSHA Citation: {company} - {violation} ({date})"
-        
-        elif 'uscis' in source_db:
-            receipt = result.get('receipt_number', '')
-            status = result.get('status', result.get('title', 'Case Status'))
-            date = result.get('checked_date', result.get('date', ''))
-            return f"USCIS Case {receipt}: {status} ({date})"
-        
-        elif 'fda' in source_db:
-            product = result.get('product_description', result.get('title', 'FDA Action'))
-            company = result.get('company', result.get('recalling_firm', ''))
-            date = result.get('report_date', result.get('date', ''))
-            return f"FDA Action: {company} - {product} ({date})"
-        
-        # Google Scholar format
-        elif 'scholar' in source_db or 'google' in source_db:
-            case_name = result.get('title', 'Unknown Case')
-            citation = result.get('citation', '')
-            year = result.get('date', '').split('-')[0] if result.get('date') else ''
-            
-            if citation:
-                return f"{case_name}, {citation} ({year})"
-            else:
-                return f"{case_name} ({year})"
-        
-        # Generic format for other sources
-        else:
-            title = result.get('title', 'Unknown')
-            source = result.get('source_database', 'Unknown Source').replace('_', ' ').title()
-            date = result.get('date', '')
-            
-            if date:
-                return f"{source}: {title} ({date})"
-            else:
-                return f"{source}: {title}"
-    
-    def _format_database_name(self, source_db: str) -> str:
-        """Format database name for display"""
-        database_names = {
-            'epa_echo': 'EPA Enforcement & Compliance History Online',
-            'epa_air_quality': 'EPA Air Quality System',
-            'sec_edgar': 'SEC EDGAR Corporate Filings Database',
-            'dol_osha': 'Department of Labor OSHA Enforcement Database',
-            'fda_drug_enforcement': 'FDA Drug Enforcement Reports',
-            'uscis_case_status': 'USCIS Case Status System',
-            'state_dept_visa_bulletin': 'State Department Visa Bulletin',
-            'hud_fair_market_rents': 'HUD Fair Market Rent Database',
-            'census_housing': 'U.S. Census Bureau Housing Statistics',
-            'fbi_crime_data': 'FBI Crime Data Explorer',
-            'uspto_patents': 'USPTO Patent Database',
-            'congress_gov': 'Congress.gov Official Legislative Database',
-            'openstates': 'OpenStates Legislative Tracking',
-            'justia': 'Justia Free Law Database',
-            'cornell_law': 'Cornell Law School Legal Information Institute',
-            'harvard_caselaw': 'Harvard Law School Caselaw Access Project',
-            'courtlistener': 'CourtListener Federal & State Court Database',
-            'federal_register': 'Federal Register - Official U.S. Government Regulations'
-        }
-        
-        return database_names.get(source_db, source_db.replace('_', ' ').title())
-    
-    def _consolidate_sources(self, source_info: List[Dict]) -> List[Dict]:
-        """Consolidate multiple chunks from the same document into meaningful source entries"""
-        from collections import defaultdict
-        
-        # Group sources by document
-        document_groups = defaultdict(list)
-        
-        for source in source_info:
-            key = (source['file_name'], source['source_type'])
-            document_groups[key].append(source)
-        
-        consolidated_sources = []
-        
-        for (file_name, source_type), sources in document_groups.items():
-            if source_type in ['external_legal_database', 'comprehensive_government_database']:
-                # External sources should not be consolidated - each is unique
-                consolidated_sources.extend(sources)
-            else:
-                # For internal documents, consolidate chunks
-                relevance_scores = [s['relevance'] for s in sources]
-                max_relevance = max(relevance_scores)
-                avg_relevance = sum(relevance_scores) / len(relevance_scores)
-                
-                # Get unique pages if available
-                pages = [s['page'] for s in sources if s.get('page') is not None]
-                unique_pages = sorted(set(pages)) if pages else []
-                
-                consolidated_source = {
-                    'file_name': file_name,
-                    'source_type': source_type,
-                    'relevance': max_relevance,
-                    'avg_relevance': avg_relevance,
-                    'num_chunks': len(sources),
-                    'pages': unique_pages,
-                    'authority_level': sources[0].get('authority_level', 'medium')
-                }
-                
-                consolidated_sources.append(consolidated_source)
-        
-        # Sort by authority level first, then relevance
-        authority_order = {'very_high': 4, 'high': 3, 'medium_high': 2, 'medium': 1, 'low': 0}
-        consolidated_sources.sort(
-            key=lambda x: (authority_order.get(x.get('authority_level', 'medium'), 1), x.get('relevance', 0)), 
-            reverse=True
-        )
-        
-        return consolidated_sources
-    
-    def _format_source_citations(self, consolidated_sources: List[Dict]) -> str:
-        """Format source citations for response"""
-        if not consolidated_sources:
-            return ""
-        
-        citations = "\n\n**SOURCES:**"
-        citations += "\n*🏛️ = Official Government, 🎓 = Academic/Authoritative, 📊 = Legal Database*"
-        
-        for source in consolidated_sources:
-            citations += "\n" + self._format_source_display(source)
-        
-        return citations
-    
-    def _format_source_display(self, source: Dict) -> str:
-        """Format a source for display in the response with authority indicators"""
-        source_type = source['source_type'].replace('_', ' ').title()
-        authority_level = source.get('authority_level', 'medium')
-        
-        # Authority indicators
-        if authority_level == 'very_high':
-            authority_icon = "🏛️"
-        elif authority_level == 'high':
-            authority_icon = "🎓"
-        else:
-            authority_icon = "📊"
-        
-        if source_type in ['External Legal Database', 'Comprehensive Government Database']:
-            # External sources with authority indicators
-            display = f"- {authority_icon} {source['file_name']}"
-            
-            if source.get('database'):
-                db_name = self._format_database_name(source['database'])
-                display += f" [{db_name}]"
-            
-            if source.get('url'):
-                display += f" - [Full Text]({source['url']})"
-            
-            return display
-        else:
-            # Internal document format
-            display = f"- {authority_icon} {source['file_name']}"
-            
-            # Add page information if available
-            if source.get('pages'):
-                if len(source['pages']) == 1:
-                    display += f" (Page {source['pages'][0]})"
-                elif len(source['pages']) > 1:
-                    if len(source['pages']) <= 3:
-                        display += f" (Pages {', '.join(map(str, source['pages']))})"
-                    else:
-                        display += f" (Pages {source['pages'][0]}-{source['pages'][-1]})"
-            
-            # Add relevance score with authority context
-            relevance = source['relevance']
-            if relevance <= 1.0:
-                relevance_pct = relevance * 100
-            else:
-                relevance_pct = relevance
-                
-            if relevance_pct >= 80:
-                relevance_label = "Excellent match"
-            elif relevance_pct >= 60:
-                relevance_label = "Good match"
-            elif relevance_pct >= 40:
-                relevance_label = "Fair match"
-            else:
-                relevance_label = "Partial match"
-            
-            display += f" ({relevance_label}: {relevance_pct:.0f}/100, {authority_level.replace('_', ' ').title()} Authority)"
-            
-            return display
     
     # === TIMEOUT AND ERROR HANDLING METHODS ===
     
@@ -2132,7 +1622,6 @@ Your query was complex and timed out during processing, but I was able to find {
 **To get complete results:**
 - Try asking a more specific question
 - Break complex questions into smaller parts
-- Upload fewer documents if you have many large files
 
 **Tip:** Questions about specific bills, statutes, or documents typically process faster than broad research queries."""
             else:
@@ -2150,9 +1639,7 @@ I found relevant information in your documents but timed out while generating th
 
 **To get complete results:**
 - Try asking a more focused question
-- Ask about specific sections or topics rather than broad analysis
-
-**Note:** The information is available in your documents - a more specific question will process faster."""
+- Ask about specific sections or topics rather than broad analysis"""
         
         else:
             response = f"""⚠️ **Query Processing Timeout**
@@ -2164,9 +1651,7 @@ Your query timed out after {current_progress.progress_percent}% completion.
 **To resolve:**
 - Try a more specific question
 - Break complex questions into parts
-- Reduce the scope of your search
-
-**Tip:** Specific questions about particular documents or legal concepts process much faster than broad research queries."""
+- Reduce the scope of your search"""
         
         return QueryResponse(
             response=response,
@@ -2331,65 +1816,6 @@ I found relevant information but couldn't complete full processing. Here's what 
                          max(1, self.processing_stats['total_queries'])),
             'features_available': self.features
         }
-    
-    def get_active_queries(self) -> Dict[str, Any]:
-        """Get information about currently active queries"""
-        
-        current_time = datetime.utcnow()
-        active_info = {}
-        
-        for query_id, query_info in self.active_queries.items():
-            started_at = query_info['started_at']
-            elapsed = (current_time - started_at).total_seconds()
-            progress = query_info['progress_tracker'].get_current_progress()
-            
-            active_info[query_id] = {
-                'question_preview': query_info['question'],
-                'elapsed_seconds': round(elapsed, 1),
-                'timeout_in_seconds': query_info['timeout'],
-                'current_stage': progress.stage.value,
-                'progress_percent': progress.progress_percent,
-                'current_message': progress.message,
-                'time_remaining': max(0, query_info['timeout'] - elapsed)
-            }
-        
-        return active_info
-    
-    def get_timeout_statistics(self) -> Dict[str, Any]:
-        """Get timeout and performance statistics"""
-        
-        stats = self.get_processing_stats()
-        
-        return {
-            'processing_stats': stats,
-            'timeout_analysis': {
-                'timeout_rate': stats['timeout_rate'],
-                'avg_processing_time': stats['avg_processing_time'],
-                'success_rate': stats['success_rate']
-            },
-            'active_queries': len(self.active_queries),
-            'timeout_thresholds': self.timeout_handler.base_timeouts,
-            'complexity_multipliers': self.timeout_handler.complexity_multipliers,
-            'recommendations': self._get_performance_recommendations(stats)
-        }
-    
-    def _get_performance_recommendations(self, stats: Dict) -> List[str]:
-        """Get performance improvement recommendations"""
-        recommendations = []
-        
-        if stats['timeout_rate'] > 0.1:  # More than 10% timeouts
-            recommendations.append("High timeout rate detected - consider reducing document count or query complexity")
-        
-        if stats['avg_processing_time'] > 20:
-            recommendations.append("High average processing time - consider optimizing document chunking")
-        
-        if stats['error_rate'] > 0.05:  # More than 5% errors
-            recommendations.append("High error rate detected - check document processing and external API status")
-        
-        if len(self.active_queries) > 5:
-            recommendations.append("Many concurrent queries - consider implementing query queuing")
-        
-        return recommendations
 
 # === BACKWARD COMPATIBLE FUNCTIONS ===
 
@@ -2410,180 +1836,330 @@ def process_query(question: str, session_id: str, user_id: Optional[str], search
     """
     Legacy synchronous query processing function for backward compatibility
     
-    WARNING: This function blocks. Use QueryProcessor.process_query_with_enhanced_timeout() for new code.
+    This function maintains the exact interface your existing router expects.
     """
-    processor = get_query_processor()
     
     try:
-        # Run async function in sync context
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
+        logger.info(f"🔍 Processing query: '{question[:100]}...' for user: {user_id}")
         
-        result = loop.run_until_complete(
-            processor.process_query_with_enhanced_timeout(
-                question, session_id, user_id, search_scope,
-                response_style, use_enhanced_rag, document_id, search_external
-            )
+        # Step 1: Parse and analyze question
+        if use_enhanced_rag:
+            questions = parse_multiple_questions(question)
+            combined_query = " ".join(questions)
+            logger.info(f"Enhanced RAG: Parsed {len(questions)} questions")
+        else:
+            combined_query = question
+        
+        # Step 2: Get conversation context
+        conversation_context = get_conversation_context(session_id)
+        
+        # Step 3: Search for relevant documents
+        logger.info(f"🔎 Searching documents with scope: {search_scope}")
+        search_results, sources_searched, retrieval_method = combined_search(
+            combined_query, 
+            user_id, 
+            search_scope, 
+            conversation_context, 
+            use_enhanced_rag, 
+            k=15,  # Get more results for better context
+            document_id=document_id
         )
         
-        loop.close()
-        return result
+        # Step 4: Check if we found relevant documents
+        if not search_results:
+            logger.warning("No relevant documents found")
+            return QueryResponse(
+                response="I couldn't find any relevant information to answer your question in your uploaded documents. Please try rephrasing your question or upload relevant documents.",
+                context_found=False,
+                sources=[],
+                session_id=session_id,
+                confidence_score=0.1,
+                sources_searched=sources_searched,
+                retrieval_method=retrieval_method
+            )
+        
+        logger.info(f"📚 Found {len(search_results)} relevant document chunks")
+        
+        # Step 5: Format context for LLM processing
+        max_context = 8000 if _is_statutory_question(question) else 6000
+        context_text, source_info = format_context_for_llm(search_results, max_length=max_context)
+        
+        # Step 6: Extract specific information based on question type
+        extracted_info = _extract_information_by_type(question, context_text)
+        
+        # Step 7: Enhance context with extracted information
+        if extracted_info:
+            enhancement = _format_extracted_info(extracted_info)
+            if enhancement:
+                context_text += enhancement
+        
+        # Step 8: Generate AI response
+        if FeatureFlags.AI_ENABLED and call_openrouter_api:
+            logger.info("🤖 Generating AI response...")
+            
+            # Create appropriate prompt based on question type
+            prompt = _create_prompt(question, context_text, response_style, conversation_context)
+            
+            try:
+                ai_response = call_openrouter_api(prompt, OPENROUTER_API_KEY)
+                response_text = ai_response or "I found relevant documents but couldn't generate a response."
+                logger.info("✅ AI response generated successfully")
+            except Exception as e:
+                logger.error(f"AI response generation failed: {e}")
+                response_text = _create_fallback_response(context_text, question)
+        else:
+            logger.info("📄 AI not available, creating fallback response")
+            response_text = _create_fallback_response(context_text, question)
+        
+        # Step 9: Calculate confidence score
+        confidence = calculate_confidence_score(search_results, len(response_text))
+        
+        # Step 10: Add conversation to history
+        add_to_conversation(session_id, "user", question)
+        add_to_conversation(session_id, "assistant", response_text, source_info)
+        
+        # Step 11: Return comprehensive response
+        return QueryResponse(
+            response=response_text,
+            context_found=True,
+            sources=source_info,
+            session_id=session_id,
+            confidence_score=confidence,
+            sources_searched=sources_searched,
+            expand_available=len(questions) > 1 if use_enhanced_rag else False,
+            retrieval_method=retrieval_method
+        )
         
     except Exception as e:
-        logger.error(f"Error in legacy sync query processing: {e}")
+        logger.error(f"❌ Query processing failed: {e}")
+        
         return QueryResponse(
-            response="An error occurred processing your query. Please try again.",
+            response=f"An error occurred while processing your question: {str(e)}",
             error=str(e),
             context_found=False,
             sources=[],
             session_id=session_id,
             confidence_score=0.0,
             sources_searched=[],
-            retrieval_method="sync_error"
+            retrieval_method="error"
         )
 
-# === ROUTER INTEGRATION EXAMPLE ===
+# === HELPER FUNCTIONS FOR LEGACY COMPATIBILITY ===
 
-"""
-COMPLETE ROUTER INTEGRATION:
+def _is_statutory_question(question: str) -> bool:
+    """Detect if this is a statutory/regulatory question"""
+    statutory_indicators = [
+        r'\bUSC\s+\d+', r'\bU\.S\.C\.\s*§?\s*\d+', r'\bCFR\s+\d+', r'\bC\.F\.R\.\s*§?\s*\d+',
+        r'\bRCW\s+\d+\.\d+\.\d+', r'\bWAC\s+\d+',
+        r'\bstatute[s]?', r'\bregulation[s]?', r'\bcode\s+section[s]?',
+        r'\brequirements?', r'\bmust\s+meet',
+        r'\bshall\s+(?:meet|comply|maintain)', r'\bmust\s+(?:include|contain|provide)',
+    ]
+    
+    return any(re.search(pattern, question, re.IGNORECASE) for pattern in statutory_indicators)
 
-from ..processors.query_processor import get_query_processor
+def _extract_information_by_type(question: str, context_text: str) -> Dict[str, Any]:
+    """Extract specific information from context based on question type"""
+    
+    # Enhanced pattern to find bill information
+    bill_match = re.search(r"(HB|SB|SSB|ESSB|SHB|ESHB)\s*(\d+)", question, re.IGNORECASE)
+    statute_match = re.search(r"(RCW|USC|CFR|WAC)\s+(\d+\.\d+\.\d+|\d+)", question, re.IGNORECASE)
+    
+    if bill_match:
+        bill_number = f"{bill_match.group(1)} {bill_match.group(2)}"
+        logger.info(f"🏛️ Searching for bill: {bill_number}")
+        return extract_bill_information(context_text, bill_number)
+    elif statute_match:
+        statute_citation = f"{statute_match.group(1)} {statute_match.group(2)}"
+        logger.info(f"📖 Searching for statute: {statute_citation}")
+        return _extract_statutory_information(context_text, statute_citation)
+    else:
+        return extract_universal_information(context_text, question)
 
-# Initialize once
-query_processor = get_query_processor()
-
-@router.post("/ask", response_model=QueryResponse)
-async def ask_question(query: Query, current_user: User = Depends(get_current_user)):
-    """Enhanced ask endpoint with comprehensive query validation and timeout protection"""
+def _extract_statutory_information(context_text: str, statute_citation: str) -> Dict[str, Any]:
+    """Extract specific information from statutory text"""
+    extracted_info = {
+        "requirements": [],
+        "durations": [],
+        "numbers": [],
+        "procedures": []
+    }
     
-    # === Query Validation Section ===
-    
-    # 1. Validate query length to prevent timeouts
-    if len(query.question) > 500:
-        raise HTTPException(
-            status_code=400, 
-            detail="Question too long. Please ask a more specific question (max 500 characters)."
-        )
-    
-    # 2. Check for empty or whitespace-only queries
-    if not query.question or not query.question.strip():
-        raise HTTPException(
-            status_code=400,
-            detail="Question cannot be empty. Please provide a specific question."
-        )
-    
-    # 3. Check for overly complex queries (multiple questions)
-    if query.question.count('?') > 3:
-        raise HTTPException(
-            status_code=400,
-            detail="Too many questions at once. Please ask one question at a time."
-        )
-    
-    # 4. Validate for potential spam or repetitive content
-    words = query.question.lower().split()
-    if len(set(words)) < len(words) * 0.3 and len(words) > 10:  # Less than 30% unique words
-        raise HTTPException(
-            status_code=400,
-            detail="Question appears repetitive. Please rephrase with more specific details."
-        )
-    
-    # 5. Check for excessive punctuation or special characters
-    special_char_count = sum(1 for char in query.question if not char.isalnum() and not char.isspace())
-    if special_char_count > len(query.question) * 0.3:
-        raise HTTPException(
-            status_code=400,
-            detail="Question contains too many special characters. Please use standard punctuation."
-        )
-    
-    # === Smart Query Optimization ===
-    
-    # For EPA/Environmental queries, optimize for user documents
-    epa_terms = ['epa', 'environmental', 'air quality', 'violation', 'emissions', 'compliance', 'regulatory']
-    if any(term in query.question.lower() for term in epa_terms):
-        # Set search scope to user documents only for speed
-        query.search_scope = "user_only"
-        logger.info(f"EPA-related query detected, optimizing search scope to user documents only")
-    
-    # For general knowledge queries, suggest web search
-    general_terms = ['what is', 'how does', 'explain', 'definition of', 'meaning of']
-    if any(term in query.question.lower() for term in general_terms) and not query.document_id:
-        # Suggest including web search for better general knowledge answers
-        if not query.search_scope:
-            query.search_scope = "all"
-    
-    # For document-specific queries, focus on user content
-    doc_terms = ['in this document', 'according to the file', 'from the report', 'document says']
-    if any(term in query.question.lower() for term in doc_terms):
-        query.search_scope = "user_only"
-    
-    # === Rate Limiting Check (Optional) ===
-    # You can add rate limiting here if needed
-    # await check_user_rate_limit(current_user.user_id)
-    
-    # === Progress Callback Setup ===
-    def progress_callback(progress: ProcessingProgress):
-        """Handle real-time progress updates"""
-        # Could emit to WebSocket, store in Redis, etc.
-        logger.info(f"User {current_user.user_id} - Progress: {progress.progress_percent}% - {progress.message}")
-        
-        # Optional: Store progress in cache for frontend polling
-        # redis_client.setex(f"progress:{query.session_id}", 300, progress.json())
-    
-    # === Enhanced Error Handling ===
     try:
-        # Log the validated query for monitoring
-        logger.info(f"Processing validated query from user {current_user.user_id}: "
-                   f"'{query.question[:100]}...' (scope: {query.search_scope})")
+        # Look for duration patterns
+        duration_patterns = [
+            r"minimum of (\d+) (?:minutes?|hours?)",
+            r"at least (\d+) (?:minutes?|hours?)",
+            r"(\d+)-(?:minute|hour) (?:minimum|maximum)",
+            r"(?:shall|must) be (\d+) (?:minutes?|hours?)"
+        ]
         
-        # Process the query with enhanced timeout protection
-        return await query_processor.process_query_with_enhanced_timeout(
-            question=query.question,
-            session_id=query.session_id or str(uuid.uuid4()),
-            user_id=current_user.user_id,
-            search_scope=query.search_scope or "all",
-            response_style=query.response_style or "balanced",
-            use_enhanced_rag=query.use_enhanced_rag if query.use_enhanced_rag is not None else True,
-            document_id=query.document_id,
-            progress_callback=progress_callback
-        )
+        for pattern in duration_patterns:
+            matches = re.findall(pattern, context_text, re.IGNORECASE)
+            for match in matches:
+                extracted_info["durations"].append(f"{match} minutes/hours")
         
-    except asyncio.TimeoutError:
-        logger.error(f"Query timeout for user {current_user.user_id}: {query.question[:100]}")
-        raise HTTPException(
-            status_code=408,
-            detail="Query processing timed out. Please try a more specific question or check back later."
-        )
-    
+        # Look for numerical requirements
+        number_patterns = [
+            r"(?:maximum|minimum) of (\d+) (?:participants?|people|individuals?)",
+            r"at least (\d+) (?:speakers?|facilitators?|members?)",
+            r"no more than (\d+) (?:participants?|attendees?)"
+        ]
+        
+        for pattern in number_patterns:
+            matches = re.findall(pattern, context_text, re.IGNORECASE)
+            for match in matches:
+                extracted_info["numbers"].append(match)
+        
+        # Look for requirement patterns
+        requirement_patterns = [
+            r"(?:shall|must|required)\s+([^.]{10,100})",
+            r"(?:requirement|standard)\s*:\s*([^\n]{10,200})"
+        ]
+        
+        for pattern in requirement_patterns:
+            matches = re.findall(pattern, context_text, re.IGNORECASE)
+            for match in matches:
+                if len(match.strip()) > 10:
+                    extracted_info["requirements"].append(match.strip())
+        
+        return extracted_info
+        
     except Exception as e:
-        logger.error(f"Error processing query for user {current_user.user_id}: {str(e)}")
-        raise HTTPException(
-            status_code=500,
-            detail="An error occurred while processing your question. Please try again."
-        )
+        logger.error(f"Error extracting statutory information: {e}")
+        return extracted_info
 
-@router.get("/processing/active-queries")
-async def get_active_queries():
-    '''Monitor active queries'''
-    return query_processor.get_active_queries()
+def _format_extracted_info(extracted_info: Dict[str, Any]) -> str:
+    """Format extracted information for context enhancement"""
+    if not extracted_info:
+        return ""
+    
+    enhancement = "\n\n=== KEY INFORMATION EXTRACTED ===\n"
+    for key, value in extracted_info.items():
+        if value:
+            if isinstance(value, list):
+                if value:  # Only add if list is not empty
+                    enhancement += f"• {key.replace('_', ' ').title()}: {', '.join(str(v) for v in value[:5])}\n"
+            else:
+                enhancement += f"• {key.replace('_', ' ').title()}: {value}\n"
+    
+    return enhancement if enhancement.strip() != "=== KEY INFORMATION EXTRACTED ===" else ""
 
-@router.get("/processing/timeout-stats") 
-async def get_timeout_stats():
-    '''Get timeout and performance statistics'''
-    return query_processor.get_timeout_statistics()
+def _create_prompt(question: str, context_text: str, response_style: str, conversation_context: str) -> str:
+    """Create appropriate prompt based on query type and context"""
+    
+    if _is_statutory_question(question):
+        return _create_statutory_prompt(context_text, question, response_style, conversation_context)
+    else:
+        return _create_regular_prompt(context_text, question, response_style, conversation_context)
 
-COMPLETE FEATURE SET:
-✅ Enhanced timeout handling with adaptive timeouts (15-60s)
-✅ Staged processing with individual stage timeouts
-✅ Progress tracking with real-time updates
-✅ Partial result recovery on timeouts
-✅ Anti-hallucination validation
-✅ Professional response formatting
-✅ Comprehensive legal database integration
-✅ Immigration and country conditions support
-✅ Government enforcement data integration
-✅ Performance monitoring and statistics
-✅ Complete backward compatibility
-✅ Production-ready error handling
-"""
+def _create_statutory_prompt(context_text: str, question: str, response_style: str, conversation_context: str) -> str:
+    """Create enhanced prompt for statutory analysis using your complex prompt"""
+    
+    return f"""You are a legal research assistant. Provide thorough, accurate responses based on the provided documents.
 
+SOURCE HIERARCHY:
+- **PRIMARY**: Information from the retrieved documents provided in the context
+- **SECONDARY**: General legal knowledge ONLY when documents are unavailable
+- **STRICT LIMITATIONS**: 
+  - Only use well-established, fundamental legal principles (e.g., basic elements of crimes, standard procedural rules)
+  - Do NOT invent case law, specific precedents, or detailed statutory provisions
+  - Clearly label all general knowledge with disclaimers
+  - When in doubt, default to "information not available"
 
+HALLUCINATION CHECK - Before responding, verify:
+1. Is each claim supported by the retrieved documents?
+2. Am I adding information not present in the sources?
+3. If uncertain, default to "information not available"
+
+INSTRUCTIONS FOR THOROUGH ANALYSIS:
+1. **READ CAREFULLY**: Scan the entire context for information that answers the user's question
+2. **EXTRACT COMPLETELY**: When extracting requirements, include FULL details (e.g., "60 minutes" not just "minimum of")
+3. **QUOTE VERBATIM**: For statutory standards, use exact quotes: `"[Exact Text]" (Source)`
+4. **ENUMERATE EXPLICITLY**: Present listed requirements as numbered points with full quotes
+5. **CITE SOURCES**: Reference the document name or case citation for each fact
+6. **BE COMPLETE**: Explicitly note missing standards: "Documents lack full subsection [X]"
+7. **USE DECISIVE PHRASING**: State facts directly ("The statute requires...") - NEVER "documents indicate"
+
+RESPONSE STYLE: {response_style}
+
+CONVERSATION HISTORY:
+{conversation_context}
+
+DOCUMENT CONTEXT (ANALYZE THOROUGHLY):
+{context_text}
+
+USER QUESTION:
+{question}
+
+RESPONSE APPROACH:
+- **FIRST**: Identify what specific information the user is asking for. Do not reference any statute, case law, or principle unless it appears verbatim in the context.
+- **SECOND**: Search the context thoroughly for that information  
+- **THIRD**: Present any information found clearly and completely. At the end of your response, list all facts provided and their source documents for verification.
+- **FOURTH**: Note what information is not available (if any)
+- **FIFTH**: When documents lack specific guidance but user requests legal analysis, provide response based on fundamental legal principles with clear disclaimers
+- **ALWAYS**: Cite the source document or case for each fact provided
+
+LEGAL ANALYSIS FRAMEWORK:
+- When documents lack specific guidance, provide analysis based on fundamental legal principles
+- Focus on established concepts, not novel interpretations
+- Structure responses around: "Based on general legal principles, typical approaches include..."
+- Avoid making definitive statements about jurisdiction-specific rules not in the documents
+- Clearly distinguish between document-based facts and general legal knowledge
+
+ADDITIONAL GUIDANCE:
+- After fully answering based on the provided documents, if relevant key legal principles under Washington state law, any other U.S. state law, or U.S. federal law are not found in the sources, you may add a clearly labeled general legal principles disclaimer.
+- This disclaimer must clearly state it is NOT based on the provided documents but represents general background knowledge of applicable Washington state, other state, and federal law.
+- Do NOT use this disclaimer to answer the user's question directly; it serves only as supplementary context.
+- This disclaimer must explicitly state that these principles are not found in the provided documents but are usually relevant legal background.
+- Format this disclaimer distinctly at the end of the response under a heading such as "GENERAL LEGAL PRINCIPLES DISCLAIMER."
+
+RESPONSE:"""
+
+def _create_regular_prompt(context_text: str, question: str, response_style: str, conversation_context: str) -> str:
+    """Create simple prompt for general questions"""
+    
+    return f"""You are a legal research assistant with access to comprehensive legal databases.
+
+ANTI-HALLUCINATION REQUIREMENTS:
+🚫 ONLY answer based on the provided context and sources
+🚫 If information is NOT in the sources, say "This information is not available in the provided documents"
+🚫 NEVER make up facts, dates, case names, or legal citations
+
+RESPONSE STYLE: {response_style}
+
+CONVERSATION HISTORY:
+{conversation_context}
+
+LEGAL CONTEXT:
+{context_text}
+
+USER QUESTION:
+{question}
+
+RESPONSE FORMAT:
+## Direct Answer
+[Your main answer based ONLY on the provided sources]
+
+## Key Supporting Points
+[Bullet points from the sources that support your answer]
+
+## Sources Referenced
+[List the specific documents that support your answer]
+
+RESPONSE:"""
+
+def _create_fallback_response(context_text: str, question: str) -> str:
+    """Create fallback response when AI generation fails"""
+    
+    # Extract key information from context
+    context_preview = context_text[:1000] + "..." if len(context_text) > 1000 else context_text
+    
+    return f"""**Based on the retrieved documents:**
+
+{context_preview}
+
+---
+*Note: AI response generation was unavailable, so I'm showing you the relevant content directly.*
+
+**To get a more refined answer:** Try asking a more specific question about the content above."""
