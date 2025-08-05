@@ -57,6 +57,26 @@ app.include_router(admin.router, prefix="/admin", tags=["admin"])
 app.include_router(external.router, prefix="/external", tags=["external"])
 app.include_router(immigration.router, prefix="/immigration", tags=["immigration"])
 
+@app.on_event("startup")
+async def startup_event():
+    '''Initialize NoSQL connections on startup'''
+    try:
+        nosql_manager = await get_nosql_manager()
+        logger.info(f"NoSQL initialization: MongoDB={nosql_manager.mongodb_available}, Redis={nosql_manager.redis_available}")
+    except Exception as e:
+        logger.error(f"NoSQL initialization failed: {e}")
+
+@app.on_event("shutdown") 
+async def shutdown_event():
+    '''Close NoSQL connections on shutdown'''
+    try:
+        nosql_manager = await get_nosql_manager()
+        await nosql_manager.close_connections()
+        logger.info("NoSQL connections closed")
+    except Exception as e:
+        logger.error(f"NoSQL shutdown failed: {e}")
+
+
 def create_app():
     """Application factory"""
     return app
@@ -73,3 +93,4 @@ if __name__ == "__main__":
     logger.info("Version: 10.0.0-SmartRAG-ComprehensiveAnalysis")
     logger.info("📁 MODULAR ARCHITECTURE - Clean separation of concerns!")
     uvicorn.run("legal_assistant.main:app", host="0.0.0.0", port=port, reload=True)
+
