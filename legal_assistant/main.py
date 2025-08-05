@@ -112,7 +112,7 @@ app.add_middleware(
 app.include_router(health.router, tags=["health"])
 app.include_router(query.router, tags=["queries"])
 app.include_router(documents.router, tags=["documents"])
-
+app.include_router(immigration.router, prefix="/immigration", tags=["immigration"])
 # ENHANCED: Startup/shutdown events with NoSQL initialization
 @app.on_event("startup")
 async def startup_event():
@@ -230,4 +230,5 @@ if __name__ == "__main__":
     logger.info("Version: 10.0.0-SmartRAG-ComprehensiveAnalysis-NoSQL")
     logger.info("🎯 HIGH-PERFORMANCE MODE READY - Install MongoDB/Redis to activate!")
     uvicorn.run("legal_assistant.main:app", host="0.0.0.0", port=port, reload=True)
+
 
