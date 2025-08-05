@@ -1,84 +1,117 @@
+# legal_assistant/storage/redis_adapter.py
 """
-Background tasks for document processing using a robust, scalable status manager.
+Redis compatibility adapter to bridge new Redis-based processing 
+with existing in-memory storage system.
 """
-import logging
-import time
 import json
-from enum import Enum
+import logging
+from typing import Dict, Optional, Any
 from datetime import datetime
-from typing import Dict, Any, Optional
-
 import redis
-from pydantic import BaseModel, Field
-
-from ..services.document_processor import SafeDocumentProcessor
-from ..services.container_manager import get_container_manager
-# Note: We are no longer importing the in-memory managers
-# from ..storage.managers import uploaded_files, document_processing_status
+from ..config import FeatureFlags
 
 logger = logging.getLogger(__name__)
 
-# --- Configuration Constants ---
-# Progress percentages are defined in one place for easy management
-PROGRESS_EXTRACTING = 10
-PROGRESS_CHUNKING_START = 30
-PROGRESS_CHUNKING_END = 90
-PROGRESS_COMPLETE = 100
-MIN_CONTENT_LENGTH = 50
-STATUS_TTL_SECONDS = 86400  # Status expires from Redis after 24 hours
-
-# --- Enums and Pydantic Models for Robustness ---
-
-class ProcessingStatus(str, Enum):
-    """Enumeration for document processing statuses to avoid magic strings."""
-    QUEUED = "queued"
-    EXTRACTING = "extracting"
-    CHUNKING_AND_EMBEDDING = "chunking_and_embedding"
-    COMPLETED = "completed"
-    FAILED = "failed"
-
-class Status(BaseModel):
-    """Pydantic model for a structured and validated status object."""
-    file_id: str
-    status: ProcessingStatus
-    progress: int = Field(..., ge=0, le=100)
-    message: str
-    started_at: Optional[str] = None
-    completed_at: Optional[str] = None
-    failed_at: Optional[str] = None
-    processing_time: Optional[float] = None
-    error: Optional[str] = None
-    details: Dict[str, Any] = Field(default_factory=dict)
-
-
-# --- Redis-backed Status Manager for Scalability ---
-
-class StatusManager:
-    """Manages processing status in Redis for persistence and scalability."""
-    def __init__(self, redis_client: redis.Redis, ttl: int = STATUS_TTL_SECONDS):
-        self.redis = redis_client
-        self.ttl = ttl
-
-    def _get_key(self, file_id: str) -> str:
-        return f"doc_status:{file_id}"
-
-    def update_status(self, status: Status):
-        """Sets or updates the status for a given file_id in Redis."""
-        key = self._get_key(status.file_id)
-        # Use .model_dump_json() for Pydantic v2+
-        self.redis.set(key, status.model_dump_json(), ex=self.ttl)
-        logger.debug(f"Updated status for {status.file_id}: {status.status.value}")
+class RedisAdapter:
+    """Adapter to handle both Redis and in-memory storage"""
     
-    def get_status(self, file_id: str) -> Optional[Status]:
-        """Retrieves the status for a given file_id from Redis."""
-        key = self._get_key(file_id)
-        data = self.redis.get(key)
-        if data:
-            # Use Status.model_validate_json for Pydantic v2+
-            return Status.model_validate_json(data)
-        return None
+    def __init__(self):
+        self.redis_available = False
+        self.redis_client = None
+        self._fallback_storage = {}  # In-memory fallback
+        
+        # Try to connect to Redis
+        self._initialize_redis()
+    
+    def _initialize_redis(self):
+        """Initialize Redis connection with fallback"""
+        try:
+            self.redis_client = redis.Redis.from_url(
+                "redis://localhost:6379/0", 
+                decode_responses=True,
+                socket_timeout=5,
+                socket_connect_timeout=5
+            )
+            # Test connection
+            self.redis_client.ping()
+            self.redis_available = True
+            logger.info("✅ Redis connection established")
+        except Exception as e:
+            logger.warning(f"⚠️ Redis not available, using in-memory storage: {e}")
+            self.redis_available = False
+    
+    def set_status(self, file_id: str, status_data: Dict[str, Any], ttl: int = 86400):
+        """Set processing status (Redis or in-memory)"""
+        try:
+            if self.redis_available:
+                # Store in Redis
+                self.redis_client.set(
+                    f"doc_status:{file_id}", 
+                    json.dumps(status_data), 
+                    ex=ttl
+                )
+            else:
+                # Store in memory
+                self._fallback_storage[file_id] = status_data
+        except Exception as e:
+            logger.error(f"Failed to set status for {file_id}: {e}")
+            # Always fallback to memory
+            self._fallback_storage[file_id] = status_data
+    
+    def get_status(self, file_id: str) -> Optional[Dict[str, Any]]:
+        """Get processing status (Redis or in-memory)"""
+        try:
+            if self.redis_available:
+                data = self.redis_client.get(f"doc_status:{file_id}")
+                if data:
+                    return json.loads(data)
+            
+            # Check in-memory fallback
+            return self._fallback_storage.get(file_id)
+            
+        except Exception as e:
+            logger.error(f"Failed to get status for {file_id}: {e}")
+            # Fallback to in-memory
+            return self._fallback_storage.get(file_id)
+    
+    def delete_status(self, file_id: str):
+        """Delete processing status"""
+        try:
+            if self.redis_available:
+                self.redis_client.delete(f"doc_status:{file_id}")
+            
+            # Also remove from memory
+            self._fallback_storage.pop(file_id, None)
+            
+        except Exception as e:
+            logger.error(f"Failed to delete status for {file_id}: {e}")
 
-# --- Improved Background Task ---
+# Global adapter instance
+_redis_adapter = None
+
+def get_redis_adapter() -> RedisAdapter:
+    """Get or create global Redis adapter"""
+    global _redis_adapter
+    if _redis_adapter is None:
+        _redis_adapter = RedisAdapter()
+    return _redis_adapter
+
+# --- Updated document_tasks.py that works with your current app ---
+
+"""
+Updated Background tasks for document processing - Compatible with existing app
+"""
+import logging
+import time
+from datetime import datetime
+from typing import Dict, Any
+
+from ..services.document_processor import SafeDocumentProcessor
+from ..services.container_manager import get_container_manager
+from ..storage.managers import uploaded_files, document_processing_status
+from .redis_adapter import get_redis_adapter
+
+logger = logging.getLogger(__name__)
 
 async def process_document_background(
     file_id: str,
@@ -88,61 +121,75 @@ async def process_document_background(
     user_id: str
 ):
     """
-    Process a document in the background with robust, scalable progress updates via Redis.
+    IMPROVED: Process document with Redis + in-memory compatibility
     """
-    # Initialize dependencies
-    redis_client = redis.Redis.from_url("redis://localhost:6379/0", decode_responses=True)
-    status_manager = StatusManager(redis_client)
-    container_manager = get_container_manager()
+    redis_adapter = get_redis_adapter()
     start_time = time.time()
-
+    
     try:
-        # 1. Initial Status: Extracting
-        status_manager.update_status(Status(
-            file_id=file_id,
-            status=ProcessingStatus.EXTRACTING,
-            progress=PROGRESS_EXTRACTING,
-            message="Extracting text from document...",
-            started_at=datetime.utcnow().isoformat()
-        ))
-
-        # 2. Process Document (CPU-bound, could be run in a thread pool executor)
+        # Step 1: Initial status - Extracting
+        initial_status = {
+            'status': 'extracting',
+            'progress': 10,
+            'message': 'Extracting text from document...',
+            'started_at': datetime.utcnow().isoformat()
+        }
+        
+        # Update both Redis (if available) and in-memory for compatibility
+        redis_adapter.set_status(file_id, initial_status)
+        document_processing_status[file_id] = initial_status
+        
+        logger.info(f"Started processing document {filename} for user {user_id}")
+        
+        # Step 2: Process document
         content, pages_processed, warnings = SafeDocumentProcessor.process_document_from_bytes(
             file_content, filename, file_ext
         )
-
-        if not content or len(content.strip()) < MIN_CONTENT_LENGTH:
-            raise ValueError(f"Document content is too short or could not be extracted. Min length: {MIN_CONTENT_LENGTH} chars.")
-
-        # 3. Status Update: Chunking & Embedding
-        status_manager.update_status(Status(
-            file_id=file_id,
-            status=ProcessingStatus.CHUNKING_AND_EMBEDDING,
-            progress=PROGRESS_CHUNKING_START,
-            message=f"Creating searchable chunks from {pages_processed} pages...",
-            details={'pages': pages_processed}
-        ))
-
-        # 4. Prepare Metadata and Add to Vector DB
-        metadata = {
-            'source': filename, 'file_id': file_id,
-            'upload_date': datetime.utcnow().isoformat(),
-            'user_id': user_id, 'file_type': file_ext,
-            'pages': pages_processed, 'file_size': len(file_content),
-            'content_length': len(content), 'processing_warnings': warnings
+        
+        if not content or len(content.strip()) < 50:
+            raise ValueError("Document appears to be empty or could not be processed")
+        
+        logger.info(f"Extracted {len(content)} characters from {pages_processed} pages")
+        
+        # Step 3: Update status - Chunking
+        chunking_status = {
+            'status': 'chunking',
+            'progress': 40,
+            'message': f'Creating searchable chunks from {pages_processed} pages...',
+            'pages': pages_processed
         }
-
-        # Define a callback to update progress during the embedding stage
-        def progress_callback(embedding_progress: float):
-            # Scale embedding progress (0.0 to 1.0) to our defined range
-            progress = PROGRESS_CHUNKING_START + int(embedding_progress * (PROGRESS_CHUNKING_END - PROGRESS_CHUNKING_START))
-            status_manager.update_status(Status(
-                file_id=file_id,
-                status=ProcessingStatus.CHUNKING_AND_EMBEDDING,
-                progress=progress,
-                message=f"Embedding document... ({int(embedding_progress*100)}%)"
-            ))
-
+        
+        redis_adapter.set_status(file_id, chunking_status)
+        document_processing_status[file_id] = chunking_status
+        
+        # Step 4: Prepare metadata
+        metadata = {
+            'source': filename,
+            'file_id': file_id,
+            'upload_date': datetime.utcnow().isoformat(),
+            'user_id': user_id,
+            'file_type': file_ext,
+            'pages': pages_processed,
+            'file_size': len(file_content),
+            'content_length': len(content),
+            'processing_warnings': warnings
+        }
+        
+        # Step 5: Add to container with progress tracking
+        container_manager = get_container_manager()
+        
+        def progress_callback(p: int):
+            """Update progress during chunking"""
+            progress_status = {
+                'status': 'chunking',
+                'progress': min(40 + int(p * 0.5), 90),
+                'message': f'Processing chunks... ({p}%)',
+                'pages': pages_processed
+            }
+            redis_adapter.set_status(file_id, progress_status)
+            document_processing_status[file_id] = progress_status
+        
+        # Use async-friendly chunking
         chunks_created = await container_manager.add_document_to_container_async(
             user_id,
             content,
@@ -150,33 +197,129 @@ async def process_document_background(
             file_id,
             progress_callback=progress_callback
         )
-
-        # 5. Final Status: Completed
+        
         processing_time = time.time() - start_time
-        status_manager.update_status(Status(
-            file_id=file_id,
-            status=ProcessingStatus.COMPLETED,
-            progress=PROGRESS_COMPLETE,
-            message=f"Successfully processed {pages_processed} pages into {chunks_created} searchable chunks.",
-            completed_at=datetime.utcnow().isoformat(),
-            processing_time=processing_time,
-            details={
+        
+        # Step 6: Update final status - Completed
+        final_status = {
+            'status': 'completed',
+            'progress': 100,
+            'message': f'Successfully processed {pages_processed} pages into {chunks_created} searchable chunks',
+            'completed_at': datetime.utcnow().isoformat(),
+            'processing_time': processing_time,
+            'pages_processed': pages_processed,
+            'chunks_created': chunks_created
+        }
+        
+        # Update both storage systems
+        redis_adapter.set_status(file_id, final_status)
+        document_processing_status[file_id] = final_status
+        
+        # Update uploaded_files for compatibility
+        if file_id in uploaded_files:
+            uploaded_files[file_id].update({
+                'status': 'completed',
                 'pages_processed': pages_processed,
-                'chunks_created': chunks_created
-            }
-        ))
-        logger.info(f"Document {file_id} processed successfully in {processing_time:.2f}s")
-
+                'chunks_created': chunks_created,
+                'processing_time': processing_time,
+                'content_length': len(content)
+            })
+        
+        logger.info(f"✅ Document {file_id} processed successfully: {pages_processed} pages, {chunks_created} chunks in {processing_time:.2f}s")
+        
     except Exception as e:
-        # Final Status: Failed
+        # Handle failure
         processing_time = time.time() - start_time
-        logger.error(f"Error processing document {file_id}: {e}", exc_info=True)
-        status_manager.update_status(Status(
-            file_id=file_id,
-            status=ProcessingStatus.FAILED,
-            progress=0, # Reset progress on failure
-            message=f"An unexpected error occurred.",
-            error=str(e),
-            failed_at=datetime.utcnow().isoformat(),
-            processing_time=processing_time
-        ))
+        error_message = str(e)
+        
+        logger.error(f"❌ Error processing document {file_id}: {error_message}", exc_info=True)
+        
+        failed_status = {
+            'status': 'failed',
+            'progress': 0,
+            'message': f'Processing failed: {error_message}',
+            'error': error_message,
+            'failed_at': datetime.utcnow().isoformat(),
+            'processing_time': processing_time
+        }
+        
+        # Update both storage systems
+        redis_adapter.set_status(file_id, failed_status)
+        document_processing_status[file_id] = failed_status
+        
+        # Update uploaded_files for compatibility
+        if file_id in uploaded_files:
+            uploaded_files[file_id]['status'] = 'failed'
+
+# --- Updated Status Endpoint for API Compatibility ---
+
+def get_document_processing_status(file_id: str) -> Dict[str, Any]:
+    """
+    Get document processing status - compatible with existing API
+    """
+    redis_adapter = get_redis_adapter()
+    
+    # Try Redis first, fallback to in-memory
+    status = redis_adapter.get_status(file_id)
+    if status:
+        return {
+            'file_id': file_id,
+            'status': status.get('status', 'unknown'),
+            'progress': status.get('progress', 0),
+            'message': status.get('message', ''),
+            'pages_processed': status.get('details', {}).get('pages', 0),
+            'chunks_created': status.get('details', {}).get('chunks_created', 0),
+            'processing_time': status.get('processing_time', 0),
+            'errors': [status.get('error')] if status.get('error') else []
+        }
+    
+    # Fallback to existing in-memory storage
+    if file_id in document_processing_status:
+        return document_processing_status[file_id]
+    
+    return {
+        'file_id': file_id,
+        'status': 'not_found',
+        'progress': 0,
+        'message': 'Document not found in processing queue'
+    }
+
+# --- Easy Migration Path ---
+
+class BackwardCompatibleStatusManager:
+    """
+    Drop-in replacement that provides Redis benefits while maintaining compatibility
+    """
+    
+    def __init__(self):
+        self.redis_adapter = get_redis_adapter()
+    
+    def update_status(self, file_id: str, status: str, progress: int = 0, 
+                     message: str = "", details: Dict = None):
+        """Update status - compatible with existing code"""
+        
+        status_data = {
+            'status': status,
+            'progress': progress,
+            'message': message,
+            'updated_at': datetime.utcnow().isoformat(),
+            'details': details or {}
+        }
+        
+        # Update both systems for compatibility
+        self.redis_adapter.set_status(file_id, status_data)
+        document_processing_status[file_id] = status_data
+    
+    def get_status(self, file_id: str) -> Optional[Dict]:
+        """Get status - compatible with existing code"""
+        return get_document_processing_status(file_id)
+
+# Global compatible instance
+_compatible_status_manager = None
+
+def get_compatible_status_manager() -> BackwardCompatibleStatusManager:
+    """Get backward-compatible status manager"""
+    global _compatible_status_manager
+    if _compatible_status_manager is None:
+        _compatible_status_manager = BackwardCompatibleStatusManager()
+    return _compatible_status_manager
