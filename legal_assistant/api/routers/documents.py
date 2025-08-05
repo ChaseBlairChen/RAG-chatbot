@@ -1,4 +1,4 @@
-# legal_assistant/api/routers/documents.py - ENHANCED VERSION
+# legal_assistant/api/routers/documents.py - COMPLETELY FIXED VERSION
 """
 Enhanced document management endpoints with improved async processing,
 better error handling, and support for new processor features.
@@ -7,9 +7,9 @@ import os
 import uuid
 import logging
 import traceback
-import re  # Added missing import
-from datetime import datetime, timedelta  # Added timedelta import
-from typing import Optional, Dict, Any
+import re
+from datetime import datetime, timedelta
+from typing import Optional, Dict, Any, List  # All imports on one line
 from fastapi import APIRouter, File, UploadFile, Depends, HTTPException, BackgroundTasks, Query
 from fastapi.responses import JSONResponse
 
@@ -24,6 +24,111 @@ from ...tasks.document_tasks import process_document_background
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+# --- Helper Functions (MOVED TO TOP) ---
+
+def _get_status_summary(docs: List[Dict]) -> Dict[str, int]:
+    """Get summary of document statuses"""
+    summary = {}
+    for doc in docs:
+        status = doc.get('status', 'unknown')
+        summary[status] = summary.get(status, 0) + 1
+    return summary
+
+def _get_quality_summary(docs: List[Dict]) -> Dict[str, Any]:
+    """Get summary of document quality metrics"""
+    quality_scores = []
+    low_quality = 0
+    high_quality = 0
+    
+    for doc in docs:
+        quality_info = doc.get('quality_info', {})
+        quality = quality_info.get('extraction_quality')
+        
+        if quality is not None:
+            quality_scores.append(quality)
+            if quality < 0.5:
+                low_quality += 1
+            elif quality > 0.8:
+                high_quality += 1
+    
+    if not quality_scores:
+        return {
+            'message': 'No quality data available'
+        }
+    
+    return {
+        'avg_quality': round(sum(quality_scores) / len(quality_scores), 3),
+        'min_quality': round(min(quality_scores), 3),
+        'max_quality': round(max(quality_scores), 3),
+        'low_quality_count': low_quality,
+        'high_quality_count': high_quality,
+        'total_assessed': len(quality_scores)
+    }
+
+async def _validate_uploaded_file(file: UploadFile) -> Dict[str, Any]:
+    """Enhanced file validation with detailed error reporting"""
+    
+    # Check file size
+    file.file.seek(0, 2)
+    file_size = file.file.tell()
+    file.file.seek(0)
+    
+    if file_size > MAX_FILE_SIZE:
+        return {
+            'valid': False,
+            'error': f"File too large: {file_size//1024//1024}MB. Maximum size is {MAX_FILE_SIZE//1024//1024}MB"
+        }
+    
+    if file_size == 0:
+        return {
+            'valid': False,
+            'error': "File is empty"
+        }
+    
+    # Check file extension
+    file_ext = os.path.splitext(file.filename)[1].lower()
+    if file_ext not in LEGAL_EXTENSIONS:
+        return {
+            'valid': False,
+            'error': f"Unsupported file type '{file_ext}'. Supported types: {', '.join(LEGAL_EXTENSIONS)}"
+        }
+    
+    # Check filename
+    if not file.filename or len(file.filename.strip()) == 0:
+        return {
+            'valid': False,
+            'error': "Filename is required"
+        }
+    
+    # Check for suspicious filenames
+    suspicious_patterns = [r'\.\.', r'[<>:"|?*]', r'^[.\s]*$']
+    if any(re.search(pattern, file.filename) for pattern in suspicious_patterns):
+        return {
+            'valid': False,
+            'error': "Invalid filename characters"
+        }
+    
+    return {
+        'valid': True,
+        'size': file_size,
+        'extension': file_ext,
+        'filename': file.filename
+    }
+
+def _parse_processing_options(options_str: Optional[str]) -> Dict[str, Any]:
+    """Parse processing options from JSON string"""
+    if not options_str:
+        return {}
+    
+    try:
+        import json
+        return json.loads(options_str)
+    except Exception as e:
+        logger.warning(f"Failed to parse processing options: {e}")
+        return {}
+
+# --- Main API Endpoints ---
 
 @router.post("/user/upload", response_model=DocumentUploadResponse)
 async def upload_user_document(
@@ -113,23 +218,22 @@ async def upload_user_document(
             'validation_warnings': validation_warnings
         }
         
-        # Process document in background with enhanced options
+        # Process document in background
         background_tasks.add_task(
-            process_document_background_enhanced,
+            process_document_background,
             file_id=file_id,
             file_content=file_content,
             file_ext=file_ext,
             filename=file.filename,
-            user_id=current_user.user_id,
-            processing_options=parsed_options
+            user_id=current_user.user_id
         )
         
         processing_time = (datetime.utcnow() - start_time).total_seconds()
         
-        logger.info(f"🚀 Document {file.filename} queued for enhanced processing in {processing_time:.2f}s")
+        logger.info(f"🚀 Document {file.filename} queued for processing in {processing_time:.2f}s")
         
         return DocumentUploadResponse(
-            message=f"Document {file.filename} is being processed with enhanced extraction",
+            message=f"Document {file.filename} is being processed",
             file_id=file_id,
             pages_processed=0,  # Will be updated async
             processing_time=processing_time,
@@ -312,8 +416,6 @@ async def delete_user_document(
     except Exception as e:
         logger.error(f"Error deleting document: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to delete document: {str(e)}")
-
-# --- New Enhanced Endpoints ---
 
 @router.get("/user/documents/{file_id}/details")
 async def get_document_details(
@@ -542,162 +644,3 @@ async def get_processing_stats(
         stats['processing_metrics']['avg_chunks_per_page'] = round(total_chunks / total_pages, 1)
     
     return stats
-
-# --- Helper Functions ---
-
-async def _validate_uploaded_file(file: UploadFile) -> Dict[str, Any]:
-    """Enhanced file validation with detailed error reporting"""
-    
-    # Check file size
-    file.file.seek(0, 2)
-    file_size = file.file.tell()
-    file.file.seek(0)
-    
-    if file_size > MAX_FILE_SIZE:
-        return {
-            'valid': False,
-            'error': f"File too large: {file_size//1024//1024}MB. Maximum size is {MAX_FILE_SIZE//1024//1024}MB"
-        }
-    
-    if file_size == 0:
-        return {
-            'valid': False,
-            'error': "File is empty"
-        }
-    
-    # Check file extension
-    file_ext = os.path.splitext(file.filename)[1].lower()
-    if file_ext not in LEGAL_EXTENSIONS:
-        return {
-            'valid': False,
-            'error': f"Unsupported file type '{file_ext}'. Supported types: {', '.join(LEGAL_EXTENSIONS)}"
-        }
-    
-    # Check filename
-    if not file.filename or len(file.filename.strip()) == 0:
-        return {
-            'valid': False,
-            'error': "Filename is required"
-        }
-    
-    # Check for suspicious filenames
-    suspicious_patterns = [r'\.\.', r'[<>:"|?*]', r'^[.\s]*$']
-    if any(re.search(pattern, file.filename) for pattern in suspicious_patterns):
-        return {
-            'valid': False,
-            'error': "Invalid filename characters"
-        }
-    
-    return {
-        'valid': True,
-        'size': file_size,
-        'extension': file_ext,
-        'filename': file.filename
-    }
-
-def _parse_processing_options(options_str: Optional[str]) -> Dict[str, Any]:
-    """Parse processing options from JSON string"""
-    if not options_str:
-        return {}
-    
-    try:
-        import json
-        return json.loads(options_str)
-    except Exception as e:
-        logger.warning(f"Failed to parse processing options: {e}")
-        return {}
-
-def _get_status_summary(docs: List[Dict]) -> Dict[str, int]:
-    """Get summary of document statuses"""
-    summary = {}
-    for doc in docs:
-        status = doc.get('status', 'unknown')
-        summary[status] = summary.get(status, 0) + 1
-    return summary
-
-def _get_quality_summary(docs: List[Dict]) -> Dict[str, Any]:
-    """Get summary of document quality metrics"""
-    quality_scores = []
-    low_quality = 0
-    high_quality = 0
-    
-    for doc in docs:
-        quality_info = doc.get('quality_info', {})
-        quality = quality_info.get('extraction_quality')
-        
-        if quality is not None:
-            quality_scores.append(quality)
-            if quality < 0.5:
-                low_quality += 1
-            elif quality > 0.8:
-                high_quality += 1
-    
-    if not quality_scores:
-        return {
-            'message': 'No quality data available'
-        }
-    
-    return {
-        'avg_quality': round(sum(quality_scores) / len(quality_scores), 3),
-        'min_quality': round(min(quality_scores), 3),
-        'max_quality': round(max(quality_scores), 3),
-        'low_quality_count': low_quality,
-        'high_quality_count': high_quality,
-        'total_assessed': len(quality_scores)
-    }
-
-# --- Import the enhanced task function ---
-
-# We need to import the enhanced version or create a bridge
-try:
-    from ...tasks.document_tasks import process_document_background_enhanced
-except ImportError:
-    # Fallback to original if enhanced version not available
-    from ...tasks.document_tasks import process_document_background
-    process_document_background_enhanced = process_document_background
-    logger.warning("Enhanced document processing not available, using standard version")
-
-"""
-ENHANCED FEATURES ADDED:
-
-✅ Quality Information API:
-   - GET /user/documents?include_quality_info=true
-   - GET /user/documents/{file_id}/details
-
-✅ Enhanced Status Tracking:
-   - Processing method used (unstructured, pymupdf, etc.)
-   - Extraction quality scores (0.0-1.0)
-   - Processing time breakdown
-   - Detailed error information
-
-✅ Document Filtering:
-   - Filter by status: /user/documents?status_filter=completed
-   - Include quality info: /user/documents?include_quality_info=true
-
-✅ Processing Statistics:
-   - GET /processing/stats - User-specific processing metrics
-   - Quality metrics, processing times, file type breakdown
-
-✅ Enhanced Validation:
-   - Better file validation with specific error messages
-   - Suspicious filename detection
-   - Size and content validation
-
-✅ Better Error Handling:
-   - Specific error types for different failure modes
-   - Detailed error messages for debugging
-   - Graceful degradation when services unavailable
-
-BACKWARD COMPATIBILITY:
-✅ All existing API calls work unchanged
-✅ Same response format for core endpoints
-✅ Same upload flow and status checking
-✅ Enhanced information available optionally
-
-USAGE:
-- Replace your documents.py with this enhanced version
-- All existing frontend code continues working
-- New features available through query parameters
-- Better error messages for users
-"""
-
