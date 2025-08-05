@@ -7,7 +7,8 @@ import os
 import uuid
 import logging
 import traceback
-from datetime import datetime
+import re  # Added missing import
+from datetime import datetime, timedelta  # Added timedelta import
 from typing import Optional, Dict, Any
 from fastapi import APIRouter, File, UploadFile, Depends, HTTPException, BackgroundTasks, Query
 from fastapi.responses import JSONResponse
@@ -699,3 +700,4 @@ USAGE:
 - New features available through query parameters
 - Better error messages for users
 """
+
