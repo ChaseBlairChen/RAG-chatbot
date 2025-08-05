@@ -6,6 +6,7 @@ Maintains exact same interface as your current in-memory managers.
 import asyncio
 from datetime import datetime, timedelta
 from typing import Dict, Optional, List, Any
+import logging  # FIXED: Added this missing import
 
 from .nosql_models import (
     UserDocument, UploadedFileDocument, ProcessingStatusDocument,
@@ -582,4 +583,5 @@ def cleanup_expired_conversations():
         ]
         for session_id in expired_sessions:
             del conversations[session_id]
+
 
