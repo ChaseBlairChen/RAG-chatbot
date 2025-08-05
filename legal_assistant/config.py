@@ -3,6 +3,10 @@ import os
 from typing import List
 from cryptography.fernet import Fernet
 
+# CRITICAL FIXES - Add missing constants
+APP_REFERER = os.environ.get("APP_REFERER", "http://localhost:3000")
+APP_TITLE = os.environ.get("APP_TITLE", "Legal Assistant API")
+
 # API Configuration
 OPENROUTER_API_KEY = os.environ.get("OPENAI_API_KEY")
 OPENAI_API_BASE = os.environ.get("OPENAI_API_BASE", "https://openrouter.ai/api/v1")
@@ -36,9 +40,9 @@ LEXISNEXIS_API_ENDPOINT = os.environ.get("LEXISNEXIS_API_ENDPOINT")
 WESTLAW_API_KEY = os.environ.get("WESTLAW_API_KEY")
 WESTLAW_API_ENDPOINT = os.environ.get("WESTLAW_API_ENDPOINT")
 
-# === YOUR PROVIDED API KEYS ===
-CONGRESS_API_KEY = "7J5Bfj6i0F3tg4VZleZ4SyQmVbG0QyIM9tPMQA2M"
-DATA_GOV_API_KEY = "yZAV2yQIyyVzDYCHCw39CUBx98HDQQmHjd9wojRe"
+# External API Keys (set your own)
+CONGRESS_API_KEY = os.environ.get("CONGRESS_API_KEY", "")
+DATA_GOV_API_KEY = os.environ.get("DATA_GOV_API_KEY", "")
 
 # === COMPREHENSIVE FREE LEGAL APIS ===
 
@@ -57,13 +61,13 @@ HARVARD_LEGAL_API_ENDPOINT = "https://api.case.law/v1"
 # Google Scholar - Web scraping (be respectful of rate limits)
 GOOGLE_SCHOLAR_ENABLED = os.environ.get("GOOGLE_SCHOLAR_ENABLED", "true").lower() == "true"
 
-# Federal Government APIs (using your Congress API key)
+# Federal Government APIs
 CONGRESS_API_ENDPOINT = "https://api.congress.gov/v3"
 FEDERAL_REGISTER_API_ENDPOINT = "https://www.federalregister.gov/api/v1"
 GOVINFO_API_ENDPOINT = "https://api.govinfo.gov"
 LOC_API_ENDPOINT = "https://www.loc.gov/apis"
 
-# Environmental Law APIs (using your Data.gov API key)
+# Environmental Law APIs
 EPA_ENVIROFACTS_API = "https://www.epa.gov/enviro/envirofacts-data-service-api"
 EPA_AIR_QUALITY_API = "https://www.airnowapi.org/aq"
 EPA_WATER_QUALITY_API = "https://www.waterqualitydata.us"
@@ -84,74 +88,6 @@ REGULATIONS_GOV_API = "https://api.regulations.gov/v4"
 AIRNOW_API = "https://www.airnowapi.org"
 FTC_API = "https://www.ftc.gov/developer"
 
-# === FREE & AFFORDABLE LEGAL DATABASES (HIGH PRIORITY) ===
-
-# CourtListener - FREE comprehensive legal database
-COURTLISTENER_API_ENDPOINT = "https://www.courtlistener.com/api/rest/v4/"
-
-# Harvard Caselaw Access Project - FREE
-HARVARD_LEGAL_API_KEY = os.environ.get("HARVARD_LEGAL_API_KEY")
-HARVARD_LEGAL_API_ENDPOINT = os.environ.get("HARVARD_LEGAL_API_ENDPOINT", "https://api.case.law/v1")
-
-# Justia - FREE legal database
-JUSTIA_API_ENDPOINT = "https://law.justia.com/api/"
-
-# === GOVERNMENT & REGULATORY APIS (FREE) ===
-
-# Federal Register API - FREE
-FEDERAL_REGISTER_API_ENDPOINT = "https://www.federalregister.gov/api/v1/"
-
-# Congress.gov API - FREE
-CONGRESS_API_ENDPOINT = "https://api.congress.gov/v3/"
-
-# SEC EDGAR API - FREE
-SEC_EDGAR_API_ENDPOINT = "https://data.sec.gov/api/"
-
-# EPA Environmental Data - FREE
-EPA_API_ENDPOINT = "https://www.epa.gov/enviro/web-services"
-
-# === ENVIRONMENTAL & CLIMATE LAW SPECIFIC ===
-
-# Climate Policy Initiative API
-CLIMATE_POLICY_API_ENDPOINT = "https://climatepolicyinitiative.org/api/"
-
-# Environmental Law Institute (if they have an API)
-ELI_API_KEY = os.environ.get("ELI_API_KEY")
-ELI_API_ENDPOINT = os.environ.get("ELI_API_ENDPOINT")
-
-# Carbon Disclosure Project API
-CDP_API_KEY = os.environ.get("CDP_API_KEY")
-CDP_API_ENDPOINT = "https://data.cdp.net/api/"
-
-# === INTERNATIONAL & NGO RESOURCES ===
-
-# UN Treaty Collection
-UN_TREATY_API_ENDPOINT = "https://treaties.un.org/api/"
-
-# World Bank Open Data API - FREE
-WORLD_BANK_API_ENDPOINT = "https://api.worldbank.org/v2/"
-
-# === SMB-FOCUSED RESOURCES ===
-
-# SBA (Small Business Administration) API - FREE
-SBA_API_ENDPOINT = "https://api.sba.gov/"
-
-# USPTO (Patent/Trademark) API - FREE
-USPTO_API_ENDPOINT = "https://developer.uspto.gov/api-catalog"
-
-# Business.gov API (if available)
-BUSINESS_GOV_API_ENDPOINT = os.environ.get("BUSINESS_GOV_API_ENDPOINT")
-
-# === STATE & LOCAL GOVERNMENT ===
-
-# Many states have open data portals - configure as needed
-STATE_APIS = {
-    "california": "https://data.ca.gov/api/",
-    "new_york": "https://data.ny.gov/api/",
-    "texas": "https://data.texas.gov/api/",
-    # Add more states as needed
-}
-
 # Immigration Law APIs
 USCIS_CASE_STATUS_API = "https://egov.uscis.gov/casestatus"
 STATE_DEPT_VISA_API = "https://travel.state.gov"
@@ -159,7 +95,7 @@ ICE_DETENTION_API = "https://www.ice.gov/detain/detention-facilities"
 CBP_BORDER_WAIT_API = "https://bwt.cbp.gov"
 EOIR_COURT_API = "https://www.justice.gov/eoir"
 
-# Housing & Homelessness APIs (using your Data.gov API key)
+# Housing & Homelessness APIs
 HUD_PUBLIC_HOUSING_API = "https://www.huduser.gov/hudapi/public"
 HUD_FAIR_MARKET_RENT_API = "https://www.huduser.gov/hudapi/public/fmr"
 CENSUS_HOUSING_API = "https://api.census.gov/data"
@@ -172,7 +108,7 @@ DELAWARE_CORP_API = "https://corp.delaware.gov"
 CALIFORNIA_SOS_API = "https://businesssearch.sos.ca.gov"
 SAM_GOV_API = "https://sam.gov"
 
-# Labor & Employment APIs (using your Data.gov API key)
+# Labor & Employment APIs
 DOL_OSHA_API = "https://developer.dol.gov/health-and-safety"
 DOL_WAGE_HOUR_API = "https://enforcedata.dol.gov"
 BLS_API = "https://api.bls.gov/publicAPI/v2"
@@ -189,7 +125,7 @@ FDA_DEVICE_API = "https://api.fda.gov/device"
 FDA_FOOD_API = "https://api.fda.gov/food"
 CMS_DATA_API = "https://data.cms.gov/api"
 
-# Criminal Justice APIs (using your Data.gov API key)
+# Criminal Justice APIs
 FBI_CRIME_DATA_API = "https://api.usa.gov/crime/fbi/cde"
 BJS_API = "https://bjs.ojp.gov/api"
 NCVS_API = "https://crime-data-explorer.app.cloud.gov/api"
@@ -237,8 +173,6 @@ FAST_EMBEDDING_MODELS = [
 
 # AI Models
 AI_MODELS = [
-    "moonshotai/kimi-k2:free",
-    "deepseek/deepseek-chat",
     "microsoft/phi-3-mini-128k-instruct:free",
     "meta-llama/llama-3.2-3b-instruct:free",
     "google/gemma-2-9b-it:free",
@@ -280,7 +214,6 @@ SEARCH_CONFIG = {
 }
 
 # === ENHANCED API TIER CONFIGURATION ===
-# Updated to include all new APIs
 API_TIERS = {
     "free": [
         # Core legal research
@@ -342,46 +275,6 @@ API_RATE_LIMITS = {
     "CORNELL_LAW": {"requests_per_hour": 200, "burst": 5},
     "JUSTIA": {"requests_per_hour": 150, "burst": 5},
     "GOOGLE_SCHOLAR_LEGAL": {"requests_per_hour": 10, "burst": 2},
-    
-    # Government APIs
-    "REGULATIONS_GOV": {"requests_per_hour": 250, "burst": 25},
-    "AIRNOW": {"requests_per_hour": 500, "burst": 50},
-    "FTC": {"requests_per_hour": 100, "burst": 10},
-    
-    # Environmental APIs
-    "EPA_ENVIROFACTS": {"requests_per_hour": 300, "burst": 30},
-    "EPA_AIR_QUALITY": {"requests_per_hour": 500, "burst": 50},
-    "NOAA_CLIMATE": {"requests_per_hour": 1000, "burst": 100},
-    
-    # Immigration APIs
-    "USCIS_CASE_STATUS": {"requests_per_hour": 50, "burst": 5},  # Be conservative
-    "STATE_DEPT_VISA": {"requests_per_hour": 100, "burst": 10},
-    
-    # Housing APIs
-    "HUD_PUBLIC_HOUSING": {"requests_per_hour": 200, "burst": 20},
-    "CENSUS_HOUSING": {"requests_per_hour": 500, "burst": 50},
-    
-    # Business APIs
-    "SEC_EDGAR": {"requests_per_hour": 300, "burst": 30},
-    
-    # Labor APIs
-    "DOL_OSHA": {"requests_per_hour": 150, "burst": 15},
-    "BLS": {"requests_per_hour": 500, "burst": 50},
-    
-    # IP APIs
-    "USPTO_PATENT": {"requests_per_hour": 100, "burst": 10},
-    "GOOGLE_PATENTS": {"requests_per_hour": 20, "burst": 2},
-    
-    # Healthcare APIs
-    "FDA_DRUG": {"requests_per_hour": 200, "burst": 20},
-    "CMS_DATA": {"requests_per_hour": 300, "burst": 30},
-    
-    # Criminal Justice APIs
-    "FBI_CRIME_DATA": {"requests_per_hour": 200, "burst": 20},
-    
-    # International APIs
-    "UN_TREATY": {"requests_per_hour": 100, "burst": 10},
-    "WORLD_BANK_LEGAL": {"requests_per_hour": 500, "burst": 50}
 }
 
 # === INTELLIGENT LEGAL AREA DETECTION ===
@@ -527,298 +420,6 @@ STATE_DETECTION_PATTERNS = {
     'wyoming': ['WY', 'Wyo.', 'Wyoming', 'Wyo. Stat.']
 }
 
-# === COMPREHENSIVE DATABASE CAPABILITIES ===
-
-# Map each API to its capabilities
-COMPREHENSIVE_API_CAPABILITIES = {
-    # Core Legal Research
-    'caselaw_access_project': {
-        'content_types': ['cases', 'court_opinions'],
-        'coverage': ['federal', 'all_states', 'historical'],
-        'authority_level': 'very_high',
-        'full_text': True,
-        'search_features': ['citation_search', 'full_text_search', 'court_filtering']
-    },
-    
-    'courtlistener': {
-        'content_types': ['cases', 'dockets', 'oral_arguments', 'judges'],
-        'coverage': ['federal', 'state'],
-        'authority_level': 'very_high',
-        'full_text': True,
-        'search_features': ['real_time_updates', 'docket_tracking', 'judge_info']
-    },
-    
-    'justia': {
-        'content_types': ['cases', 'statutes', 'regulations', 'legal_news'],
-        'coverage': ['federal', 'all_states'],
-        'authority_level': 'high',
-        'full_text': True,
-        'search_features': ['comprehensive_coverage', 'free_access', 'organized_by_jurisdiction']
-    },
-    
-    'cornell_law': {
-        'content_types': ['statutes', 'regulations', 'constitution', 'legal_encyclopedia'],
-        'coverage': ['federal', 'major_states'],
-        'authority_level': 'very_high',
-        'full_text': True,
-        'search_features': ['academic_quality', 'well_organized', 'authoritative']
-    },
-    
-    'openstates': {
-        'content_types': ['bills', 'legislators', 'committees', 'votes'],
-        'coverage': ['all_states'],
-        'authority_level': 'high',
-        'full_text': True,
-        'search_features': ['current_legislation', 'legislator_tracking', 'voting_records']
-    },
-    
-    # Federal Government
-    'congress_gov': {
-        'content_types': ['bills', 'laws', 'congressional_records', 'committee_reports'],
-        'coverage': ['federal'],
-        'authority_level': 'very_high',
-        'full_text': True,
-        'search_features': ['official_source', 'legislative_history', 'bill_tracking']
-    },
-    
-    'federal_register': {
-        'content_types': ['regulations', 'proposed_rules', 'notices', 'presidential_documents'],
-        'coverage': ['federal'],
-        'authority_level': 'very_high',
-        'full_text': True,
-        'search_features': ['official_regulations', 'rulemaking_process', 'agency_documents']
-    },
-    
-    # Environmental
-    'epa_envirofacts': {
-        'content_types': ['enforcement_actions', 'facility_data', 'violations', 'permits'],
-        'coverage': ['national'],
-        'authority_level': 'very_high',
-        'full_text': False,
-        'search_features': ['facility_search', 'violation_tracking', 'enforcement_history']
-    },
-    
-    'epa_air_quality': {
-        'content_types': ['air_quality_data', 'monitoring_data', 'forecasts'],
-        'coverage': ['national', 'local'],
-        'authority_level': 'very_high',
-        'full_text': False,
-        'search_features': ['real_time_data', 'geographic_filtering', 'historical_trends']
-    },
-    
-    # Immigration
-    'uscis_case_status': {
-        'content_types': ['case_status', 'processing_times', 'form_status'],
-        'coverage': ['national'],
-        'authority_level': 'very_high',
-        'full_text': False,
-        'search_features': ['receipt_number_lookup', 'real_time_status', 'processing_updates']
-    },
-    
-    'state_dept_visa': {
-        'content_types': ['visa_bulletin', 'priority_dates', 'country_quotas'],
-        'coverage': ['international'],
-        'authority_level': 'very_high',
-        'full_text': True,
-        'search_features': ['monthly_updates', 'category_tracking', 'country_specific']
-    },
-    
-    # Housing
-    'hud_fair_market_rent': {
-        'content_types': ['rent_data', 'housing_costs', 'market_analysis'],
-        'coverage': ['national', 'local'],
-        'authority_level': 'very_high',
-        'full_text': False,
-        'search_features': ['geographic_filtering', 'annual_updates', 'bedroom_categories']
-    },
-    
-    'census_housing': {
-        'content_types': ['demographic_data', 'housing_statistics', 'economic_data'],
-        'coverage': ['national', 'state', 'local'],
-        'authority_level': 'very_high',
-        'full_text': False,
-        'search_features': ['detailed_demographics', 'time_series', 'geographic_granularity']
-    },
-    
-    # Business
-    'sec_edgar': {
-        'content_types': ['corporate_filings', 'financial_reports', 'proxy_statements'],
-        'coverage': ['public_companies'],
-        'authority_level': 'very_high',
-        'full_text': True,
-        'search_features': ['company_search', 'filing_type_filter', 'date_filtering']
-    },
-    
-    # Labor
-    'dol_osha': {
-        'content_types': ['safety_violations', 'citations', 'inspection_data'],
-        'coverage': ['national'],
-        'authority_level': 'very_high',
-        'full_text': True,
-        'search_features': ['company_search', 'violation_type', 'penalty_amounts']
-    },
-    
-    'bls_data': {
-        'content_types': ['employment_statistics', 'wage_data', 'labor_trends'],
-        'coverage': ['national', 'state', 'local'],
-        'authority_level': 'very_high',
-        'full_text': False,
-        'search_features': ['time_series', 'demographic_breakdown', 'industry_analysis']
-    },
-    
-    # Intellectual Property
-    'uspto_patents': {
-        'content_types': ['patents', 'patent_applications', 'patent_prosecution'],
-        'coverage': ['national'],
-        'authority_level': 'very_high',
-        'full_text': True,
-        'search_features': ['inventor_search', 'assignee_search', 'classification_search']
-    },
-    
-    'uspto_trademarks': {
-        'content_types': ['trademarks', 'trademark_applications', 'trademark_status'],
-        'coverage': ['national'],
-        'authority_level': 'very_high',
-        'full_text': True,
-        'search_features': ['mark_search', 'owner_search', 'status_tracking']
-    },
-    
-    # Healthcare
-    'fda_enforcement': {
-        'content_types': ['drug_recalls', 'device_recalls', 'food_recalls', 'enforcement_actions'],
-        'coverage': ['national'],
-        'authority_level': 'very_high',
-        'full_text': True,
-        'search_features': ['product_search', 'company_search', 'recall_classification']
-    },
-    
-    # Criminal Justice
-    'fbi_crime_data': {
-        'content_types': ['crime_statistics', 'arrest_data', 'victimization_data'],
-        'coverage': ['national', 'state', 'local'],
-        'authority_level': 'very_high',
-        'full_text': False,
-        'search_features': ['geographic_filtering', 'crime_type', 'time_series']
-    }
-}
-
-# === SMART SEARCH ROUTING CONFIGURATION ===
-
-# Configuration for automatically routing searches to appropriate APIs
-SMART_SEARCH_ROUTING = {
-    'environmental_law': {
-        'trigger_keywords': LEGAL_AREA_KEYWORDS['environmental'],
-        'primary_apis': ['epa_envirofacts', 'epa_air_quality', 'federal_register'],
-        'secondary_apis': ['congress_gov', 'state_law_comprehensive'],
-        'search_strategy': 'enforcement_first'  # Start with enforcement data
-    },
-    
-    'immigration_law': {
-        'trigger_keywords': LEGAL_AREA_KEYWORDS['immigration'],
-        'primary_apis': ['uscis_case_status', 'state_dept_visa', 'federal_register'],
-        'secondary_apis': ['courtlistener', 'congress_gov'],
-        'search_strategy': 'status_first'  # Check case status if receipt number found
-    },
-    
-    'housing_law': {
-        'trigger_keywords': LEGAL_AREA_KEYWORDS['housing'],
-        'primary_apis': ['hud_fair_market_rent', 'census_housing', 'state_law_comprehensive'],
-        'secondary_apis': ['courtlistener', 'justia'],
-        'search_strategy': 'data_and_law'  # Combine data with legal authorities
-    },
-    
-    'business_law': {
-        'trigger_keywords': LEGAL_AREA_KEYWORDS['business'],
-        'primary_apis': ['sec_edgar', 'state_law_comprehensive', 'justia'],
-        'secondary_apis': ['courtlistener', 'federal_register'],
-        'search_strategy': 'filings_and_law'  # Corporate filings plus legal framework
-    },
-    
-    'labor_law': {
-        'trigger_keywords': LEGAL_AREA_KEYWORDS['labor'],
-        'primary_apis': ['dol_osha', 'bls_data', 'state_law_comprehensive'],
-        'secondary_apis': ['courtlistener', 'federal_register'],
-        'search_strategy': 'violations_and_standards'  # OSHA data plus legal standards
-    },
-    
-    'intellectual_property': {
-        'trigger_keywords': LEGAL_AREA_KEYWORDS['intellectual_property'],
-        'primary_apis': ['uspto_patents', 'uspto_trademarks', 'courtlistener'],
-        'secondary_apis': ['federal_register', 'justia'],
-        'search_strategy': 'ip_comprehensive'  # Patents, trademarks, and case law
-    },
-    
-    'healthcare_law': {
-        'trigger_keywords': LEGAL_AREA_KEYWORDS['healthcare'],
-        'primary_apis': ['fda_enforcement', 'cms_data', 'federal_register'],
-        'secondary_apis': ['courtlistener', 'state_law_comprehensive'],
-        'search_strategy': 'regulatory_focus'  # FDA/CMS regulations plus case law
-    },
-    
-    'criminal_law': {
-        'trigger_keywords': LEGAL_AREA_KEYWORDS['criminal'],
-        'primary_apis': ['fbi_crime_data', 'state_law_comprehensive', 'courtlistener'],
-        'secondary_apis': ['justia', 'congress_gov'],
-        'search_strategy': 'statute_and_data'  # Criminal codes plus crime statistics
-    }
-}
-
-# === QUERY ENHANCEMENT CONFIGURATION ===
-
-# Patterns to enhance queries for better API results
-QUERY_ENHANCEMENT_PATTERNS = {
-    'environmental': {
-        'add_terms': ['violation', 'compliance', 'enforcement', 'regulation'],
-        'expand_acronyms': {
-            'CAA': 'Clean Air Act',
-            'CWA': 'Clean Water Act', 
-            'RCRA': 'Resource Conservation and Recovery Act',
-            'CERCLA': 'Comprehensive Environmental Response Compensation and Liability Act'
-        }
-    },
-    
-    'immigration': {
-        'add_terms': ['uscis', 'status', 'processing', 'form'],
-        'expand_acronyms': {
-            'EAD': 'Employment Authorization Document',
-            'AOS': 'Adjustment of Status',
-            'PD': 'Priority Date',
-            'RFE': 'Request for Evidence'
-        }
-    },
-    
-    'business': {
-        'add_terms': ['filing', 'sec', 'corporate', 'compliance'],
-        'expand_acronyms': {
-            'IPO': 'Initial Public Offering',
-            'M&A': 'Mergers and Acquisitions',
-            'SOX': 'Sarbanes-Oxley Act'
-        }
-    },
-    
-    'labor': {
-        'add_terms': ['osha', 'violation', 'workplace', 'safety'],
-        'expand_acronyms': {
-            'FLSA': 'Fair Labor Standards Act',
-            'FMLA': 'Family and Medical Leave Act',
-            'ADA': 'Americans with Disabilities Act'
-        }
-    }
-}
-
-# === API RESPONSE STANDARDIZATION ===
-
-# Standard fields for normalizing responses across different APIs
-STANDARD_RESPONSE_FIELDS = {
-    'title': ['title', 'name', 'case_name', 'facility_name', 'company_name'],
-    'description': ['description', 'summary', 'abstract', 'snippet'],
-    'date': ['date', 'filing_date', 'decision_date', 'report_date', 'updated_date'],
-    'url': ['url', 'link', 'web_url', 'detail_url'],
-    'authority': ['court', 'agency', 'jurisdiction', 'issuing_authority'],
-    'location': ['state', 'jurisdiction', 'county', 'city'],
-    'category': ['type', 'category', 'classification', 'form_type']
-}
-
 # === ENHANCED FEATURE FLAGS ===
 class FeatureFlags:
     AI_ENABLED: bool = bool(OPENROUTER_API_KEY)
@@ -887,121 +488,73 @@ class FeatureFlags:
     GOVERNMENT_DATA_RESEARCH: bool = True
 
 def initialize_comprehensive_features():
-    """Initialize all comprehensive legal research features with API testing"""
+    """Simplified feature initialization without network testing"""
     
-    print("🚀 Initializing Comprehensive Legal Research System...")
+    print("🚀 Initializing Legal Assistant...")
     
-    # Test API connectivity with your provided keys
-    api_test_results = {}
+    # Test local dependencies only (no network calls)
+    working_features = 0
     
-    # Test Congress.gov API
-    try:
-        import requests
-        congress_test = requests.get(
-            f"{CONGRESS_API_ENDPOINT}/bill",
-            headers={"X-API-Key": CONGRESS_API_KEY},
-            params={"format": "json", "limit": 1},
-            timeout=5
-        )
-        api_test_results['congress_gov'] = congress_test.status_code == 200
-        print(f"Congress.gov API: {'✅ Working' if api_test_results['congress_gov'] else '❌ Failed'}")
-    except Exception as e:
-        api_test_results['congress_gov'] = False
-        print(f"Congress.gov API: ❌ Connection failed - {e}")
+    # Check if we have API keys configured
+    if CONGRESS_API_KEY:
+        print("✅ Congress API key available")
+        working_features += 1
+        FeatureFlags.CONGRESS_GOV_AVAILABLE = True
+    else:
+        print("⚠️ Congress API key not set")
+        FeatureFlags.CONGRESS_GOV_AVAILABLE = False
     
-    # Test Data.gov APIs
-    try:
-        # Test with Census API (uses Data.gov key)
-        census_test = requests.get(
-            "https://api.census.gov/data/2022/acs/acs1",
-            params={"get": "NAME", "for": "state:06", "key": DATA_GOV_API_KEY},
-            timeout=5
-        )
-        api_test_results['data_gov'] = census_test.status_code == 200
-        print(f"Data.gov APIs: {'✅ Working' if api_test_results['data_gov'] else '❌ Failed'}")
-    except Exception as e:
-        api_test_results['data_gov'] = False
-        print(f"Data.gov APIs: ❌ Connection failed - {e}")
+    if DATA_GOV_API_KEY:
+        print("✅ Data.gov API key available") 
+        working_features += 1
+        FeatureFlags.DATA_GOV_AVAILABLE = True
+    else:
+        print("⚠️ Data.gov API key not set")
+        FeatureFlags.DATA_GOV_AVAILABLE = False
     
-    # Test free APIs (no keys required)
-    free_apis = {
-        'Harvard Caselaw': 'https://api.case.law/v1/cases/',
-        'CourtListener': 'https://www.courtlistener.com/api/rest/v4/search/',
-        'Justia': 'https://law.justia.com/',
-        'Cornell Law': 'https://www.law.cornell.edu/',
-        'OpenStates': 'https://v3.openstates.org/jurisdictions'
-    }
-    
-    working_free_apis = 0
-    for api_name, url in free_apis.items():
-        try:
-            response = requests.get(url, timeout=5, headers={'User-Agent': 'LegalAssistant/1.0'})
-            is_working = response.status_code in [200, 201]
-            api_test_results[api_name.lower().replace(' ', '_')] = is_working
-            if is_working:
-                working_free_apis += 1
-            print(f"{api_name}: {'✅ Available' if is_working else '❌ Unavailable'}")
-        except Exception as e:
-            api_test_results[api_name.lower().replace(' ', '_')] = False
-            print(f"{api_name}: ❌ Connection failed")
-    
-    # Update feature flags based on test results
-    FeatureFlags.CONGRESS_GOV_AVAILABLE = api_test_results.get('congress_gov', False)
-    FeatureFlags.DATA_GOV_AVAILABLE = api_test_results.get('data_gov', False)
-    
-    # Environmental features depend on Data.gov key
-    FeatureFlags.EPA_APIS_AVAILABLE = api_test_results.get('data_gov', False)
+    # Update feature flags based on available keys
+    FeatureFlags.EPA_APIS_AVAILABLE = FeatureFlags.DATA_GOV_AVAILABLE
     FeatureFlags.ENVIRONMENTAL_RESEARCH_ENABLED = FeatureFlags.EPA_APIS_AVAILABLE
-    
-    # Housing features depend on Data.gov key
-    FeatureFlags.HOUSING_APIS_AVAILABLE = api_test_results.get('data_gov', False)
+    FeatureFlags.HOUSING_APIS_AVAILABLE = FeatureFlags.DATA_GOV_AVAILABLE
     FeatureFlags.HOUSING_DATA_RESEARCH_ENABLED = FeatureFlags.HOUSING_APIS_AVAILABLE
-    
-    # Labor features depend on Data.gov key
-    FeatureFlags.LABOR_APIS_AVAILABLE = api_test_results.get('data_gov', False)
+    FeatureFlags.LABOR_APIS_AVAILABLE = FeatureFlags.DATA_GOV_AVAILABLE
     FeatureFlags.OSHA_RESEARCH_ENABLED = FeatureFlags.LABOR_APIS_AVAILABLE
-    
-    # Criminal justice features depend on Data.gov key
-    FeatureFlags.CRIMINAL_JUSTICE_APIS_AVAILABLE = api_test_results.get('data_gov', False)
+    FeatureFlags.CRIMINAL_JUSTICE_APIS_AVAILABLE = FeatureFlags.DATA_GOV_AVAILABLE
     FeatureFlags.CRIME_DATA_RESEARCH_ENABLED = FeatureFlags.CRIMINAL_JUSTICE_APIS_AVAILABLE
     
     # Overall comprehensive research capability
-    total_working_apis = sum(api_test_results.values()) + working_free_apis
-    FeatureFlags.COMPREHENSIVE_LEGAL_RESEARCH = total_working_apis >= 5
+    FeatureFlags.COMPREHENSIVE_LEGAL_RESEARCH = working_features >= 1
     
-    # Print summary
-    print(f"\n📊 API Connectivity Summary:")
-    print(f"   Working APIs: {total_working_apis}")
-    print(f"   Congress.gov: {'✅' if FeatureFlags.CONGRESS_GOV_AVAILABLE else '❌'}")
-    print(f"   Data.gov: {'✅' if FeatureFlags.DATA_GOV_AVAILABLE else '❌'}")
-    print(f"   Free Legal APIs: {working_free_apis}/5")
-    print(f"   Environmental Research: {'✅' if FeatureFlags.ENVIRONMENTAL_RESEARCH_ENABLED else '❌'}")
-    print(f"   Immigration Tracking: {'✅' if FeatureFlags.IMMIGRATION_CASE_TRACKING_ENABLED else '❌'}")
-    print(f"   Housing Data: {'✅' if FeatureFlags.HOUSING_DATA_RESEARCH_ENABLED else '❌'}")
-    print(f"   Business Research: {'✅' if FeatureFlags.SEC_RESEARCH_ENABLED else '❌'}")
-    print(f"   Labor/OSHA Research: {'✅' if FeatureFlags.OSHA_RESEARCH_ENABLED else '❌'}")
-    print(f"   Crime Data: {'✅' if FeatureFlags.CRIME_DATA_RESEARCH_ENABLED else '❌'}")
-    print(f"\n🎯 Comprehensive Legal Research: {'✅ ENABLED' if FeatureFlags.COMPREHENSIVE_LEGAL_RESEARCH else '❌ LIMITED'}")
+    print(f"📊 Feature Summary: {working_features} API keys configured")
+    print(f"🎯 Comprehensive Research: {'ENABLED' if FeatureFlags.COMPREHENSIVE_LEGAL_RESEARCH else 'LIMITED'}")
     
     if FeatureFlags.COMPREHENSIVE_LEGAL_RESEARCH:
-        print("🔥 Your system now has access to comprehensive legal research across:")
-        print("   • Case law from all jurisdictions")
-        print("   • Federal and state statutes") 
-        print("   • Current legislation tracking")
-        print("   • Environmental compliance data")
+        print("🔥 Enhanced legal research features available:")
+        print("   • Federal legislation tracking")
+        print("   • Environmental compliance data") 
         print("   • Immigration case tracking")
         print("   • Corporate filings and business law")
         print("   • Labor violations and safety data")
-        print("   • Patent and trademark searches")
         print("   • Healthcare regulations and recalls")
         print("   • Criminal justice statistics")
         print("   • Housing and fair market rent data")
     
-    return api_test_results
+    return {"working_apis": working_features}
 
 def initialize_feature_flags():
     """Initialize feature flags by checking for available dependencies"""
     
+    print("🔍 Checking dependencies...")
+    
+    # Check aiohttp
+    try:
+        import aiohttp
+        FeatureFlags.AIOHTTP_AVAILABLE = True
+        print("✅ aiohttp available - AI features enabled")
+    except ImportError:
+        FeatureFlags.AIOHTTP_AVAILABLE = False
+        print("⚠️ aiohttp not available - install with: pip install aiohttp")
+
     # Check OCR
     try:
         import pytesseract
@@ -1010,21 +563,13 @@ def initialize_feature_flags():
         print("✅ OCR support available - can process scanned PDFs")
     except ImportError:
         FeatureFlags.OCR_AVAILABLE = False
-        print("⚠️ OCR not available - install pytesseract and pdf2image")
+        print("⚠️ OCR not available - install pytesseract and pdf2image for scanned PDFs")
 
-    # Hybrid search is now disabled by default
+    # Hybrid search is disabled by default for performance
     FeatureFlags.HYBRID_SEARCH_AVAILABLE = False
     print("⚠️ Hybrid search disabled for better performance")
     
-    # Check existing features
-    try:
-        import aiohttp
-        FeatureFlags.AIOHTTP_AVAILABLE = True
-        print("✅ Async HTTP support available")
-    except ImportError:
-        FeatureFlags.AIOHTTP_AVAILABLE = False
-        print("⚠️ Async HTTP not available - install aiohttp")
-    
+    # Check open source NLP
     try:
         import spacy
         import nltk
@@ -1034,13 +579,14 @@ def initialize_feature_flags():
         FeatureFlags.OPEN_SOURCE_NLP_AVAILABLE = False
         print("⚠️ Open source NLP not available - install spacy and nltk")
     
+    # Check PDF processors
     try:
         import fitz  # PyMuPDF
         FeatureFlags.PYMUPDF_AVAILABLE = True
         print("✅ PyMuPDF available for PDF processing")
     except ImportError:
         FeatureFlags.PYMUPDF_AVAILABLE = False
-        print("⚠️ PyMuPDF not available - install PyMuPDF")
+        print("⚠️ PyMuPDF not available - install PyMuPDF for better PDF support")
     
     try:
         import pdfplumber
@@ -1048,7 +594,7 @@ def initialize_feature_flags():
         print("✅ PDFPlumber available for advanced PDF parsing")
     except ImportError:
         FeatureFlags.PDFPLUMBER_AVAILABLE = False
-        print("⚠️ PDFPlumber not available - install pdfplumber")
+        print("⚠️ PDFPlumber not available - install pdfplumber for table extraction")
     
     try:
         from unstructured.partition.auto import partition
@@ -1056,32 +602,18 @@ def initialize_feature_flags():
         print("✅ Unstructured available for document parsing")
     except ImportError:
         FeatureFlags.UNSTRUCTURED_AVAILABLE = False
-        print("⚠️ Unstructured not available - install unstructured[all-docs]")
+        print("⚠️ Unstructured not available - install unstructured[all-docs] for advanced processing")
     
     # Update AI enabled flag
     FeatureFlags.AI_ENABLED = bool(FeatureFlags.AIOHTTP_AVAILABLE and OPENROUTER_API_KEY)
     
-    print(f"Document processing status: PyMuPDF={FeatureFlags.PYMUPDF_AVAILABLE}, pdfplumber={FeatureFlags.PDFPLUMBER_AVAILABLE}, Unstructured={FeatureFlags.UNSTRUCTURED_AVAILABLE}")
+    print(f"📊 Document processing: PyMuPDF={FeatureFlags.PYMUPDF_AVAILABLE}, "
+          f"pdfplumber={FeatureFlags.PDFPLUMBER_AVAILABLE}, "
+          f"Unstructured={FeatureFlags.UNSTRUCTURED_AVAILABLE}")
 
-    # Check API availability
-    print("🔍 Checking API availability...")
-    if FeatureFlags.COURTLISTENER_AVAILABLE:
-        print("✅ CourtListener API available (free legal database)")
-    
-    # Harvard Caselaw is always available (free, no key required)
-    FeatureFlags.HARVARD_LEGAL_AVAILABLE = True
-    print("✅ Harvard Caselaw Access Project available (free)")
-    
-    if CONGRESS_API_KEY:
-        FeatureFlags.CONGRESS_AVAILABLE = True
-        print("✅ Congress.gov API configured")
-    else:
-        FeatureFlags.CONGRESS_AVAILABLE = False
-    
-    if DATA_GOV_API_KEY:
-        print("✅ Environmental APIs available (EPA, Federal Register)")
+    print(f"🤖 AI Status: {'ENABLED' if FeatureFlags.AI_ENABLED else 'DISABLED - Set OPENAI_API_KEY to enable'}")
 
-    # Now run the comprehensive feature initialization
+    # Now run the comprehensive feature initialization (without network calls)
     return initialize_comprehensive_features()
 
 # === ADDITIONAL UTILITY FUNCTIONS ===
@@ -1114,66 +646,5 @@ def detect_state_jurisdiction(query_text: str) -> List[str]:
     
     return detected_states
 
-def get_relevant_apis(query_text: str, legal_areas: List[str] = None, states: List[str] = None) -> List[str]:
-    """Return most relevant APIs based on query content and detected legal areas"""
-    
-    # If no legal areas provided, try to detect them
-    if not legal_areas:
-        legal_areas = detect_legal_area(query_text)
-    
-    relevant_apis = set()
-    
-    # Map legal areas to specific APIs
-    for area in legal_areas:
-        if area == 'environmental':
-            relevant_apis.update(['EPA_ENVIROFACTS', 'EPA_AIR_QUALITY', 'NOAA_CLIMATE', 'EIA_ENERGY', 'AIRNOW', 'REGULATIONS_GOV'])
-        elif area == 'immigration':
-            relevant_apis.update(['USCIS_CASE_STATUS', 'STATE_DEPT_VISA', 'EOIR_COURT', 'ICE_DETENTION'])
-        elif area == 'housing':
-            relevant_apis.update(['HUD_PUBLIC_HOUSING', 'HUD_FAIR_MARKET_RENT', 'CENSUS_HOUSING'])
-        elif area == 'business':
-            relevant_apis.update(['SEC_EDGAR', 'SEC_INVESTMENT_ADVISER', 'DELAWARE_CORP', 'FTC'])
-        elif area == 'labor':
-            relevant_apis.update(['DOL_OSHA', 'DOL_WAGE_HOUR', 'BLS', 'EEOC_DATA'])
-        elif area == 'intellectual_property':
-            relevant_apis.update(['USPTO_PATENT', 'USPTO_TRADEMARK', 'GOOGLE_PATENTS'])
-        elif area == 'healthcare':
-            relevant_apis.update(['FDA_DRUG', 'FDA_DEVICE', 'FDA_FOOD', 'CMS_DATA'])
-        elif area == 'criminal':
-            relevant_apis.update(['FBI_CRIME_DATA', 'BJS', 'NCVS'])
-        elif area == 'constitutional':
-            relevant_apis.update(['COURTLISTENER', 'CASELAW_ACCESS_PROJECT', 'JUSTIA'])
-        elif area in SMART_SEARCH_ROUTING:
-            # Fallback to smart routing config
-            routing_config = SMART_SEARCH_ROUTING[area]
-            relevant_apis.update(routing_config['primary_apis'])
-            relevant_apis.update(routing_config['secondary_apis'])
-    
-    # Add state-specific APIs if states detected
-    if states:
-        relevant_apis.add('state_law_comprehensive')
-    
-    # If no specific areas detected, use general legal research APIs
-    if not relevant_apis:
-        relevant_apis.update(['COURTLISTENER', 'CASELAW_ACCESS_PROJECT', 'CONGRESS', 'FEDERAL_REGISTER', 'JUSTIA'])
-    
-    return list(relevant_apis)
-
-def enhance_query(query_text: str, legal_areas: List[str]) -> str:
-    """Enhance query with legal-specific terms and expansions"""
-    enhanced_query = query_text
-    
-    for area in legal_areas:
-        if area in QUERY_ENHANCEMENT_PATTERNS:
-            patterns = QUERY_ENHANCEMENT_PATTERNS[area]
-            
-            # Expand acronyms
-            for acronym, expansion in patterns.get('expand_acronyms', {}).items():
-                if acronym in enhanced_query:
-                    enhanced_query = enhanced_query.replace(acronym, f"{acronym} {expansion}")
-    
-    return enhanced_query
-
 # Initialize feature flags when module is imported
 initialize_feature_flags()
-
