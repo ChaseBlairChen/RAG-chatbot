@@ -15,6 +15,21 @@ USER_CONTAINERS_PATH = os.path.abspath(os.path.join(os.getcwd(), "user-container
 MAX_FILE_SIZE = 50 * 1024 * 1024  # 50MB
 LEGAL_EXTENSIONS = {'.pdf', '.txt', '.docx', '.rtf'}
 
+EXTERNAL_API_TIMEOUT = 3  # Maximum 3 seconds per API call
+MAX_CONCURRENT_APIS = 3   # Only call 3 APIs concurrently, not 8
+ENABLE_API_CACHING = True # Cache API results
+API_CACHE_TTL = 300       # Cache for 5 minutes
+
+# SEARCH OPTIMIZATION (update these)
+MIN_RELEVANCE_SCORE = 0.6  # up from 0.1 to filter noise
+DEFAULT_SEARCH_K = 5       # down from 15 to reduce processing
+ENHANCED_SEARCH_K = 8      # down from 20 to reduce processing
+
+# DISABLE PROBLEMATIC FEATURES (add these)
+DISABLE_EXTERNAL_SEARCH_ON_TIMEOUT = True
+EXTERNAL_SEARCH_TIMEOUT = 5  # Maximum 5 seconds for ALL external searches
+SKIP_FAILED_APIS = True      # Don't retry failed APIs
+
 # Existing Premium Database Configuration
 LEXISNEXIS_API_KEY = os.environ.get("LEXISNEXIS_API_KEY")
 LEXISNEXIS_API_ENDPOINT = os.environ.get("LEXISNEXIS_API_ENDPOINT")
@@ -1161,3 +1176,4 @@ def enhance_query(query_text: str, legal_areas: List[str]) -> str:
 
 # Initialize feature flags when module is imported
 initialize_feature_flags()
+
