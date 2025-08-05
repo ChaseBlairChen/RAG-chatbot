@@ -2454,23 +2454,112 @@ query_processor = get_query_processor()
 
 @router.post("/ask", response_model=QueryResponse)
 async def ask_question(query: Query, current_user: User = Depends(get_current_user)):
-    '''Enhanced async ask endpoint with timeout protection'''
+    """Enhanced ask endpoint with comprehensive query validation and timeout protection"""
     
-    # Optional: Set up progress callback for real-time updates
+    # === Query Validation Section ===
+    
+    # 1. Validate query length to prevent timeouts
+    if len(query.question) > 500:
+        raise HTTPException(
+            status_code=400, 
+            detail="Question too long. Please ask a more specific question (max 500 characters)."
+        )
+    
+    # 2. Check for empty or whitespace-only queries
+    if not query.question or not query.question.strip():
+        raise HTTPException(
+            status_code=400,
+            detail="Question cannot be empty. Please provide a specific question."
+        )
+    
+    # 3. Check for overly complex queries (multiple questions)
+    if query.question.count('?') > 3:
+        raise HTTPException(
+            status_code=400,
+            detail="Too many questions at once. Please ask one question at a time."
+        )
+    
+    # 4. Validate for potential spam or repetitive content
+    words = query.question.lower().split()
+    if len(set(words)) < len(words) * 0.3 and len(words) > 10:  # Less than 30% unique words
+        raise HTTPException(
+            status_code=400,
+            detail="Question appears repetitive. Please rephrase with more specific details."
+        )
+    
+    # 5. Check for excessive punctuation or special characters
+    special_char_count = sum(1 for char in query.question if not char.isalnum() and not char.isspace())
+    if special_char_count > len(query.question) * 0.3:
+        raise HTTPException(
+            status_code=400,
+            detail="Question contains too many special characters. Please use standard punctuation."
+        )
+    
+    # === Smart Query Optimization ===
+    
+    # For EPA/Environmental queries, optimize for user documents
+    epa_terms = ['epa', 'environmental', 'air quality', 'violation', 'emissions', 'compliance', 'regulatory']
+    if any(term in query.question.lower() for term in epa_terms):
+        # Set search scope to user documents only for speed
+        query.search_scope = "user_only"
+        logger.info(f"EPA-related query detected, optimizing search scope to user documents only")
+    
+    # For general knowledge queries, suggest web search
+    general_terms = ['what is', 'how does', 'explain', 'definition of', 'meaning of']
+    if any(term in query.question.lower() for term in general_terms) and not query.document_id:
+        # Suggest including web search for better general knowledge answers
+        if not query.search_scope:
+            query.search_scope = "all"
+    
+    # For document-specific queries, focus on user content
+    doc_terms = ['in this document', 'according to the file', 'from the report', 'document says']
+    if any(term in query.question.lower() for term in doc_terms):
+        query.search_scope = "user_only"
+    
+    # === Rate Limiting Check (Optional) ===
+    # You can add rate limiting here if needed
+    # await check_user_rate_limit(current_user.user_id)
+    
+    # === Progress Callback Setup ===
     def progress_callback(progress: ProcessingProgress):
+        """Handle real-time progress updates"""
         # Could emit to WebSocket, store in Redis, etc.
-        logger.info(f"Progress: {progress.progress_percent}% - {progress.message}")
+        logger.info(f"User {current_user.user_id} - Progress: {progress.progress_percent}% - {progress.message}")
+        
+        # Optional: Store progress in cache for frontend polling
+        # redis_client.setex(f"progress:{query.session_id}", 300, progress.json())
     
-    return await query_processor.process_query_with_enhanced_timeout(
-        question=query.question,
-        session_id=query.session_id or str(uuid.uuid4()),
-        user_id=current_user.user_id,
-        search_scope=query.search_scope or "all",
-        response_style=query.response_style or "balanced",
-        use_enhanced_rag=query.use_enhanced_rag if query.use_enhanced_rag is not None else True,
-        document_id=query.document_id,
-        progress_callback=progress_callback
-    )
+    # === Enhanced Error Handling ===
+    try:
+        # Log the validated query for monitoring
+        logger.info(f"Processing validated query from user {current_user.user_id}: "
+                   f"'{query.question[:100]}...' (scope: {query.search_scope})")
+        
+        # Process the query with enhanced timeout protection
+        return await query_processor.process_query_with_enhanced_timeout(
+            question=query.question,
+            session_id=query.session_id or str(uuid.uuid4()),
+            user_id=current_user.user_id,
+            search_scope=query.search_scope or "all",
+            response_style=query.response_style or "balanced",
+            use_enhanced_rag=query.use_enhanced_rag if query.use_enhanced_rag is not None else True,
+            document_id=query.document_id,
+            progress_callback=progress_callback
+        )
+        
+    except asyncio.TimeoutError:
+        logger.error(f"Query timeout for user {current_user.user_id}: {query.question[:100]}")
+        raise HTTPException(
+            status_code=408,
+            detail="Query processing timed out. Please try a more specific question or check back later."
+        )
+    
+    except Exception as e:
+        logger.error(f"Error processing query for user {current_user.user_id}: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail="An error occurred while processing your question. Please try again."
+        )
 
 @router.get("/processing/active-queries")
 async def get_active_queries():
@@ -2496,4 +2585,5 @@ COMPLETE FEATURE SET:
 ✅ Complete backward compatibility
 ✅ Production-ready error handling
 """
+
 
