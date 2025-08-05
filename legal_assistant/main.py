@@ -11,7 +11,7 @@ from fastapi.responses import JSONResponse
 from .config import DEFAULT_CHROMA_PATH, USER_CONTAINERS_PATH, FeatureFlags
 from .core.dependencies import initialize_nlp_models
 from .services.container_manager import initialize_container_manager
-from .api.routers import query, documents, health
+from .api.routers import query, documents, health, immigration
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -230,3 +230,4 @@ if __name__ == "__main__":
     logger.info("Version: 10.0.0-SmartRAG-ComprehensiveAnalysis-NoSQL")
     logger.info("🎯 HIGH-PERFORMANCE MODE READY - Install MongoDB/Redis to activate!")
     uvicorn.run("legal_assistant.main:app", host="0.0.0.0", port=port, reload=True)
+
