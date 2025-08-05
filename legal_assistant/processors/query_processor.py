@@ -925,35 +925,41 @@ class QueryProcessor:
         )
     
     async def _search_external_databases(self, question: str, query_types: List[str]) -> Tuple[Optional[str], List[Dict]]:
-        """Enhanced external search using comprehensive legal APIs and government databases"""
+    """FIXED: Fast external search with timeout protection"""
+    
+    # Skip external search for EPA queries - they're slow and return no useful results
+    if any(term in question.lower() for term in ['epa', 'environmental', 'air quality', 'violation']):
+        self.logger.info("🚀 EPA query detected - skipping slow external APIs")
+        return None, []
+    
+    try:
+        from ..services.external_db_service import get_fast_external_optimizer
         
-        if not self.features['comprehensive_apis']:
-            return await self._search_traditional_legal_databases(question)
+        optimizer = get_fast_external_optimizer()
+        external_results = await optimizer.search_external_fast(question, None)
         
-        try:
-            self.logger.info("🔍 Searching comprehensive legal databases and government APIs...")
+        if external_results:
+            self.logger.info(f"🏛️ Found {len(external_results)} results from fast external search")
             
-            # Search comprehensive APIs
-            comprehensive_results = self.search_comprehensive_legal_databases(
-                query=question, 
-                auto_detect_areas=True
-            )
+            # Simple formatting for speed
+            formatted_text = "\n\n## External Sources Found:\n"
+            for result in external_results[:3]:
+                formatted_text += f"• {result.get('title', 'Unknown')} ({result.get('source_database', 'Unknown')})\n"
             
-            if comprehensive_results:
-                self.logger.info(f"🏛️ Found {len(comprehensive_results)} results from government APIs")
-                
-                # Format comprehensive results with proper citations
-                comp_context, comp_source_info = self._format_comprehensive_results_with_citations(
-                    comprehensive_results
-                )
-                
-                return comp_context, comp_source_info
+            source_info = [{
+                'file_name': result.get('title', 'Unknown'),
+                'source_type': 'external_fast',
+                'database': result.get('source_database', 'unknown'),
+                'relevance': 0.7,
+                'url': result.get('url', '')
+            } for result in external_results[:3]]
             
-        except Exception as e:
-            self.logger.error(f"Comprehensive API search failed: {e}")
+            return formatted_text, source_info
         
-        # Fallback to traditional search
-        return await self._search_traditional_legal_databases(question)
+    except Exception as e:
+        self.logger.error(f"Fast external search failed: {e}")
+    
+    return None, []    
     
     async def _search_traditional_legal_databases(self, question: str) -> Tuple[Optional[str], List[Dict]]:
         """Fallback search using traditional legal databases"""
@@ -2490,3 +2496,4 @@ COMPLETE FEATURE SET:
 ✅ Complete backward compatibility
 ✅ Production-ready error handling
 """
+
