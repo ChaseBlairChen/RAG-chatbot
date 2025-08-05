@@ -1,15 +1,12 @@
-# legal_assistant/services/rag_service.py - COMPLETE ENHANCED VERSION
 """
 Enhanced RAG (Retrieval-Augmented Generation) Operations Service
 
-This service manages all aspects of document retrieval with class-based architecture,
-sophisticated retrieval strategies, confidence scoring, and backward compatibility.
+This service manages all aspects of document retrieval with sophisticated
+retrieval strategies, confidence scoring, and backward compatibility.
 """
 import os
 import logging
 import numpy as np
-import re
-import math
 import time
 from typing import List, Tuple, Dict, Optional, Any
 
@@ -29,13 +26,7 @@ logger = logging.getLogger(__name__)
 
 class RAGService:
     """
-    Enhanced RAG service with class-based architecture and sophisticated retrieval strategies.
-    
-    Features:
-    - Multiple retrieval strategies (semantic, hybrid, query expansion)
-    - Confidence scoring and quality assessment
-    - Reranking with cross-encoder models
-    - Backward compatibility with existing functions
+    Enhanced RAG service with sophisticated retrieval strategies and confidence scoring.
     """
     
     def __init__(self):
@@ -44,35 +35,20 @@ class RAGService:
         
         # Load core dependencies
         self._default_db = self._load_default_database()
-        self._reranker = self._load_reranker() if SEARCH_CONFIG.get("rerank_enabled", False) else None
         self._container_manager = get_container_manager()
         self._nlp = get_nlp()
-        
-        # Initialize text processor for enhanced extraction
-        self._init_text_processor()
         
         # Performance metrics
         self.search_stats = {
             'total_searches': 0,
             'avg_retrieval_time': 0.0,
-            'rerank_usage': 0,
-            'hybrid_usage': 0
+            'successful_searches': 0,
+            'failed_searches': 0
         }
         
         self.logger.info("✅ RAGService initialized successfully")
         self.logger.info(f"   Default DB: {'Available' if self._default_db else 'Not Available'}")
-        self.logger.info(f"   Reranker: {'Available' if self._reranker else 'Not Available'}")
         self.logger.info(f"   NLP Model: {'Available' if self._nlp else 'Not Available'}")
-    
-    def _init_text_processor(self):
-        """Initialize text processor for enhanced extraction"""
-        try:
-            from ..utils.text_processing import get_text_processor
-            self._text_processor = get_text_processor()
-            self.logger.info("✅ Text processor available for enhanced extraction")
-        except ImportError:
-            self._text_processor = None
-            self.logger.warning("⚠️ Enhanced text processor not available")
     
     def _load_default_database(self) -> Optional[Chroma]:
         """Load the default shared database"""
@@ -92,23 +68,6 @@ class RAGService:
         except Exception as e:
             self.logger.error(f"❌ Failed to load default database: {e}")
             return None
-    
-    def _load_reranker(self) -> Optional[Any]:
-        """Load cross-encoder for reranking if available"""
-        try:
-            from sentence_transformers import CrossEncoder
-            reranker_model = 'cross-encoder/ms-marco-MiniLM-L-6-v2'
-            reranker = CrossEncoder(reranker_model)
-            self.logger.info(f"✅ Reranker model '{reranker_model}' loaded")
-            return reranker
-        except ImportError:
-            self.logger.warning("⚠️ CrossEncoder not available - install sentence-transformers[cross-encoder]")
-            return None
-        except Exception as e:
-            self.logger.error(f"❌ Failed to load reranker: {e}")
-            return None
-    
-    # --- Main Search Methods ---
     
     def combined_search(self, query: str, user_id: Optional[str], search_scope: str, 
                        conversation_context: str, use_enhanced: bool = True, 
@@ -157,13 +116,9 @@ class RAGService:
             
             # Post-process results
             if use_enhanced:
-                # Remove duplicates and rerank
+                # Remove duplicates
                 all_results = self._remove_duplicates(all_results)
-                
-                if self._reranker and len(all_results) > 1:
-                    all_results = self._rerank_results(query, all_results)
-                    retrieval_method = "enhanced_combined_reranked"
-                    self.search_stats['rerank_usage'] += 1
+                retrieval_method = "enhanced_combined"
             else:
                 # Basic sorting by score
                 all_results.sort(key=lambda x: x[1], reverse=True)
@@ -175,13 +130,15 @@ class RAGService:
             
             # Update statistics
             search_time = time.time() - start_time
-            self._update_search_stats(search_time, retrieval_method)
+            self._update_search_stats(search_time, True)
             
             self.logger.info(f"[COMBINED_SEARCH] Completed in {search_time:.3f}s: {len(final_results)} results")
             
             return final_results, sources_searched, retrieval_method
             
         except Exception as e:
+            search_time = time.time() - start_time
+            self._update_search_stats(search_time, False)
             self.logger.error(f"❌ Combined search failed: {e}")
             return [], sources_searched, "error"
     
@@ -260,23 +217,6 @@ class RAGService:
             except Exception as e:
                 self.logger.warning(f"Expanded query search failed: {e}")
         
-        # Strategy 4: Sub-query search using NLP entities
-        if self._nlp:
-            try:
-                doc = self._nlp(query)
-                for ent in doc.ents[:3]:  # Limit to 3 entities
-                    if ent.label_ in ["ORG", "PERSON", "LAW", "DATE"] and len(ent.text) > 2:
-                        entity_query = f"What is {ent.text}?"
-                        ent_results = self._normalize_results(db.similarity_search_with_score(entity_query, k=3))
-                        for doc, score in ent_results:
-                            content_hash = hash(doc.page_content[:200])
-                            if content_hash not in seen_content:
-                                # Lower score for entity results
-                                all_results.append((doc, score * 0.7))
-                                seen_content.add(content_hash)
-            except Exception as e:
-                self.logger.warning(f"Entity-based search failed: {e}")
-        
         # Sort and filter results
         all_results.sort(key=lambda x: x[1], reverse=True)
         
@@ -290,61 +230,23 @@ class RAGService:
         if not results:
             return []
         
-        if self._text_processor:
-            return self._text_processor.remove_duplicates(results)
-        else:
-            # Fallback duplicate removal
-            unique_results = []
-            seen_hashes = set()
-            
-            for doc, score in results:
-                content_hash = hash(doc.page_content[:100])
-                if content_hash not in seen_hashes:
-                    seen_hashes.add(content_hash)
-                    unique_results.append((doc, score))
-            
-            return unique_results
-    
-    def _rerank_results(self, query: str, results: List[Tuple]) -> List[Tuple]:
-        """Rerank results using cross-encoder if available"""
-        if not self._reranker or len(results) <= 1:
-            return results
+        unique_results = []
+        seen_hashes = set()
         
-        try:
-            pairs = [[query, doc.page_content] for doc, _ in results]
-            rerank_scores = self._reranker.predict(pairs)
+        for doc, score in results:
+            # Create content hash for deduplication
+            content_sample = doc.page_content[:200].strip()
+            content_hash = hash(content_sample)
             
-            # Normalize rerank scores to 0-1
-            if len(rerank_scores) > 1:
-                min_score = rerank_scores.min()
-                max_score = rerank_scores.max()
-                if max_score > min_score:
-                    rerank_scores = (rerank_scores - min_score) / (max_score - min_score)
-                else:
-                    rerank_scores = np.ones_like(rerank_scores) * 0.5
-            else:
-                rerank_scores = np.array([0.5])
-            
-            # Combine original and rerank scores
-            reranked = []
-            for i, (doc, orig_score) in enumerate(results):
-                # Weighted combination
-                final_score = (
-                    SEARCH_CONFIG.get("semantic_weight", 0.4) * orig_score +
-                    SEARCH_CONFIG.get("rerank_weight", 0.6) * rerank_scores[i]
-                )
-                final_score = np.clip(final_score, 0.0, 1.0)
-                reranked.append((doc, final_score))
-            
-            # Sort by final score
-            reranked.sort(key=lambda x: x[1], reverse=True)
-            
-            self.logger.debug(f"Reranked {len(results)} results")
-            return reranked
-            
-        except Exception as e:
-            self.logger.error(f"Reranking failed: {e}")
-            return results
+            if content_hash not in seen_hashes:
+                seen_hashes.add(content_hash)
+                unique_results.append((doc, score))
+        
+        # Sort by score
+        unique_results.sort(key=lambda x: x[1], reverse=True)
+        
+        logger.debug(f"Removed {len(results) - len(unique_results)} duplicates")
+        return unique_results
     
     def calculate_confidence_score(self, results_with_scores: List[Tuple], 
                                  response_length: int, additional_factors: Dict = None) -> float:
@@ -377,14 +279,14 @@ class RAGService:
             # Factor 4: Response completeness
             completeness_factor = min(1.0, response_length / 500.0)
             
-            # Factor 5: Source diversity (new)
+            # Factor 5: Source diversity
             source_types = set()
             for doc, _ in normalized_results:
                 source_type = doc.metadata.get('source_type', 'unknown')
                 source_types.add(source_type)
             diversity_factor = min(1.0, len(source_types) / 2.0)
             
-            # Factor 6: Quality of top results (new)
+            # Factor 6: Quality of top results
             top_scores = scores[:3]
             top_quality_factor = np.mean(top_scores) if top_scores else 0.0
             
@@ -421,45 +323,6 @@ class RAGService:
             self.logger.error(f"Error calculating confidence score: {e}")
             return 0.5  # Safe default
     
-    def hybrid_search_if_available(self, user_id: str, query: str, k: int = DEFAULT_SEARCH_K,
-                                  document_id: str = None) -> Tuple[List[Tuple], str]:
-        """Perform hybrid search if available, otherwise fall back to enhanced search"""
-        
-        if not FeatureFlags.HYBRID_SEARCH_AVAILABLE:
-            self.logger.info("Hybrid search not available, using enhanced semantic search")
-            return self._search_user_container(user_id, query, "", k=k, document_id=document_id), "enhanced_semantic"
-        
-        try:
-            # Try hybrid search
-            user_db = self._container_manager.get_user_database_safe(user_id)
-            if not user_db:
-                return [], "no_user_database"
-            
-            from .hybrid_search import get_hybrid_searcher
-            searcher = get_hybrid_searcher()
-            
-            filter_dict = {"file_id": document_id} if document_id else None
-            
-            results = searcher.hybrid_search(
-                query=query,
-                vector_store=user_db,
-                k=k,
-                keyword_weight=SEARCH_CONFIG.get("keyword_weight", 0.3),
-                semantic_weight=SEARCH_CONFIG.get("semantic_weight", 0.7),
-                rerank=SEARCH_CONFIG.get("rerank_enabled", False),
-                filter_dict=filter_dict
-            )
-            
-            normalized_results = self._normalize_results(results)
-            self.search_stats['hybrid_usage'] += 1
-            
-            self.logger.info(f"Hybrid search returned {len(normalized_results)} results")
-            return normalized_results, "hybrid_search"
-            
-        except Exception as e:
-            self.logger.error(f"Hybrid search failed, falling back to enhanced search: {e}")
-            return self._search_user_container(user_id, query, "", k=k, document_id=document_id), "enhanced_fallback"
-    
     # --- Utility Methods ---
     
     @staticmethod
@@ -491,6 +354,7 @@ class RAGService:
             expanded_queries.add(query + '?')
         
         # Handle bill/statute queries specially
+        import re
         bill_match = re.search(r'(HB|SB|SSB|ESSB|SHB|ESHB)\s*(\d+)', query, re.IGNORECASE)
         if bill_match:
             bill_type = bill_match.group(1).upper()
@@ -525,6 +389,7 @@ class RAGService:
     @staticmethod
     def _extract_key_terms(query: str) -> List[str]:
         """Extract key terms by removing stop words"""
+        import re
         stop_words = {
             'what', 'is', 'the', 'a', 'an', 'and', 'or', 'but', 'in', 'on', 'at',
             'to', 'for', 'of', 'with', 'by', 'from', 'about', 'into', 'through',
@@ -539,9 +404,14 @@ class RAGService:
         
         return key_terms
     
-    def _update_search_stats(self, search_time: float, method: str):
+    def _update_search_stats(self, search_time: float, success: bool):
         """Update search performance statistics"""
         self.search_stats['total_searches'] += 1
+        
+        if success:
+            self.search_stats['successful_searches'] += 1
+        else:
+            self.search_stats['failed_searches'] += 1
         
         # Update average retrieval time
         total = self.search_stats['total_searches']
@@ -550,17 +420,15 @@ class RAGService:
     
     def get_search_stats(self) -> Dict[str, Any]:
         """Get current search performance statistics"""
+        success_rate = (self.search_stats['successful_searches'] / 
+                       max(1, self.search_stats['total_searches']))
+        
         return {
             **self.search_stats,
-            'rerank_usage_rate': (self.search_stats['rerank_usage'] / 
-                                max(1, self.search_stats['total_searches'])),
-            'hybrid_usage_rate': (self.search_stats['hybrid_usage'] / 
-                                max(1, self.search_stats['total_searches'])),
+            'success_rate': success_rate,
             'features_available': {
                 'default_database': self._default_db is not None,
-                'reranker': self._reranker is not None,
                 'nlp_model': self._nlp is not None,
-                'text_processor': self._text_processor is not None,
                 'hybrid_search': FeatureFlags.HYBRID_SEARCH_AVAILABLE
             }
         }
@@ -607,38 +475,12 @@ def enhanced_retrieval_v2(db, query_text: str, conversation_history_context: str
     except Exception as e:
         logger.error(f"Enhanced retrieval failed: {e}")
         # Fallback to basic search
-        basic_results = db.similarity_search_with_score(query_text, k=k, filter=document_filter)
-        return rag_service._normalize_results(basic_results), "basic_fallback"
-
-def enhanced_retrieval_v3(db, query_text: str, conversation_history_context: str, 
-                         k: int = ENHANCED_SEARCH_K, document_filter: Dict = None) -> Tuple[List, str]:
-    """BACKWARD COMPATIBLE: Most advanced retrieval with query understanding"""
-    
-    rag_service = get_rag_service()
-    
-    try:
-        # Use the enhanced retrieval method
-        results = rag_service._enhanced_retrieval(db, query_text, conversation_history_context, k)
-        
-        # Apply document filter
-        if document_filter:
-            filtered_results = []
-            for doc, score in results:
-                match = all(doc.metadata.get(k) == v for k, v in document_filter.items())
-                if match:
-                    filtered_results.append((doc, score))
-            results = filtered_results
-        
-        # Apply reranking if available
-        if rag_service._reranker and len(results) > 1:
-            results = rag_service._rerank_results(query_text, results)
-            return results, "enhanced_retrieval_v3_reranked"
-        
-        return results, "enhanced_retrieval_v3"
-        
-    except Exception as e:
-        logger.error(f"Enhanced retrieval v3 failed: {e}")
-        return enhanced_retrieval_v2(db, query_text, conversation_history_context, k, document_filter)
+        try:
+            basic_results = db.similarity_search_with_score(query_text, k=k, filter=document_filter)
+            return rag_service._normalize_results(basic_results), "basic_fallback"
+        except Exception as fallback_error:
+            logger.error(f"Fallback search also failed: {fallback_error}")
+            return [], "search_failed"
 
 def combined_search(query: str, user_id: Optional[str], search_scope: str, 
                    conversation_context: str, use_enhanced: bool = True, 
@@ -667,116 +509,8 @@ def hybrid_retrieval_default(db, query_text: str, k: int = ENHANCED_SEARCH_K,
                            document_filter: Dict = None) -> Tuple[List, str]:
     """BACKWARD COMPATIBLE: Hybrid retrieval for default database"""
     
-    rag_service = get_rag_service()
-    
-    try:
-        if not FeatureFlags.HYBRID_SEARCH_AVAILABLE:
-            return enhanced_retrieval_v3(db, query_text, "", k, document_filter)
-        
-        # This would require implementing hybrid search for arbitrary databases
-        # For now, fall back to enhanced retrieval
-        return enhanced_retrieval_v3(db, query_text, "", k, document_filter)
-        
-    except Exception as e:
-        logger.error(f"Hybrid retrieval failed: {e}")
-        return enhanced_retrieval_v2(db, query_text, "", k, document_filter)
-
-# --- Advanced Features ---
-
-def search_with_custom_strategy(query: str, user_id: str, strategy_config: Dict) -> Tuple[List, str]:
-    """NEW: Search with custom strategy configuration"""
-    
-    rag_service = get_rag_service()
-    
-    # Extract strategy parameters
-    k = strategy_config.get('k', DEFAULT_SEARCH_K)
-    use_reranking = strategy_config.get('use_reranking', True)
-    semantic_weight = strategy_config.get('semantic_weight', 0.7)
-    keyword_weight = strategy_config.get('keyword_weight', 0.3)
-    
-    try:
-        # Perform search with custom configuration
-        results = rag_service._search_user_container(
-            user_id, query, "", use_enhanced=True, k=k*2  # Get more for reranking
-        )
-        
-        # Apply custom reranking if requested
-        if use_reranking and rag_service._reranker and len(results) > 1:
-            results = rag_service._rerank_results(query, results)
-        
-        # Apply custom filtering
-        min_score = strategy_config.get('min_relevance_score', MIN_RELEVANCE_SCORE)
-        filtered_results = [(doc, score) for doc, score in results if score >= min_score]
-        
-        return filtered_results[:k], f"custom_strategy_k{k}"
-        
-    except Exception as e:
-        logger.error(f"Custom strategy search failed: {e}")
-        return [], "custom_strategy_error"
-
-def get_retrieval_diagnostics(query: str, user_id: str) -> Dict[str, Any]:
-    """NEW: Get detailed diagnostics for a query"""
-    
-    rag_service = get_rag_service()
-    
-    diagnostics = {
-        'query': query,
-        'user_id': user_id,
-        'timestamp': time.time(),
-        'query_analysis': {},
-        'retrieval_analysis': {},
-        'recommendations': []
-    }
-    
-    # Analyze query
-    diagnostics['query_analysis'] = {
-        'length': len(query),
-        'word_count': len(query.split()),
-        'has_legal_terms': bool(re.search(r'\b(?:USC|CFR|RCW|WAC|HB|SB)\s+\d+', query)),
-        'has_questions': '?' in query,
-        'key_terms': rag_service._extract_key_terms(query),
-        'expanded_queries': rag_service._expand_query_intelligently(query)
-    }
-    
-    # Test retrieval
-    try:
-        start_time = time.time()
-        results, sources, method = rag_service.combined_search(
-            query, user_id, "all", "", use_enhanced=True, k=10
-        )
-        retrieval_time = time.time() - start_time
-        
-        diagnostics['retrieval_analysis'] = {
-            'results_found': len(results),
-            'sources_searched': sources,
-            'retrieval_method': method,
-            'retrieval_time': retrieval_time,
-            'score_range': [min(scores := [s for _, s in results]), max(scores)] if results else [0, 0],
-            'avg_score': np.mean([s for _, s in results]) if results else 0,
-            'above_threshold': len([s for _, s in results if s >= MIN_RELEVANCE_SCORE])
-        }
-        
-        # Generate recommendations
-        if len(results) == 0:
-            diagnostics['recommendations'].extend([
-                "Try broader search terms",
-                "Check if documents are uploaded and processed",
-                "Consider searching external databases"
-            ])
-        elif len(results) < 3:
-            diagnostics['recommendations'].extend([
-                "Try adding synonyms or related terms",
-                "Use more specific legal terminology",
-                "Check document chunking quality"
-            ])
-        else:
-            diagnostics['recommendations'].append("Good retrieval results - query is well-formed")
-    
-    except Exception as e:
-        diagnostics['retrieval_analysis'] = {'error': str(e)}
-        diagnostics['recommendations'].append("Retrieval system error - check logs")
-    
-    return diagnostics
+    # For now, fall back to enhanced retrieval
+    return enhanced_retrieval_v2(db, query_text, "", k, document_filter)
 
 # --- Performance Monitoring ---
 
@@ -796,35 +530,7 @@ def get_rag_performance_metrics() -> Dict[str, Any]:
         },
         'feature_availability': {
             'default_database_available': rag_service._default_db is not None,
-            'reranker_available': rag_service._reranker is not None,
             'nlp_available': rag_service._nlp is not None,
             'hybrid_search_available': FeatureFlags.HYBRID_SEARCH_AVAILABLE
         }
     }
-
-"""
-USAGE EXAMPLES:
-
-# Basic usage (backward compatible)
-results, sources, method = combined_search(query, user_id, "all", context)
-confidence = calculate_confidence_score(results, len(response))
-
-# Enhanced usage (new features)
-rag_service = get_rag_service()
-results, method = rag_service.hybrid_search_if_available(user_id, query)
-diagnostics = get_retrieval_diagnostics(query, user_id)
-performance = get_rag_performance_metrics()
-
-# Custom strategy usage
-strategy = {'k': 20, 'use_reranking': True, 'min_relevance_score': 0.5}
-results, method = search_with_custom_strategy(query, user_id, strategy)
-
-MIGRATION BENEFITS:
-✅ Class-based architecture for better maintainability
-✅ Enhanced retrieval strategies with multiple approaches
-✅ Sophisticated confidence scoring with multiple factors
-✅ Performance monitoring and diagnostics
-✅ Backward compatibility with all existing code
-✅ Advanced features available for optimization
-✅ Better error handling and graceful degradation
-"""
