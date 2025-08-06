@@ -1507,6 +1507,44 @@ RESPONSE FORMAT:
 
 RESPONSE:"""
     
+    def _create_regular_prompt(self, context_text: str, query_context: QueryContext,
+                             search_results: SearchResults) -> str:
+        """Create simple prompt for general questions"""
+        
+        return f"""You are a legal research assistant with access to comprehensive legal databases.
+
+ANTI-HALLUCINATION REQUIREMENTS:
+🚫 ONLY answer based on the provided context and sources
+🚫 If information is NOT in the sources, say "This information is not available in the provided documents"
+🚫 NEVER make up facts, dates, case names, or legal citations
+
+SOURCES SEARCHED: {', '.join(search_results.sources_searched)}
+RESPONSE STYLE: {query_context.response_style}
+
+CONVERSATION HISTORY:
+{query_context.conversation_context}
+
+LEGAL CONTEXT:
+{context_text}
+
+USER QUESTION:
+{query_context.original_question}
+
+RESPONSE FORMAT:
+## Direct Answer
+[Your main answer based ONLY on the provided sources]
+
+## Key Supporting Points
+[Bullet points from the sources that support your answer]
+
+## Sources Referenced
+[List the specific documents that support your answer]
+
+## Legal Disclaimer
+**Legal Notice:** This response is based on the documents provided and should not be considered as professional legal advice. For legal advice specific to your situation, please consult with a qualified attorney.
+
+RESPONSE:"""
+    
     def _validate_response_against_context(self, response: str, context: str, question: str) -> Tuple[str, float]:
         """Validate response to reduce hallucination and calculate confidence"""
         
