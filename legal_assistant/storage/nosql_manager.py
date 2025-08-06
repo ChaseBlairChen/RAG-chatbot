@@ -6,6 +6,16 @@ from beanie import init_beanie
 from typing import Optional
 import os
 
+
+from .nosql_models import (
+    UserDocument,
+    UploadedFileDocument,
+    ProcessingStatusDocument,
+    ConversationDocument,
+    ImmigrationCaseDocument
+)
+
+
 logger = logging.getLogger(__name__)
 
 class NoSQLManager:
