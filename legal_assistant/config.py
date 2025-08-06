@@ -24,18 +24,18 @@ USER_CONTAINERS_PATH = os.path.abspath(os.path.join(os.getcwd(), "user-container
 MAX_FILE_SIZE = 50 * 1024 * 1024  # 50MB
 LEGAL_EXTENSIONS = {'.pdf', '.txt', '.docx', '.rtf'}
 
-EXTERNAL_API_TIMEOUT = 10  # Maximum 3 seconds per API call
-MAX_CONCURRENT_APIS = 15   # Only call 3 APIs concurrently, not 8
+EXTERNAL_API_TIMEOUT = 15  # Maximum 3 seconds per API call
+MAX_CONCURRENT_APIS = 10  # Only call 3 APIs concurrently, not 8
 ENABLE_API_CACHING = True # Cache API results
 API_CACHE_TTL = 300       # Cache for 5 minutes
 
 # SEARCH OPTIMIZATION (update these)
 MIN_RELEVANCE_SCORE = 0.6  # up from 0.1 to filter noise
-DEFAULT_SEARCH_K = 5       # down from 15 to reduce processing
-ENHANCED_SEARCH_K = 8      # down from 20 to reduce processing
+DEFAULT_SEARCH_K = 15       # down from 15 to reduce processing
+ENHANCED_SEARCH_K = 20      # down from 20 to reduce processing
 
 # DISABLE PROBLEMATIC FEATURES (add these)
-DISABLE_EXTERNAL_SEARCH_ON_TIMEOUT = True
+DISABLE_EXTERNAL_SEARCH_ON_TIMEOUT = False
 EXTERNAL_SEARCH_TIMEOUT = 5  # Maximum 5 seconds for ALL external searches
 SKIP_FAILED_APIS = True      # Don't retry failed APIs
 
@@ -178,6 +178,7 @@ FAST_EMBEDDING_MODELS = [
 
 # AI Models
 AI_MODELS = [
+    "deepseek/deepseek-r1-0528:free",
     "microsoft/phi-3-mini-128k-instruct:free",
     "meta-llama/llama-3.2-3b-instruct:free",
     "google/gemma-2-9b-it:free",
@@ -653,3 +654,4 @@ def detect_state_jurisdiction(query_text: str) -> List[str]:
 
 # Initialize feature flags when module is imported
 initialize_feature_flags()
+
