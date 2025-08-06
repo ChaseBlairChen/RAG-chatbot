@@ -643,7 +643,8 @@ class QueryProcessor:
             result = await self._process_with_staged_timeouts(
                 question, session_id, user_id, search_scope,
                 response_style, use_enhanced_rag, document_id, 
-                search_external, progress_tracker, adaptive_timeout
+                search_external, progress_tracker, adaptive_timeout,
+                use_agent  # Pass the parameter
             )
             
             # Update stats
@@ -679,7 +680,8 @@ class QueryProcessor:
         document_id: str, 
         search_external: bool, 
         progress_tracker: ProgressTracker,
-        total_timeout: int
+        total_timeout: int,
+        use_agent: bool = False  # Add this parameter
     ) -> QueryResponse:
         """Process query with staged timeouts and progress updates"""
         
