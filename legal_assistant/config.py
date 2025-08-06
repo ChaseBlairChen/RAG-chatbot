@@ -1,4 +1,9 @@
 """Configuration and environment variables - Enhanced for comprehensive legal research with government APIs"""
+
+# FIXED: Add dotenv loading at the very beginning
+from dotenv import load_dotenv
+load_dotenv()
+
 import os
 from typing import List
 from cryptography.fernet import Fernet
@@ -40,7 +45,7 @@ LEXISNEXIS_API_ENDPOINT = os.environ.get("LEXISNEXIS_API_ENDPOINT")
 WESTLAW_API_KEY = os.environ.get("WESTLAW_API_KEY")
 WESTLAW_API_ENDPOINT = os.environ.get("WESTLAW_API_ENDPOINT")
 
-# External API Keys (set your own)
+# External API Keys (NOW PROPERLY LOADED FROM .env)
 CONGRESS_API_KEY = os.environ.get("CONGRESS_API_KEY", "")
 DATA_GOV_API_KEY = os.environ.get("DATA_GOV_API_KEY", "")
 
@@ -648,4 +653,3 @@ def detect_state_jurisdiction(query_text: str) -> List[str]:
 
 # Initialize feature flags when module is imported
 initialize_feature_flags()
-
