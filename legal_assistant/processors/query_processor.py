@@ -30,6 +30,16 @@ from ..utils import (
     format_context_for_llm
 )
 
+# Add new imports for agent and embeddings
+try:
+    from sentence_transformers import SentenceTransformer, CrossEncoder
+    import torch
+    EMBEDDINGS_AVAILABLE = True
+except ImportError:
+    EMBEDDINGS_AVAILABLE = False
+    
+import numpy as np
+
 logger = logging.getLogger(__name__)
 
 class QueryType(Enum):
@@ -40,6 +50,14 @@ class QueryType(Enum):
     GOVERNMENT_DATA = "government_data"
     COMPREHENSIVE_ANALYSIS = "comprehensive_analysis"
     GENERAL = "general"
+    
+    # Agent-based classifications
+    FACTUAL = "factual"  # Fact-based questions about documents
+    CASE_LAW = "case_law"  # Questions about legal precedents
+    PROCEDURAL = "procedural"  # Questions about legal procedures
+    DATA_LOOKUP = "data_lookup"  # Need external data
+    ANALYSIS = "analysis"  # Complex legal analysis
+    MULTI_STEP = "multi_step"  # Requires multiple tools
 
 class ProcessingStage(Enum):
     """Processing stages for progress tracking"""
@@ -215,6 +233,284 @@ class ProgressTracker:
         """Get current processing progress"""
         return self.current_progress
 
+class BetterEmbeddings:
+    """
+    Enhanced embeddings using E5-Large-V2 or similar models
+    Provides better semantic understanding for legal documents
+    """
+    
+    def __init__(self, model_name: str = "intfloat/e5-large-v2"):
+        """
+        Initialize better embeddings
+        Options:
+        - intfloat/e5-large-v2 (1024 dim, excellent)
+        - BAAI/bge-large-en-v1.5 (1024 dim, great for retrieval)
+        - thenlper/gte-large (1024 dim, good for semantic search)
+        """
+        if not EMBEDDINGS_AVAILABLE:
+            logger.warning("Sentence transformers not available, embeddings disabled")
+            self.model = None
+            return
+            
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+        self.model = SentenceTransformer(model_name, device=device)
+        self.model_name = model_name
+        
+        # E5 models require special prefixes
+        self.query_prefix = "query: " if "e5" in model_name else ""
+        self.passage_prefix = "passage: " if "e5" in model_name else ""
+        
+        logger.info(f"✅ Initialized {model_name} embeddings on {device}")
+    
+    def embed_query(self, text: str) -> np.ndarray:
+        """Embed a query with appropriate prefix"""
+        if not self.model:
+            return None
+            
+        if self.query_prefix:
+            text = self.query_prefix + text
+            
+        embedding = self.model.encode(
+            text,
+            convert_to_numpy=True,
+            normalize_embeddings=True
+        )
+        return embedding
+    
+    def embed_documents(self, texts: List[str]) -> np.ndarray:
+        """Embed documents with appropriate prefix"""
+        if not self.model:
+            return None
+            
+        if self.passage_prefix:
+            texts = [self.passage_prefix + text for text in texts]
+            
+        embeddings = self.model.encode(
+            texts,
+            batch_size=32,
+            show_progress_bar=False,
+            convert_to_numpy=True,
+            normalize_embeddings=True
+        )
+        return embeddings
+
+class CrossEncoderReranker:
+    """
+    Rerank search results using cross-encoder for better precision
+    """
+    
+    def __init__(self, model_name: str = "cross-encoder/ms-marco-MiniLM-L-6-v2"):
+        if not EMBEDDINGS_AVAILABLE:
+            logger.warning("Cross-encoder not available")
+            self.model = None
+            return
+            
+        self.model = CrossEncoder(model_name)
+        logger.info(f"✅ Initialized cross-encoder reranker: {model_name}")
+    
+    def rerank(self, query: str, documents: List[Tuple], top_k: int = 10) -> List[Tuple]:
+        """
+        Rerank documents based on query relevance
+        """
+        if not self.model:
+            return documents[:top_k]
+        
+        # Extract text from documents
+        texts = [doc[0].page_content if hasattr(doc[0], 'page_content') else str(doc[0]) 
+                for doc in documents]
+        
+        # Create query-document pairs
+        pairs = [[query, text] for text in texts]
+        
+        # Get relevance scores
+        scores = self.model.predict(pairs)
+        
+        # Sort by score
+        sorted_indices = np.argsort(scores)[::-1][:top_k]
+        
+        # Return reranked documents
+        reranked = [documents[i] for i in sorted_indices]
+        
+        logger.info(f"🎯 Reranked {len(documents)} docs, kept top {len(reranked)}")
+        return reranked
+
+@dataclass
+class AgentPlan:
+    """Execution plan for the agent"""
+    query: str
+    intent: str
+    tools_to_use: List[str]
+    execution_steps: List[Dict[str, Any]]
+    combine_strategy: str
+    confidence: float
+
+class QueryAgent:
+    """
+    Intelligent agent that plans query execution
+    """
+    
+    def __init__(self):
+        self.logger = logging.getLogger(f"{__name__}.QueryAgent")
+        
+        # Intent patterns for classification
+        self.intent_patterns = {
+            "factual": [r"what is", r"what are", r"define", r"explain"],
+            "statutory": [r"RCW \d+", r"USC \d+", r"CFR \d+", r"statute"],
+            "case_law": [r"case law", r"precedent", r"court ruled", r"judicial"],
+            "procedural": [r"how to", r"procedure", r"process", r"steps"],
+            "data_lookup": [r"current", r"latest", r"status", r"processing time"],
+            "analysis": [r"analyze", r"evaluate", r"implications", r"consequences"]
+        }
+    
+    def classify_intent(self, query: str) -> str:
+        """Classify query intent using patterns"""
+        query_lower = query.lower()
+        
+        intent_scores = {}
+        for intent, patterns in self.intent_patterns.items():
+            score = sum(1 for p in patterns if re.search(p, query_lower))
+            if score > 0:
+                intent_scores[intent] = score
+        
+        if not intent_scores:
+            return "general"
+        
+        # Check for multi-step
+        if len([s for s in intent_scores.values() if s > 0]) > 2:
+            return "multi_step"
+        
+        return max(intent_scores, key=intent_scores.get)
+    
+    def plan_execution(self, query: str, query_types: List[str]) -> AgentPlan:
+        """
+        Create execution plan based on query analysis
+        """
+        # Classify intent
+        intent = self.classify_intent(query)
+        self.logger.info(f"🎯 Query intent: {intent}")
+        
+        # Determine tools needed
+        tools = self._determine_tools(query, intent, query_types)
+        
+        # Create execution steps
+        steps = self._create_execution_steps(query, intent, tools)
+        
+        # Determine combination strategy
+        strategy = self._determine_strategy(intent, tools)
+        
+        # Calculate confidence
+        confidence = self._calculate_confidence(intent, tools)
+        
+        return AgentPlan(
+            query=query,
+            intent=intent,
+            tools_to_use=tools,
+            execution_steps=steps,
+            combine_strategy=strategy,
+            confidence=confidence
+        )
+    
+    def _determine_tools(self, query: str, intent: str, query_types: List[str]) -> List[str]:
+        """Determine which tools/services to use"""
+        tools = []
+        query_lower = query.lower()
+        
+        # Always use RAG for document search
+        tools.append("rag_search")
+        
+        # Add based on intent
+        if intent in ["case_law", "statutory"] or "legal_search" in query_types:
+            tools.append("external_legal_search")
+        
+        if "immigration" in query_types or "uscis" in query_lower:
+            tools.append("immigration_apis")
+        
+        if intent == "data_lookup" or "government_data" in query_types:
+            tools.append("government_apis")
+        
+        if intent in ["analysis", "multi_step"]:
+            tools.append("comprehensive_analysis")
+        
+        return tools
+    
+    def _create_execution_steps(self, query: str, intent: str, tools: List[str]) -> List[Dict]:
+        """Create ordered execution steps"""
+        steps = []
+        
+        # Phase 1: Parallel information gathering
+        if "rag_search" in tools:
+            steps.append({
+                "phase": "gather",
+                "tool": "rag_search",
+                "parallel": True,
+                "params": {"k": 20}
+            })
+        
+        if "external_legal_search" in tools:
+            steps.append({
+                "phase": "gather",
+                "tool": "external_legal_search",
+                "parallel": True,
+                "params": {"limit": 10}
+            })
+        
+        # Phase 2: Sequential specialized lookups
+        if "immigration_apis" in tools:
+            steps.append({
+                "phase": "lookup",
+                "tool": "immigration_apis",
+                "parallel": False,
+                "params": {}
+            })
+        
+        if "government_apis" in tools:
+            steps.append({
+                "phase": "lookup",
+                "tool": "government_apis",
+                "parallel": False,
+                "params": {}
+            })
+        
+        # Phase 3: Analysis (if needed)
+        if "comprehensive_analysis" in tools:
+            steps.append({
+                "phase": "analyze",
+                "tool": "comprehensive_analysis",
+                "parallel": False,
+                "params": {"use_previous": True}
+            })
+        
+        return steps
+    
+    def _determine_strategy(self, intent: str, tools: List[str]) -> str:
+        """Determine result combination strategy"""
+        if len(tools) == 1:
+            return "single"
+        
+        if intent == "analysis":
+            return "hierarchical"
+        
+        if "external_legal_search" in tools and "rag_search" in tools:
+            return "legal_synthesis"
+        
+        return "parallel_merge"
+    
+    def _calculate_confidence(self, intent: str, tools: List[str]) -> float:
+        """Calculate confidence in the plan"""
+        base_confidence = 0.7
+        
+        # Adjust based on intent clarity
+        if intent in ["statutory", "case_law", "factual"]:
+            base_confidence += 0.1
+        elif intent == "multi_step":
+            base_confidence -= 0.1
+        
+        # Adjust based on tool availability
+        if len(tools) > 1:
+            base_confidence += 0.05 * min(len(tools) - 1, 3)
+        
+        return min(base_confidence, 0.95)
+
 class QueryProcessor:
     """
     Complete query processing service with enhanced timeout handling, class-based architecture,
@@ -235,6 +531,11 @@ class QueryProcessor:
         self.timeout_handler = AdaptiveTimeoutHandler()
         self.active_queries = {}  # Track active queries for monitoring
         
+        # Initialize agent and enhanced components
+        self.agent = QueryAgent()
+        self.embeddings = BetterEmbeddings() if EMBEDDINGS_AVAILABLE else None
+        self.reranker = CrossEncoderReranker() if EMBEDDINGS_AVAILABLE else None
+        
         # Processing metrics
         self.processing_stats = {
             'total_queries': 0,
@@ -245,6 +546,10 @@ class QueryProcessor:
         }
         
         self.logger.info("🚀 Complete QueryProcessor initialized successfully")
+        if self.embeddings:
+            self.logger.info("✅ Enhanced embeddings enabled")
+        if self.reranker:
+            self.logger.info("✅ Cross-encoder reranking enabled")
     
     def _init_services(self):
         """Initialize all external services"""
@@ -305,7 +610,8 @@ class QueryProcessor:
         use_enhanced_rag: bool = True,
         document_id: str = None, 
         search_external: bool = None,
-        progress_callback: Optional[Callable] = None
+        progress_callback: Optional[Callable] = None,
+        use_agent: bool = False  # New parameter for agent-based processing
     ) -> QueryResponse:
         """
         MAIN METHOD: Process query with enhanced timeout handling, progress tracking,
@@ -441,6 +747,23 @@ class QueryProcessor:
                 sources_searched=["timeout_during_search"],
                 retrieval_method="search_timeout"
             )
+        
+        # Alternative: Use agent-based search if enabled and available
+        if use_agent and self.agent:
+            progress_tracker.update_stage(
+                ProcessingStage.SEARCHING_INTERNAL,
+                "Using intelligent agent for search planning...",
+                30
+            )
+            try:
+                search_results = await asyncio.wait_for(
+                    self._perform_agent_based_search(query_context, progress_tracker),
+                    timeout=internal_search_timeout * 1.5  # Give agent more time
+                )
+                self.logger.info("✅ Agent-based search completed successfully")
+            except asyncio.TimeoutError:
+                self.logger.warning("Agent-based search timed out, falling back to standard search")
+                # Fall back to standard search results
         
         progress_tracker.update_stage(
             ProcessingStage.SEARCHING_INTERNAL,
@@ -1103,6 +1426,157 @@ class QueryProcessor:
             retrieval_method=retrieval_method
         )
     
+    async def _perform_agent_based_search(
+        self, 
+        query_context: QueryContext,
+        progress_tracker: ProgressTracker
+    ) -> SearchResults:
+        """
+        Perform search using agent planning and better embeddings
+        """
+        # Create agent plan
+        plan = self.agent.plan_execution(
+            query_context.original_question,
+            query_context.query_types
+        )
+        
+        self.logger.info(f"🤖 Agent plan: {plan.intent} using {plan.tools_to_use}")
+        
+        # Initialize results
+        internal_results = []
+        external_context = None
+        external_source_info = []
+        sources_searched = []
+        
+        # Execute plan steps
+        for step in plan.execution_steps:
+            if step["tool"] == "rag_search":
+                # Enhanced RAG search with reranking
+                results = await self._enhanced_rag_search(
+                    query_context.original_question,
+                    query_context.user_id,
+                    query_context.search_scope,
+                    k=step["params"].get("k", 20)
+                )
+                internal_results.extend(results)
+                sources_searched.append("enhanced_rag")
+                
+            elif step["tool"] == "external_legal_search":
+                # External search
+                ext_context, ext_info = await self._search_external_databases(
+                    query_context.original_question,
+                    query_context.query_types
+                )
+                if ext_context:
+                    external_context = ext_context
+                    external_source_info = ext_info
+                    sources_searched.append("external_legal")
+        
+        return SearchResults(
+            internal_results=internal_results,
+            external_context=external_context,
+            external_source_info=external_source_info,
+            sources_searched=sources_searched,
+            retrieval_method=f"agent_{plan.combine_strategy}"
+        )
+    
+    async def _enhanced_rag_search(
+        self,
+        query: str,
+        user_id: str,
+        search_scope: str,
+        k: int = 20
+    ) -> List[Tuple]:
+        """
+        Enhanced RAG search with better embeddings and reranking
+        """
+        # Step 1: Get initial results (cast wider net)
+        initial_k = k * 2  # Get more candidates for reranking
+        
+        results, sources, method = await asyncio.to_thread(
+            combined_search,
+            query,
+            user_id,
+            search_scope,
+            "",  # conversation context
+            True,  # enhanced rag
+            initial_k,
+            None  # document_id
+        )
+        
+        if not results:
+            return []
+        
+        # Step 2: Rerank if available
+        if self.reranker and len(results) > k:
+            self.logger.info(f"🎯 Reranking {len(results)} results to top {k}")
+            results = self.reranker.rerank(query, results, top_k=k)
+        else:
+            results = results[:k]
+        
+        # Step 3: Apply MMR for diversity (if we have embeddings)
+        if self.embeddings and len(results) > 5:
+            results = self._apply_mmr(query, results, lambda_param=0.7, top_k=min(k, 10))
+        
+        return results
+    
+    def _apply_mmr(
+        self,
+        query: str,
+        documents: List[Tuple],
+        lambda_param: float = 0.5,
+        top_k: int = 10
+    ) -> List[Tuple]:
+        """
+        Apply Maximal Marginal Relevance to reduce redundancy
+        """
+        if not self.embeddings:
+            return documents[:top_k]
+        
+        # Get query embedding
+        query_embedding = self.embeddings.embed_query(query)
+        
+        # Get document texts
+        doc_texts = [doc[0].page_content if hasattr(doc[0], 'page_content') else str(doc[0]) 
+                    for doc in documents]
+        
+        # Get document embeddings
+        doc_embeddings = self.embeddings.embed_documents(doc_texts)
+        
+        # MMR selection
+        selected = []
+        candidates = list(range(len(documents)))
+        
+        for _ in range(min(top_k, len(documents))):
+            mmr_scores = []
+            
+            for idx in candidates:
+                # Relevance to query
+                relevance = np.dot(query_embedding, doc_embeddings[idx])
+                
+                # Max similarity to selected docs
+                if selected:
+                    similarities = [np.dot(doc_embeddings[idx], doc_embeddings[s]) 
+                                  for s in selected]
+                    diversity_penalty = max(similarities)
+                else:
+                    diversity_penalty = 0
+                
+                # MMR score
+                mmr_score = lambda_param * relevance - (1 - lambda_param) * diversity_penalty
+                mmr_scores.append(mmr_score)
+            
+            # Select best
+            best_idx = candidates[np.argmax(mmr_scores)]
+            selected.append(best_idx)
+            candidates.remove(best_idx)
+        
+        # Return selected documents
+        reranked = [documents[i] for i in selected]
+        self.logger.info(f"📊 MMR selected {len(reranked)} diverse results")
+        
+        return reranked
+    
     async def _search_external_databases(self, question: str, query_types: List[str]) -> Tuple[Optional[str], List[Dict]]:
         """FIXED: Fast external search with timeout protection"""
         
@@ -1317,8 +1791,8 @@ COMPREHENSIVE COUNTRY CONDITIONS RESEARCH FOR {country.upper()}:
                                                     'defense', 'prosecution', 'analyze', 'evaluate'])
                 
                 if is_complex_analysis:
-                    ai_timeout = 60  # 60 seconds for complex legal analysis
-                    self.logger.info("⚖️ Complex legal analysis detected - using 60s timeout")
+                    ai_timeout = 90  # 90 seconds for complex legal analysis
+                    self.logger.info("⚖️ Complex legal analysis detected - using 90s timeout")
                 else:
                     ai_timeout = 30  # 30 seconds for normal queries
                 
