@@ -114,6 +114,26 @@ class RAGService:
                     sources_searched.append("user_container")
                     self.logger.info(f"[COMBINED_SEARCH] User container: {len(user_results)} results")
             
+            # 🚀 EXTERNAL API SEARCH - NEW SECTION
+            if search_scope == "all":
+                try:
+                    self.logger.info("🔍 Searching external APIs...")
+                    external_results = self._search_external_apis(query, conversation_context)
+                    
+                    if external_results:
+                        # Add source type metadata
+                        for doc, score in external_results:
+                            doc.metadata['source_type'] = 'external_api'
+                            all_results.append((doc, score))
+                        
+                        sources_searched.append("external_apis")
+                        self.logger.info(f"[COMBINED_SEARCH] External APIs: {len(external_results)} results")
+                    else:
+                        self.logger.warning("⚠️ External APIs returned no results")
+                        
+                except Exception as e:
+                    self.logger.error(f"❌ External API search failed: {e}")
+            
             # Post-process results
             if use_enhanced:
                 # Remove duplicates
@@ -175,6 +195,88 @@ class RAGService:
             
         except Exception as e:
             self.logger.error(f"❌ User container search failed: {e}")
+            return []
+    
+    def _search_external_apis(self, query: str, context: str) -> List[Tuple]:
+        """Search external APIs and return results in document format"""
+        external_results = []
+        
+        try:
+            # Import external search function
+            from ..services.external_db_service import search_external_databases
+            
+            # Determine which databases to search based on query
+            databases = []
+            query_lower = query.lower()
+            
+            # Congressional queries
+            if any(term in query_lower for term in ['bill', 'congress', 'house', 'senate', 'legislation']):
+                databases.extend(['congress_gov', 'federal_register'])
+            
+            # Case law queries  
+            if any(term in query_lower for term in ['case', 'court', 'supreme', 'decision', 'ruling']):
+                databases.extend(['harvard_caselaw', 'courtlistener'])
+            
+            # Business queries
+            if any(term in query_lower for term in ['sec', 'corporate', 'filing', 'enforcement']):
+                databases.extend(['sec_edgar'])
+            
+            # Immigration queries
+            if any(term in query_lower for term in ['immigration', 'visa', 'asylum', 'uscis']):
+                databases.extend(['uscis_data', 'immigration_court'])
+            
+            if not databases:
+                # Default to case law databases for legal queries
+                databases = ['harvard_caselaw', 'courtlistener']
+            
+            self.logger.info(f"🔍 Searching external APIs: {databases}")
+            
+            # Search external databases with longer timeout
+            api_results = search_external_databases(query, databases, None)
+            
+            # Convert external results to Document format
+            from langchain.docstore.document import Document
+            
+            for i, result in enumerate(api_results[:10]):  # Limit to 10 external results
+                # Create document from external result
+                content = f"""{result.get('title', 'Unknown Title')}
+
+{result.get('description', result.get('preview', result.get('snippet', 'No description available')))}
+
+Source: {result.get('source_database', 'Unknown')}
+Date: {result.get('date', 'Unknown')}
+Citation: {result.get('citation', 'No citation')}
+Court: {result.get('court', 'N/A')}
+URL: {result.get('url', 'No URL')}"""
+                
+                doc = Document(
+                    page_content=content,
+                    metadata={
+                        'source': result.get('source_database', 'external'),
+                        'title': result.get('title', 'Unknown'),
+                        'url': result.get('url', ''),
+                        'source_type': 'external_api',
+                        'external_database': result.get('source_database'),
+                        'relevance_score': result.get('relevance_score', 0.7),
+                        'date': result.get('date', ''),
+                        'court': result.get('court', ''),
+                        'citation': result.get('citation', '')
+                    }
+                )
+                
+                # Use relevance score or default
+                score = result.get('relevance_score', 0.7)
+                external_results.append((doc, score))
+            
+            if external_results:
+                self.logger.info(f"✅ External APIs returned {len(external_results)} results")
+            else:
+                self.logger.warning("⚠️ External APIs found no relevant results")
+                
+            return external_results
+            
+        except Exception as e:
+            self.logger.error(f"❌ External API search failed: {e}")
             return []
     
     def _enhanced_retrieval(self, db: Chroma, query: str, context: str, k: int) -> List[Tuple]:
