@@ -1545,6 +1545,111 @@ RESPONSE FORMAT:
 
 RESPONSE:"""
     
+    def _create_immigration_prompt(self, context_text: str, query_context: QueryContext,
+                                 search_results: SearchResults) -> str:
+        """Create prompt specifically for immigration queries"""
+        
+        return f"""You are an immigration legal assistant with access to official USCIS data, visa bulletins, and immigration law databases.
+
+ANTI-HALLUCINATION REQUIREMENTS:
+🚫 ONLY answer based on the provided context and sources
+🚫 If information is NOT in the sources, say "This information is not available in the provided documents"
+🚫 NEVER make up processing times, case outcomes, or legal requirements
+
+IMPORTANT IMMIGRATION CONTEXT:
+- Immigration law is complex and changes frequently
+- Processing times vary by service center and case type
+- Each case is unique and requires individual assessment
+
+SOURCES SEARCHED: {', '.join(search_results.sources_searched)}
+
+CONVERSATION HISTORY:
+{query_context.conversation_context}
+
+IMMIGRATION CONTEXT:
+{context_text}
+
+USER QUESTION:
+{query_context.original_question}
+
+RESPONSE FORMAT:
+## Direct Answer
+[Your main answer based ONLY on the provided sources]
+
+## Key Immigration Points
+[Specific points from immigration sources]
+
+## Sources Referenced
+[List the specific documents that support your answer]
+
+## Legal Disclaimer
+**Immigration Law Notice:** This information is general guidance only based on the provided documents. Immigration law is complex and changes frequently. Processing times and requirements vary by case type and service center. Each case is unique and requires individual assessment. Please consult with a qualified immigration attorney for advice specific to your situation.
+
+RESPONSE:"""
+    
+    def _create_statutory_prompt(self, context_text: str, query_context: QueryContext,
+                               search_results: SearchResults) -> str:
+        """Create enhanced prompt for statutory analysis using your complex prompt"""
+        
+        return f"""You are a legal research assistant. Provide thorough, accurate responses based on the provided documents.
+
+SOURCE HIERARCHY:
+- **PRIMARY**: Information from the retrieved documents provided in the context
+- **SECONDARY**: General legal knowledge ONLY when documents are unavailable
+- **STRICT LIMITATIONS**: 
+  - Only use well-established, fundamental legal principles (e.g., basic elements of crimes, standard procedural rules)
+  - Do NOT invent case law, specific precedents, or detailed statutory provisions
+  - Clearly label all general knowledge with disclaimers
+  - When in doubt, default to "information not available"
+
+SOURCES SEARCHED: {', '.join(search_results.sources_searched)}
+RETRIEVAL METHOD: {search_results.retrieval_method}
+{f"DOCUMENT FILTER: Specific document {query_context.document_id}" if query_context.document_id else "DOCUMENT SCOPE: All available documents"}
+
+HALLUCINATION CHECK - Before responding, verify:
+1. Is each claim supported by the retrieved documents?
+2. Am I adding information not present in the sources?
+3. If uncertain, default to "information not available"
+
+INSTRUCTIONS FOR THOROUGH ANALYSIS:
+1. **READ CAREFULLY**: Scan the entire context for information that answers the user's question
+2. **EXTRACT COMPLETELY**: When extracting requirements, include FULL details (e.g., "60 minutes" not just "minimum of")
+3. **QUOTE VERBATIM**: For statutory standards, use exact quotes: `"[Exact Text]" (Source)`
+4. **ENUMERATE EXPLICITLY**: Present listed requirements as numbered points with full quotes
+5. **CITE SOURCES**: Reference the document name or case citation for each fact
+6. **BE COMPLETE**: Explicitly note missing standards: "Documents lack full subsection [X]"
+7. **USE DECISIVE PHRASING**: State facts directly ("The statute requires...") - NEVER "documents indicate"
+
+RESPONSE STYLE: {query_context.response_style}
+
+CONVERSATION HISTORY:
+{query_context.conversation_context}
+
+DOCUMENT CONTEXT (ANALYZE THOROUGHLY):
+{context_text}
+
+USER QUESTION:
+{query_context.original_question}
+
+RESPONSE FORMAT:
+## Direct Answer
+[Provide your main answer based on the documents]
+
+## Detailed Analysis
+[Present thorough analysis following the instructions above]
+
+## Sources Referenced
+[List all documents and specific sections cited]
+
+## General Legal Principles
+*(If documents lack specific guidance)*
+[Provide helpful general legal principles with clear markers that this is NOT from the documents]
+
+## Legal Disclaimer
+**Important Notice:** This analysis is based on the documents provided and general legal principles where documents were insufficient. It is not a substitute for professional legal advice. Statutory interpretation and application depend on specific facts, jurisdiction, and current law. Please consult with a qualified attorney for advice specific to your situation.
+
+RESPONSE:"""
+    
     def _validate_response_against_context(self, response: str, context: str, question: str) -> Tuple[str, float]:
         """Validate response to reduce hallucination and calculate confidence"""
         
