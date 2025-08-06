@@ -350,3 +350,4 @@ async def test_external_apis(query: str = "federal court contract law"):
             "error": str(e),
             "timestamp": datetime.utcnow().isoformat()
         }
+
