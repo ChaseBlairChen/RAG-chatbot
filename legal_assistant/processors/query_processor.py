@@ -568,6 +568,84 @@ class QueryProcessor:
             response_style=response_style,
             conversation_context=conversation_context
         )
+
+    async def _search_case_law_databases_direct(self, question: str) -> Tuple[Optional[str], List[Dict]]:
+        """Direct case law database search with timeout protection"""
+        
+        try:
+            from ..services.external_db_service import external_databases
+            
+            # Use Harvard Caselaw and CourtListener for case law
+            case_law_dbs = ['harvard_caselaw', 'courtlistener']
+            available_dbs = [db for db in case_law_dbs if db in external_databases and external_databases[db]]
+            
+            if not available_dbs:
+                self.logger.warning("❌ No case law databases available")
+                return None, []
+            
+            self.logger.info(f"🏛️ Searching case law databases: {available_dbs}")
+            
+            all_results = []
+            
+            for db_name in available_dbs:
+                try:
+                    db_interface = external_databases[db_name]
+                    
+                    # Search with federal court filters
+                    filters = {'court_level': 'federal'} if 'federal' in question.lower() else {}
+                    
+                    db_results = await asyncio.wait_for(
+                        asyncio.to_thread(db_interface.search, question, filters),
+                        timeout=5  # 5 second timeout
+                    )
+                    
+                    if db_results:
+                        self.logger.info(f"✅ {db_name}: Found {len(db_results)} results")
+                        all_results.extend(db_results[:5])
+                        
+                except asyncio.TimeoutError:
+                    self.logger.warning(f"⏰ {db_name}: Search timed out")
+                except Exception as e:
+                    self.logger.error(f"❌ {db_name}: Search failed - {e}")
+            
+            if all_results:
+                # Format case law results
+                formatted_text = "\n\n## FEDERAL COURT CASE LAW:\n"
+                
+                for result in all_results[:6]:
+                    title = result.get('title', 'Unknown Case')
+                    court = result.get('court', 'Unknown Court')
+                    date = result.get('date', '')
+                    preview = result.get('preview', result.get('snippet', ''))
+                    
+                    formatted_text += f"\n**{title}**\n"
+                    formatted_text += f"Court: {court}\n"
+                    if date:
+                        formatted_text += f"Date: {date}\n"
+                    if preview:
+                        formatted_text += f"Summary: {preview[:200]}...\n"
+                    formatted_text += "---\n"
+                
+                source_info = [{
+                    'file_name': result.get('title', 'Federal Court Case'),
+                    'source_type': 'external_case_law',
+                    'database': result.get('source_database', 'unknown'),
+                    'relevance': 0.9,
+                    'url': result.get('url', ''),
+                    'court': result.get('court', ''),
+                    'date': result.get('date', '')
+                } for result in all_results[:6]]
+                
+                self.logger.info(f"🏛️ Case law search SUCCESS: {len(all_results)} results found")
+                return formatted_text, source_info
+            
+            else:
+                self.logger.warning("❌ No case law results found")
+                return None, []
+                
+        except Exception as e:
+            self.logger.error(f"❌ Case law search failed: {e}")
+            return None, []
     
     async def _build_query_context_async(self, question: str, session_id: str, user_id: Optional[str],
                                        search_scope: str, response_style: str, use_enhanced_rag: bool,
@@ -609,6 +687,31 @@ class QueryProcessor:
             query_types.append(QueryType.GENERAL.value)
         
         return query_types
+
+
+    def _detect_federal_court_query(self, question: str) -> bool:
+        """Detect queries specifically about federal court cases"""
+        federal_court_patterns = [
+            r'\bfederal\s+(?:district\s+)?court\b',
+            r'\bU\.S\.\s+District\s+Court\b',
+            r'\bfederal\s+(?:judge|ruling|decision|case)\b',
+            r'\bdistrict\s+court\s+(?:decision|ruling)\b',
+            r'\bcircuit\s+court\s+(?:decision|ruling)\b',
+            r'\bfederal\s+court\s+(?:decision|ruling|case)\b',
+            r'\bfederal\s+appeals\s+court\b',
+            r'\bU\.S\.\s+Court\s+of\s+Appeals\b'
+        ]
+        
+        found_patterns = []
+        for pattern in federal_court_patterns:
+            if re.search(pattern, question, re.IGNORECASE):
+                found_patterns.append(pattern)
+        
+        if found_patterns:
+            self.logger.info(f"🏛️ Federal court patterns found: {len(found_patterns)} matches")
+            return True
+        
+        return False
     
     def _detect_statutory_question(self, question: str) -> bool:
         """Detect if this is a statutory/regulatory question"""
@@ -640,6 +743,7 @@ class QueryProcessor:
     def _detect_legal_search_intent(self, question: str) -> bool:
         """Detect if this question would benefit from external legal database search"""
         legal_search_indicators = [
+            # Keep all existing patterns
             r'\bcase\s*law\b', r'\bcases?\b', r'\bprecedent\b', r'\bruling\b',
             r'\bdecision\b', r'\bcourt\s*opinion\b', r'\bjudgment\b',
             r'\bmiranda\b', r'\bconstitutional\b', r'\bamendment\b',
@@ -647,8 +751,23 @@ class QueryProcessor:
             r'\blegal\s*research\b', r'\bfind\s*cases?\b', r'\blook\s*up\s*law\b',
             r'\bsearch\s*(?:for\s*)?(?:cases?|law|precedent)\b',
             r'\bliability\b', r'\bnegligence\b', r'\bcontract\s*law\b', r'\btort\b',
+            
+            # Add these new patterns:
+            r'\bfederal\s+court\b', r'\bfederal\s+district\b', r'\bfederal\s+rulings?\b',
+            r'\bcourt\s+decisions?\b', r'\bcourt\s+rulings?\b', r'\bjudicial\s+decisions?\b',
+            r'\bfederal\s+cases?\b', r'\bdistrict\s+court\s+decisions?\b',
+            
+            # Specific legal areas:
+            r'\bcontract\s+disputes?\b', r'\bintellectual\s+property\s+(?:rulings?|cases?)\b',
+            r'\bemployment\s+discrimination\s+cases?\b', r'\bcivil\s+rights\s+(?:violations?|cases?)\b',
+            r'\bantitrust\s+(?:cases?|violations?|rulings?)\b',
+            
+            # Recent case law:
+            r'\brecent\s+(?:federal\s+)?court\s+rulings?\b',
+            r'\brecent\s+(?:federal\s+)?(?:cases?|decisions?)\b'
         ]
         
+        # Rest of method stays the same
         return any(re.search(pattern, question, re.IGNORECASE) for pattern in legal_search_indicators)
     
     def _detect_government_data_need(self, question: str) -> bool:
@@ -788,18 +907,35 @@ class QueryProcessor:
             )
     
     def _should_search_external(self, question: str, search_scope: str, query_types: List[str]) -> bool:
-        """Determine if comprehensive government databases should be searched"""
+        """FIXED: Enhanced decision making for external search"""
         
         # Don't search external if user explicitly wants only their documents
         if search_scope == "user_only":
             return False
         
-        # FIXED: Disable external search for EPA queries to prevent timeouts
-        if any(term in question.lower() for term in ['epa', 'environmental', 'air quality', 'violation']):
+        # FIXED: More specific EPA filtering instead of broad "violation" blocking
+        epa_specific_queries = [
+            'epa violation', 'environmental violation', 'epa enforcement data', 
+            'environmental compliance', 'epa citation database', 'environmental penalty data'
+        ]
+        if any(term in question.lower() for term in epa_specific_queries):
+            self.logger.info("🌱 EPA-specific query detected - skipping external search")
             return False
         
-        # Check for government data needs
-        if self._detect_government_data_need(question):
+        # POSITIVE: Force external search for federal court queries
+        if self._detect_federal_court_query(question):
+            self.logger.info("🏛️ Federal court query detected - enabling external search")
+            return True
+        
+        # POSITIVE: Force external search for legal research areas
+        legal_research_areas = [
+            'contract disputes', 'intellectual property', 'employment discrimination',
+            'civil rights violations', 'antitrust', 'securities law', 'patent law',
+            'copyright law', 'constitutional law', 'tort law', 'criminal law'
+        ]
+        
+        if any(area in question.lower() for area in legal_research_areas):
+            self.logger.info("⚖️ Legal research area detected - enabling external search")
             return True
         
         # Check for legal areas that benefit from comprehensive search
@@ -807,13 +943,13 @@ class QueryProcessor:
         if any(area in query_types for area in comprehensive_areas):
             return True
         
-        # Check for enforcement/compliance questions
+        # Check for enforcement/compliance questions (but not EPA)
         enforcement_keywords = ['enforcement', 'compliance', 'citation', 'penalty', 'recall']
-        if any(keyword in question.lower() for keyword in enforcement_keywords):
+        if any(keyword in question.lower() for keyword in enforcement_keywords) and 'epa' not in question.lower():
             return True
         
         return self._detect_legal_search_intent(question) or self._detect_statutory_question(question)
-    
+        
     async def _perform_searches_with_progress(
         self, 
         query_context: QueryContext, 
@@ -917,10 +1053,18 @@ class QueryProcessor:
     async def _search_external_databases(self, question: str, query_types: List[str]) -> Tuple[Optional[str], List[Dict]]:
         """FIXED: Fast external search with timeout protection"""
         
-        # Skip external search for EPA queries - they're slow and return no useful results
-        if any(term in question.lower() for term in ['epa', 'environmental', 'air quality', 'violation']):
-            self.logger.info("🚀 EPA query detected - skipping slow external APIs")
+        # Only skip for very specific EPA data queries
+        if any(term in question.lower() for term in ['epa enforcement data', 'epa violation database']):
+            self.logger.info("🌱 EPA data query - skipping external APIs")
             return None, []
+        
+        # PRIORITY: Case law queries get special treatment
+        case_law_indicators = ['court', 'ruling', 'decision', 'case law', 'judicial']
+        is_case_law_query = any(indicator in question.lower() for indicator in case_law_indicators)
+        
+        if is_case_law_query:
+            self.logger.info("🏛️ Case law query - using dedicated case law search")
+            return await self._search_case_law_databases_direct(question)
         
         try:
             from ..services.external_db_service import get_fast_external_optimizer
@@ -2060,7 +2204,7 @@ def _create_statutory_prompt(context_text: str, question: str, response_style: s
 
 SOURCE HIERARCHY:
 - **PRIMARY**: Information from the retrieved documents provided in the context
-- **SECONDARY**: General legal knowledge ONLY when documents are unavailable
+- **SECONDARY**: General legal knowledge ONLY when documents are unavailable or contain insufficient information
 - **STRICT LIMITATIONS**: 
   - Only use well-established, fundamental legal principles (e.g., basic elements of crimes, standard procedural rules)
   - Do NOT invent case law, specific precedents, or detailed statutory provisions
@@ -2107,12 +2251,29 @@ LEGAL ANALYSIS FRAMEWORK:
 - Avoid making definitive statements about jurisdiction-specific rules not in the documents
 - Clearly distinguish between document-based facts and general legal knowledge
 
+GENERAL LEGAL KNOWLEDGE GUIDANCE:
+When the provided documents contain little or no information relevant to the user's question:
+1. **FIRST ACKNOWLEDGE**: State clearly that the documents do not contain sufficient information
+2. **THEN PROVIDE**: Offer helpful general legal information from pre-trained knowledge
+3. **USE CLEAR MARKERS**: Begin such sections with phrases like:
+   - "While not found in your documents, general legal principles suggest..."
+   - "Based on standard legal practice (not from your documents)..."
+   - "From general legal knowledge..."
+4. **STRUCTURE THE RESPONSE**:
+   - Start with what IS in the documents (even if minimal)
+   - Clearly transition to general knowledge section
+   - Provide useful, accurate legal information
+   - End with appropriate disclaimers
+
 ADDITIONAL GUIDANCE:
-- After fully answering based on the provided documents, if relevant key legal principles under Washington state law, any other U.S. state law, or U.S. federal law are not found in the sources, you may add a clearly labeled general legal principles disclaimer.
-- This disclaimer must clearly state it is NOT based on the provided documents but represents general background knowledge of applicable Washington state, other state, and federal law.
-- Do NOT use this disclaimer to answer the user's question directly; it serves only as supplementary context.
-- This disclaimer must explicitly state that these principles are not found in the provided documents but are usually relevant legal background.
-- Format this disclaimer distinctly at the end of the response under a heading such as "GENERAL LEGAL PRINCIPLES DISCLAIMER."
+- After fully answering based on the provided documents, if relevant key legal principles under Washington state law, any other U.S. state law, or U.S. federal law are not found in the sources, you may add a clearly labeled general legal principles section.
+- This section should help answer the user's question using your pre-trained legal knowledge
+- Be explicit that this information is NOT from the provided documents
+- Include standard legal disclaimers about seeking professional legal advice
+- Format this section distinctly under a heading such as:
+
+**GENERAL LEGAL INFORMATION** 
+*(Not from provided documents - based on general legal knowledge)*
 
 RESPONSE:"""
 
@@ -2121,10 +2282,20 @@ def _create_regular_prompt(context_text: str, question: str, response_style: str
     
     return f"""You are a legal research assistant with access to comprehensive legal databases.
 
-ANTI-HALLUCINATION REQUIREMENTS:
-🚫 ONLY answer based on the provided context and sources
-🚫 If information is NOT in the sources, say "This information is not available in the provided documents"
-🚫 NEVER make up facts, dates, case names, or legal citations
+PRIMARY RESPONSE REQUIREMENTS:
+✅ FIRST answer based on the provided context and sources
+✅ If documents contain relevant information, cite it specifically
+✅ Be clear about what comes from documents vs. general knowledge
+
+WHEN DOCUMENTS LACK INFORMATION:
+If the provided documents don't contain sufficient information to answer the question:
+1. **STATE CLEARLY**: "The provided documents do not contain [specific information requested]"
+2. **OFFER HELP**: Provide useful general legal information from your training
+3. **USE MARKERS**: Clearly mark general knowledge sections with phrases like:
+   - "Based on general legal principles (not from your documents)..."
+   - "From standard legal practice..."
+   - "General legal information suggests..."
+4. **INCLUDE DISCLAIMERS**: Always note that general information should be verified with legal counsel
 
 RESPONSE STYLE: {response_style}
 
@@ -2138,14 +2309,21 @@ USER QUESTION:
 {question}
 
 RESPONSE FORMAT:
-## Direct Answer
-[Your main answer based ONLY on the provided sources]
+## Information from Your Documents
+[What the provided documents say about this topic - even if limited]
 
-## Key Supporting Points
-[Bullet points from the sources that support your answer]
+## Answer Based on Documents
+[Your main answer based on the provided sources, or note if documents don't contain the answer]
+
+## General Legal Information
+*(If documents are insufficient)*
+[Helpful legal information from general knowledge, clearly marked as not from documents]
 
 ## Sources Referenced
-[List the specific documents that support your answer]
+[List the specific documents that support your answer, if any]
+
+## Legal Disclaimer
+*This response includes general legal information where your documents did not contain specific answers. For legal advice specific to your situation, please consult with a qualified attorney.*
 
 RESPONSE:"""
 
