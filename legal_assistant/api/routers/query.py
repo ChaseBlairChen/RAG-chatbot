@@ -1,5 +1,5 @@
-# legal_assistant/api/routers/query.py - UPDATED FOR ASYNC PROCESSOR
-"""Query endpoints - Updated to use new async QueryProcessor with external search capabilities"""
+# legal_assistant/api/routers/query.py - COMPLETE FIXED VERSION
+"""Query endpoints - Updated to use new async QueryProcessor with external search capabilities and fixed reporting"""
 import uuid
 import logging
 from datetime import datetime
@@ -64,7 +64,29 @@ async def ask_question(query: Query, current_user: User = Depends(get_current_us
             progress_callback=None  # Could add WebSocket progress updates later
         )
         
-        logger.info(f"✅ Async query processing completed - External APIs: {'✅ Used' if 'external' in response.sources_searched else '❌ Not used'}")
+        # FIXED: Better external API reporting
+        external_api_used = any(
+            'external' in source.lower() or 
+            'comprehensive' in source.lower() or
+            'congress' in source.lower() or
+            'federal_register' in source.lower() or
+            'harvard' in source.lower() or
+            'courtlistener' in source.lower() or
+            'justia' in source.lower()
+            for source in response.sources_searched
+        )
+        
+        # Count external sources in response
+        external_sources_count = len([
+            s for s in (response.sources or []) 
+            if s.get('source_type') in ['external_legal', 'external_fast', 'external_api']
+        ])
+        
+        logger.info(f"✅ Async query processing completed - External APIs: {'✅ Used' if external_api_used else '❌ Not used'}")
+        logger.info(f"   Sources searched: {response.sources_searched}")
+        logger.info(f"   External sources found: {external_sources_count}")
+        logger.info(f"   Total sources in response: {len(response.sources or [])}")
+        logger.info(f"   Confidence score: {response.confidence_score:.2f}")
         
         return response
         
@@ -89,6 +111,8 @@ async def ask_question(query: Query, current_user: User = Depends(get_current_us
             # Add note about fallback
             if response.response:
                 response.response += "\n\n*Note: Using basic search mode - advanced features temporarily unavailable.*"
+            
+            logger.info("🔄 Legacy processor completed successfully")
             
             return response
             
@@ -155,6 +179,22 @@ async def ask_question_debug(query: Query):
             progress_callback=None
         )
         
+        # FIXED: Better debug logging
+        external_api_used = any(
+            'external' in source.lower() or 
+            'comprehensive' in source.lower() or
+            'congress' in source.lower() or
+            'federal_register' in source.lower() or
+            'harvard' in source.lower() or
+            'courtlistener' in source.lower() or
+            'justia' in source.lower()
+            for source in response.sources_searched
+        )
+        
+        logger.info(f"🔬 Debug processing completed - External APIs: {'✅ Used' if external_api_used else '❌ Not used'}")
+        logger.info(f"   Debug sources searched: {response.sources_searched}")
+        logger.info(f"   Debug retrieval method: {response.retrieval_method}")
+        
         return response
         
     except Exception as e:
@@ -171,7 +211,6 @@ async def ask_question_debug(query: Query):
             retrieval_method="debug_error"
         )
 
-# Add new endpoint for testing external search specifically
 @router.post("/ask-with-external", response_model=QueryResponse)
 async def ask_question_force_external(query: Query, current_user: User = Depends(get_current_user)):
     """Force external database search for testing"""
@@ -179,6 +218,16 @@ async def ask_question_force_external(query: Query, current_user: User = Depends
     
     session_id = query.session_id or str(uuid.uuid4())
     user_id = query.user_id or current_user.user_id
+    
+    # Initialize conversation if needed
+    if session_id not in conversations:
+        conversations[session_id] = {
+            "messages": [],
+            "created_at": datetime.utcnow(),
+            "last_accessed": datetime.utcnow()
+        }
+    else:
+        conversations[session_id]["last_accessed"] = datetime.utcnow()
     
     try:
         from ...processors.query_processor import get_query_processor
@@ -198,8 +247,106 @@ async def ask_question_force_external(query: Query, current_user: User = Depends
             progress_callback=None
         )
         
+        # Enhanced logging for forced external search
+        external_sources_count = len([
+            s for s in (response.sources or []) 
+            if s.get('source_type') in ['external_legal', 'external_fast', 'external_api']
+        ])
+        
+        logger.info(f"🚀 FORCED external search completed")
+        logger.info(f"   Sources searched: {response.sources_searched}")
+        logger.info(f"   External sources found: {external_sources_count}")
+        logger.info(f"   Context found: {response.context_found}")
+        logger.info(f"   Retrieval method: {response.retrieval_method}")
+        
+        # Add debug information to response
+        if response.response:
+            debug_info = f"""
+
+--- DEBUG INFO ---
+External APIs Used: {', '.join(response.sources_searched)}
+External Sources Found: {external_sources_count}
+Total Sources: {len(response.sources or [])}
+Confidence: {response.confidence_score:.2f}
+Method: {response.retrieval_method}
+"""
+            response.response += debug_info
+        
         return response
         
     except Exception as e:
         logger.error(f"❌ Force external query failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+@router.get("/search-status")
+async def get_search_status():
+    """Get current search system status"""
+    try:
+        from ...processors.query_processor import get_query_processor
+        from ...services.external_db_service import get_fast_external_optimizer
+        
+        processor = get_query_processor()
+        optimizer = get_fast_external_optimizer()
+        
+        status = {
+            "timestamp": datetime.utcnow().isoformat(),
+            "processor_stats": processor.get_processing_stats(),
+            "external_optimizer": {
+                "failed_apis": list(optimizer.failed_apis),
+                "api_response_times": optimizer.api_response_times,
+                "cached_queries": len(optimizer.api_cache)
+            },
+            "features_available": processor.features,
+            "active_queries": len(processor.active_queries),
+            "system_status": "operational"
+        }
+        
+        return status
+        
+    except Exception as e:
+        logger.error(f"Failed to get search status: {e}")
+        return {
+            "timestamp": datetime.utcnow().isoformat(),
+            "system_status": "error",
+            "error": str(e)
+        }
+
+@router.post("/test-external-apis")
+async def test_external_apis(query: str = "federal court contract law"):
+    """Test external APIs directly"""
+    logger.info(f"Testing external APIs with query: {query}")
+    
+    try:
+        from ...services.external_db_service import search_external_databases, get_fast_external_optimizer
+        
+        # Test 1: Direct external database search
+        logger.info("🔬 Testing direct external database search...")
+        direct_results = search_external_databases(query, ["congress_gov", "federal_register"], None)
+        
+        # Test 2: Fast optimizer search
+        logger.info("🚀 Testing fast optimizer search...")
+        optimizer = get_fast_external_optimizer()
+        
+        import asyncio
+        optimizer_results = await optimizer.search_external_fast(query, None)
+        
+        return {
+            "test_query": query,
+            "direct_search_results": len(direct_results),
+            "optimizer_results": len(optimizer_results),
+            "direct_results_sample": direct_results[:2] if direct_results else [],
+            "optimizer_results_sample": optimizer_results[:2] if optimizer_results else [],
+            "failed_apis": list(optimizer.failed_apis),
+            "api_response_times": optimizer.api_response_times,
+            "test_status": "success" if (direct_results or optimizer_results) else "no_results",
+            "timestamp": datetime.utcnow().isoformat()
+        }
+        
+    except Exception as e:
+        logger.error(f"❌ External API test failed: {e}")
+        return {
+            "test_query": query,
+            "test_status": "error",
+            "error": str(e),
+            "timestamp": datetime.utcnow().isoformat()
+        }
