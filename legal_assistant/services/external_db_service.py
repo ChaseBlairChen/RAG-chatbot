@@ -136,7 +136,7 @@ class FastExternalSearchOptimizer:
         try:
             results = await asyncio.wait_for(
                 self._search_selected_apis(query, fast_apis, user),
-                timeout=EXTERNAL_SEARCH_TIMEOUT  # 5 second total limit
+                timeout=15
             )
             
             # Cache results if successful
@@ -1576,3 +1576,4 @@ __all__ = [
     'CongressInterface',
     'get_fast_external_optimizer'
 ]
+
