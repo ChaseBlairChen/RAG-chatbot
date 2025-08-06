@@ -114,7 +114,7 @@ class RAGService:
                     sources_searched.append("user_container")
                     self.logger.info(f"[COMBINED_SEARCH] User container: {len(user_results)} results")
             
-            # 🚀 EXTERNAL API SEARCH - NEW SECTION
+            # 🚀 EXTERNAL API SEARCH - CRITICAL SECTION
             if search_scope == "all":
                 try:
                     self.logger.info("🔍 Searching external APIs...")
