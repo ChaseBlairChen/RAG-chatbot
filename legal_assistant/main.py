@@ -2,7 +2,7 @@
 import os
 import logging
 from datetime import datetime, timedelta
-from typing import Dict, List  # FIXED: Added missing imports
+from typing import Dict, List
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -113,60 +113,8 @@ app.include_router(health.router, tags=["health"])
 app.include_router(query.router, tags=["queries"])
 app.include_router(documents.router, tags=["documents"])
 app.include_router(immigration.router, prefix="/immigration", tags=["immigration"])
-# ENHANCED: Startup/shutdown events with NoSQL initialization
-@app.on_event("startup")
-async def startup_event():
-    """Initialize on startup with NoSQL activation"""
-    logger.info("🚀 Legal Assistant API starting up...")
-    
-    try:
-        # ACTIVATE NOSQL PERFORMANCE
-        from .storage.managers import get_enhanced_storage
-        storage = await get_enhanced_storage()
-        
-        nosql_status = {
-            'mongodb': storage.nosql_manager.mongodb_available if storage.nosql_manager else False,
-            'redis': storage.nosql_manager.redis_available if storage.nosql_manager else False
-        }
-        
-        if nosql_status['mongodb']:
-            logger.info("🎯 HIGH PERFORMANCE MODE: MongoDB connected!")
-            logger.info("📊 Documents will be stored in persistent database")
-            logger.info("⚡ 10-100x faster document operations enabled")
-        else:
-            logger.warning("⚠️ BASIC MODE: Using in-memory storage")
-            logger.warning("📝 Install MongoDB for high performance: sudo apt install mongodb")
-        
-        if nosql_status['redis']:
-            logger.info("🚀 CACHING ACTIVE: Redis connected!")
-            logger.info("💾 Search results will be cached for instant responses")
-        else:
-            logger.warning("⚠️ NO CACHING: Install Redis for caching: sudo apt install redis-server")
-        
-        # Store performance mode globally
-        app.state.performance_mode = "high" if nosql_status['mongodb'] else "basic"
-        app.state.nosql_status = nosql_status
-        
-    except Exception as e:
-        logger.error(f"❌ NoSQL initialization failed: {e}")
-        logger.warning("🔄 Falling back to in-memory storage")
-        app.state.performance_mode = "basic"
-        app.state.nosql_status = {'mongodb': False, 'redis': False}
 
-@app.on_event("shutdown") 
-async def shutdown_event():
-    """Cleanup on shutdown"""
-    logger.info("👋 Legal Assistant API shutting down...")
-    
-    try:
-        # Cleanup NoSQL connections
-        from .storage.managers import get_enhanced_storage
-        storage = await get_enhanced_storage()
-        if storage.nosql_manager:
-            await storage.nosql_manager.close_connections()
-            logger.info("🔌 NoSQL connections closed")
-    except Exception as e:
-        logger.error(f"Error during NoSQL cleanup: {e}")
+# REMOVED: The old duplicate @app.on_event handlers that were causing conflicts
 
 # Add performance monitoring endpoint
 @app.get("/debug/performance")
@@ -230,5 +178,3 @@ if __name__ == "__main__":
     logger.info("Version: 10.0.0-SmartRAG-ComprehensiveAnalysis-NoSQL")
     logger.info("🎯 HIGH-PERFORMANCE MODE READY - Install MongoDB/Redis to activate!")
     uvicorn.run("legal_assistant.main:app", host="0.0.0.0", port=port, reload=True)
-
-
