@@ -1,4 +1,3 @@
-
 """
 Enhanced storage managers with NoSQL support and fallback compatibility.
 Maintains exact same interface as your current in-memory managers.
@@ -6,15 +5,28 @@ Maintains exact same interface as your current in-memory managers.
 import asyncio
 from datetime import datetime, timedelta
 from typing import Dict, Optional, List, Any
-import logging  # FIXED: Added this missing import
-
-from .nosql_models import (
-    UserDocument, UploadedFileDocument, ProcessingStatusDocument,
-    ConversationDocument, ImmigrationCaseDocument
-)
-from .nosql_manager import get_nosql_manager
+import logging
 
 logger = logging.getLogger(__name__)
+
+# Conditional import of MongoDB models
+try:
+    from .nosql_models import (
+        UserDocument, UploadedFileDocument, ProcessingStatusDocument,
+        ConversationDocument, ImmigrationCaseDocument
+    )
+    MODELS_AVAILABLE = True
+except ImportError as e:
+    logger.warning(f"MongoDB models not available: {e}")
+    MODELS_AVAILABLE = False
+    # Create dummy classes to prevent NameError
+    class UserDocument: pass
+    class UploadedFileDocument: pass
+    class ProcessingStatusDocument: pass
+    class ConversationDocument: pass
+    class ImmigrationCaseDocument: pass
+
+from .nosql_manager import get_nosql_manager
 
 class EnhancedStorageManager:
     """
@@ -40,12 +52,13 @@ class EnhancedStorageManager:
             self.nosql_manager = await get_nosql_manager()
             self._initialized = True
             
-            # Migrate existing in-memory data if any
-            await self._migrate_existing_data()
+            # Only migrate if models are available and MongoDB is connected
+            if MODELS_AVAILABLE and self.nosql_manager and self.nosql_manager.mongodb_available:
+                await self._migrate_existing_data()
     
     async def _migrate_existing_data(self):
         """Migrate existing in-memory data to NoSQL"""
-        if not self.nosql_manager.mongodb_available:
+        if not self.nosql_manager.mongodb_available or not MODELS_AVAILABLE:
             return
         
         try:
@@ -66,7 +79,7 @@ class EnhancedStorageManager:
     
     async def get_user(self, user_id: str) -> Optional[Dict]:
         """Get user data with NoSQL/fallback support"""
-        if self.nosql_manager and self.nosql_manager.mongodb_available:
+        if MODELS_AVAILABLE and self.nosql_manager and self.nosql_manager.mongodb_available:
             try:
                 user_doc = await UserDocument.find_one(UserDocument.user_id == user_id)
                 if user_doc:
@@ -79,7 +92,7 @@ class EnhancedStorageManager:
     
     async def save_user(self, user_id: str, user_data: Dict):
         """Save user data with NoSQL/fallback support"""
-        if self.nosql_manager and self.nosql_manager.mongodb_available:
+        if MODELS_AVAILABLE and self.nosql_manager and self.nosql_manager.mongodb_available:
             try:
                 user_doc = await UserDocument.find_one(UserDocument.user_id == user_id)
                 if user_doc:
@@ -107,7 +120,7 @@ class EnhancedStorageManager:
     
     async def save_uploaded_file(self, file_id: str, file_data: Dict):
         """Save uploaded file metadata with NoSQL/fallback support"""
-        if self.nosql_manager and self.nosql_manager.mongodb_available:
+        if MODELS_AVAILABLE and self.nosql_manager and self.nosql_manager.mongodb_available:
             try:
                 # Check if exists
                 existing = await UploadedFileDocument.find_one(UploadedFileDocument.file_id == file_id)
@@ -135,7 +148,7 @@ class EnhancedStorageManager:
     
     async def get_uploaded_file(self, file_id: str) -> Optional[Dict]:
         """Get uploaded file metadata"""
-        if self.nosql_manager and self.nosql_manager.mongodb_available:
+        if MODELS_AVAILABLE and self.nosql_manager and self.nosql_manager.mongodb_available:
             try:
                 file_doc = await UploadedFileDocument.find_one(UploadedFileDocument.file_id == file_id)
                 if file_doc:
@@ -148,7 +161,7 @@ class EnhancedStorageManager:
     
     async def get_user_files(self, user_id: str) -> List[Dict]:
         """Get all files for a user"""
-        if self.nosql_manager and self.nosql_manager.mongodb_available:
+        if MODELS_AVAILABLE and self.nosql_manager and self.nosql_manager.mongodb_available:
             try:
                 file_docs = await UploadedFileDocument.find(
                     UploadedFileDocument.user_id == user_id
@@ -173,7 +186,7 @@ class EnhancedStorageManager:
         """Delete uploaded file metadata"""
         deleted = False
         
-        if self.nosql_manager and self.nosql_manager.mongodb_available:
+        if MODELS_AVAILABLE and self.nosql_manager and self.nosql_manager.mongodb_available:
             try:
                 result = await UploadedFileDocument.find_one(
                     UploadedFileDocument.file_id == file_id
@@ -212,7 +225,7 @@ class EnhancedStorageManager:
         if status == 'completed':
             status_data['completed_at'] = datetime.utcnow()
         
-        if self.nosql_manager and self.nosql_manager.mongodb_available:
+        if MODELS_AVAILABLE and self.nosql_manager and self.nosql_manager.mongodb_available:
             try:
                 # Upsert processing status
                 existing = await ProcessingStatusDocument.find_one(
@@ -238,7 +251,7 @@ class EnhancedStorageManager:
     
     async def get_processing_status(self, file_id: str) -> Optional[Dict]:
         """Get processing status"""
-        if self.nosql_manager and self.nosql_manager.mongodb_available:
+        if MODELS_AVAILABLE and self.nosql_manager and self.nosql_manager.mongodb_available:
             try:
                 status_doc = await ProcessingStatusDocument.find_one(
                     ProcessingStatusDocument.file_id == file_id
@@ -263,7 +276,7 @@ class EnhancedStorageManager:
             'sources': sources or []
         }
         
-        if self.nosql_manager and self.nosql_manager.mongodb_available:
+        if MODELS_AVAILABLE and self.nosql_manager and self.nosql_manager.mongodb_available:
             try:
                 conv_doc = await ConversationDocument.find_one(
                     ConversationDocument.session_id == session_id
@@ -309,7 +322,7 @@ class EnhancedStorageManager:
         """Get conversation context"""
         messages = []
         
-        if self.nosql_manager and self.nosql_manager.mongodb_available:
+        if MODELS_AVAILABLE and self.nosql_manager and self.nosql_manager.mongodb_available:
             try:
                 conv_doc = await ConversationDocument.find_one(
                     ConversationDocument.session_id == session_id
@@ -371,7 +384,7 @@ class EnhancedStorageManager:
     async def cleanup_old_data(self):
         """Clean up old data from NoSQL and in-memory storage"""
         
-        if self.nosql_manager and self.nosql_manager.mongodb_available:
+        if MODELS_AVAILABLE and self.nosql_manager and self.nosql_manager.mongodb_available:
             try:
                 # Clean up old conversations (older than 1 hour)
                 cutoff = datetime.utcnow() - timedelta(hours=1)
@@ -432,7 +445,7 @@ class EnhancedStorageManager:
             'redis_available': self.nosql_manager and self.nosql_manager.redis_available
         }
         
-        if self.nosql_manager and self.nosql_manager.mongodb_available:
+        if MODELS_AVAILABLE and self.nosql_manager and self.nosql_manager.mongodb_available:
             try:
                 # MongoDB statistics
                 stats['mongodb_stats'] = {
@@ -583,8 +596,6 @@ def cleanup_expired_conversations():
         ]
         for session_id in expired_sessions:
             del conversations[session_id]
-
-
 
 # Immigration storage
 immigration_cases: Dict[str, Any] = {}
