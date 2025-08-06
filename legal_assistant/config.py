@@ -19,8 +19,8 @@ USER_CONTAINERS_PATH = os.path.abspath(os.path.join(os.getcwd(), "user-container
 MAX_FILE_SIZE = 50 * 1024 * 1024  # 50MB
 LEGAL_EXTENSIONS = {'.pdf', '.txt', '.docx', '.rtf'}
 
-EXTERNAL_API_TIMEOUT = 3  # Maximum 3 seconds per API call
-MAX_CONCURRENT_APIS = 3   # Only call 3 APIs concurrently, not 8
+EXTERNAL_API_TIMEOUT = 10  # Maximum 3 seconds per API call
+MAX_CONCURRENT_APIS = 15   # Only call 3 APIs concurrently, not 8
 ENABLE_API_CACHING = True # Cache API results
 API_CACHE_TTL = 300       # Cache for 5 minutes
 
@@ -648,3 +648,4 @@ def detect_state_jurisdiction(query_text: str) -> List[str]:
 
 # Initialize feature flags when module is imported
 initialize_feature_flags()
+
