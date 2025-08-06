@@ -119,8 +119,8 @@ class AdaptiveTimeoutHandler:
         self.base_timeouts = {
             ProcessingStage.INITIALIZING: 2,
             ProcessingStage.ANALYZING_QUERY: 3,
-            ProcessingStage.SEARCHING_INTERNAL: 8,
-            ProcessingStage.SEARCHING_EXTERNAL: 12,
+            ProcessingStage.SEARCHING_INTERNAL: 20,  # Increased from 8 to 20
+            ProcessingStage.SEARCHING_EXTERNAL: 15,  # Increased from 12 to 15
             ProcessingStage.EXTRACTING_INFO: 3,
             ProcessingStage.GENERATING_RESPONSE: 30,  # Increased from 15 to 30
             ProcessingStage.VALIDATING_RESPONSE: 2,
@@ -235,17 +235,19 @@ class ProgressTracker:
 
 class BetterEmbeddings:
     """
-    Enhanced embeddings using E5-Large-V2 or similar models
+    Enhanced embeddings using lighter, faster models for CPU performance
     Provides better semantic understanding for legal documents
     """
     
-    def __init__(self, model_name: str = "intfloat/e5-large-v2"):
+    def __init__(self, model_name: str = "all-MiniLM-L6-v2"):
         """
-        Initialize better embeddings
+        Initialize better embeddings with a lighter model
         Options:
-        - intfloat/e5-large-v2 (1024 dim, excellent)
-        - BAAI/bge-large-en-v1.5 (1024 dim, great for retrieval)
-        - thenlper/gte-large (1024 dim, good for semantic search)
+        - all-MiniLM-L6-v2 (384 dim, fast on CPU, good quality)
+        - all-mpnet-base-v2 (768 dim, better quality but slower)
+        - intfloat/e5-small-v2 (384 dim, good balance)
+        - intfloat/e5-base-v2 (768 dim, better but slower)
+        - intfloat/e5-large-v2 (1024 dim, best but slowest on CPU)
         """
         if not EMBEDDINGS_AVAILABLE:
             logger.warning("Sentence transformers not available, embeddings disabled")
@@ -260,7 +262,7 @@ class BetterEmbeddings:
         self.query_prefix = "query: " if "e5" in model_name else ""
         self.passage_prefix = "passage: " if "e5" in model_name else ""
         
-        logger.info(f"✅ Initialized {model_name} embeddings on {device}")
+        logger.info(f"✅ Initialized {model_name} embeddings on {device} (lighter model for faster CPU performance)")
     
     def embed_query(self, text: str) -> np.ndarray:
         """Embed a query with appropriate prefix"""
@@ -731,9 +733,12 @@ class QueryProcessor:
         if search_external is None:
             search_external = self._should_search_external(question, search_scope, query_context.query_types)
         
-        internal_search_timeout = self.timeout_handler.base_timeouts[ProcessingStage.SEARCHING_INTERNAL]
+        # INCREASED TIMEOUT: Give more time for internal search
+        internal_search_timeout = 20  # Increased from 8 to 20 seconds
         if search_scope == "user_only":
-            internal_search_timeout *= 1.5  # More time if only searching user docs
+            internal_search_timeout = 25  # More time if only searching user docs
+        
+        self.logger.info(f"⏱️ Internal search timeout set to {internal_search_timeout}s")
         
         try:
             search_results = await asyncio.wait_for(
@@ -741,14 +746,40 @@ class QueryProcessor:
                 timeout=internal_search_timeout
             )
         except asyncio.TimeoutError:
-            # Create partial search results
-            search_results = SearchResults(
-                internal_results=[],
-                external_context=None,
-                external_source_info=[],
-                sources_searched=["timeout_during_search"],
-                retrieval_method="search_timeout"
-            )
+            # If standard search times out and agent is available, try agent-based search
+            if use_agent and self.agent:
+                self.logger.warning("⏰ Standard search timed out, switching to agent-based search")
+                progress_tracker.update_stage(
+                    ProcessingStage.SEARCHING_INTERNAL,
+                    "Standard search timed out, trying intelligent agent search...",
+                    35
+                )
+                try:
+                    search_results = await asyncio.wait_for(
+                        self._perform_agent_based_search(query_context, progress_tracker),
+                        timeout=20  # Give agent 20 seconds
+                    )
+                    self.logger.info("✅ Agent-based search completed after standard timeout")
+                except asyncio.TimeoutError:
+                    # If agent also times out, create partial results
+                    self.logger.error("❌ Both standard and agent search timed out")
+                    search_results = SearchResults(
+                        internal_results=[],
+                        external_context=None,
+                        external_source_info=[],
+                        sources_searched=["timeout_during_search"],
+                        retrieval_method="search_timeout"
+                    )
+            else:
+                # Original timeout behavior if no agent
+                self.logger.warning("⏰ Internal search timed out")
+                search_results = SearchResults(
+                    internal_results=[],
+                    external_context=None,
+                    external_source_info=[],
+                    sources_searched=["timeout_during_search"],
+                    retrieval_method="search_timeout"
+                )
         
         # Alternative: Use agent-based search if enabled and available
         if use_agent and self.agent:
@@ -1354,6 +1385,7 @@ class QueryProcessor:
             combined_query = " ".join(query_context.expanded_questions)
             search_k = 20 if 'statutory' in query_context.query_types else 15
             
+            # INCREASED TIMEOUT: Give more time for internal search
             internal_results, internal_sources, retrieval_method = await asyncio.wait_for(
                 asyncio.to_thread(
                     combined_search,
@@ -1365,7 +1397,7 @@ class QueryProcessor:
                     search_k,
                     query_context.document_id
                 ),
-                timeout=8  # 8 second timeout for internal search
+                timeout=15  # Increased from 8 to 15 second timeout for internal search
             )
             
             sources_searched.extend(internal_sources)
