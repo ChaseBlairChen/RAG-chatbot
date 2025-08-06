@@ -1208,11 +1208,27 @@ COMPREHENSIVE COUNTRY CONDITIONS RESEARCH FOR {country.upper()}:
             if enhancement:
                 context_text += enhancement
         
-        # Combine contexts
+        # UPDATED SECTION: Combine contexts with limits
         if search_results.external_context:
-            full_context = f"{context_text}\n\n{search_results.external_context}"
+            # Limit total context size and prioritize most relevant content
+            max_user_context = 4000  # Reduced from unlimited
+            max_external_context = 2000  # Limit external context
+            
+            # Truncate contexts if too long
+            limited_user_context = context_text[:max_user_context] + "..." if len(context_text) > max_user_context else context_text
+            limited_external_context = search_results.external_context[:max_external_context] + "..." if len(search_results.external_context) > max_external_context else search_results.external_context
+            
+            # Combine with clear sections
+            full_context = f"""=== EXTERNAL LEGAL SOURCES ===
+{limited_external_context}
+
+=== YOUR UPLOADED DOCUMENTS ===
+{limited_user_context}"""
+            
+            self.logger.info(f"📖 Combined context: {len(limited_external_context)} chars external + {len(limited_user_context)} chars user")
         else:
             full_context = context_text
+            self.logger.info(f"📖 Using user documents only: {len(context_text)} chars")
         
         # Generate response with timeout protection
         progress_tracker.update_stage(
@@ -1225,10 +1241,10 @@ COMPREHENSIVE COUNTRY CONDITIONS RESEARCH FOR {country.upper()}:
             try:
                 prompt = self._create_prompt(query_context, search_results, full_context)
                 
-                # AI generation with timeout
+                # UPDATED: AI generation with increased timeout
                 response_text = await asyncio.wait_for(
                     asyncio.to_thread(call_openrouter_api, prompt, OPENROUTER_API_KEY),
-                    timeout=12  # 12 second timeout for AI generation
+                    timeout=30  # 30 second timeout for complex legal analysis
                 )
                 
             except asyncio.TimeoutError:
@@ -1404,148 +1420,6 @@ RESPONSE FORMAT:
 
 ## Sources Referenced
 [List the specific documents/databases that support your answer]
-
-RESPONSE:"""
-    
-    def _create_immigration_prompt(self, context_text: str, query_context: QueryContext,
-                                 search_results: SearchResults) -> str:
-        """Create prompt specifically for immigration queries"""
-        
-        return f"""You are an immigration legal assistant with access to official USCIS data, visa bulletins, and immigration law databases.
-
-ANTI-HALLUCINATION REQUIREMENTS:
-🚫 ONLY answer based on the provided context and sources
-🚫 If information is NOT in the sources, say "This information is not available in the provided documents"
-🚫 NEVER make up processing times, case outcomes, or legal requirements
-
-IMPORTANT IMMIGRATION CONTEXT:
-- Immigration law is complex and changes frequently
-- Processing times vary by service center and case type
-- Each case is unique and requires individual assessment
-
-SOURCES SEARCHED: {', '.join(search_results.sources_searched)}
-
-CONVERSATION HISTORY:
-{query_context.conversation_context}
-
-IMMIGRATION CONTEXT:
-{context_text}
-
-USER QUESTION:
-{query_context.original_question}
-
-RESPONSE FORMAT:
-## Direct Answer
-[Your main answer based ONLY on the provided sources]
-
-## Key Immigration Points
-[Specific points from immigration sources]
-
-## Important Disclaimers
-[Relevant warnings about legal complexity, etc.]
-
-RESPONSE:"""
-    
-    def _create_statutory_prompt(self, context_text: str, query_context: QueryContext,
-                               search_results: SearchResults) -> str:
-        """Create enhanced prompt for statutory analysis using your complex prompt"""
-        
-        return f"""You are a legal research assistant. Provide thorough, accurate responses based on the provided documents.
-
-SOURCE HIERARCHY:
-- **PRIMARY**: Information from the retrieved documents provided in the context
-- **SECONDARY**: General legal knowledge ONLY when documents are unavailable
-- **STRICT LIMITATIONS**: 
-  - Only use well-established, fundamental legal principles (e.g., basic elements of crimes, standard procedural rules)
-  - Do NOT invent case law, specific precedents, or detailed statutory provisions
-  - Clearly label all general knowledge with disclaimers
-  - When in doubt, default to "information not available"
-
-SOURCES SEARCHED: {', '.join(search_results.sources_searched)}
-RETRIEVAL METHOD: {search_results.retrieval_method}
-{f"DOCUMENT FILTER: Specific document {query_context.document_id}" if query_context.document_id else "DOCUMENT SCOPE: All available documents"}
-
-HALLUCINATION CHECK - Before responding, verify:
-1. Is each claim supported by the retrieved documents?
-2. Am I adding information not present in the sources?
-3. If uncertain, default to "information not available"
-
-INSTRUCTIONS FOR THOROUGH ANALYSIS:
-1. **READ CAREFULLY**: Scan the entire context for information that answers the user's question
-2. **EXTRACT COMPLETELY**: When extracting requirements, include FULL details (e.g., "60 minutes" not just "minimum of")
-3. **QUOTE VERBATIM**: For statutory standards, use exact quotes: `"[Exact Text]" (Source)`
-4. **ENUMERATE EXPLICITLY**: Present listed requirements as numbered points with full quotes
-5. **CITE SOURCES**: Reference the document name or case citation for each fact
-6. **BE COMPLETE**: Explicitly note missing standards: "Documents lack full subsection [X]"
-7. **USE DECISIVE PHRASING**: State facts directly ("The statute requires...") - NEVER "documents indicate"
-
-RESPONSE STYLE: {query_context.response_style}
-
-CONVERSATION HISTORY:
-{query_context.conversation_context}
-
-DOCUMENT CONTEXT (ANALYZE THOROUGHLY):
-{context_text}
-
-USER QUESTION:
-{query_context.original_question}
-
-RESPONSE APPROACH:
-- **FIRST**: Identify what specific information the user is asking for. Do not reference any statute, case law, or principle unless it appears verbatim in the context.
-- **SECOND**: Search the context thoroughly for that information  
-- **THIRD**: Present any information found clearly and completely. At the end of your response, list all facts provided and their source documents for verification.
-- **FOURTH**: Note what information is not available (if any)
-- **FIFTH**: When documents lack specific guidance but user requests legal analysis, provide response based on fundamental legal principles with clear disclaimers
-- **ALWAYS**: Cite the source document or case for each fact provided
-
-LEGAL ANALYSIS FRAMEWORK:
-- When documents lack specific guidance, provide analysis based on fundamental legal principles
-- Focus on established concepts, not novel interpretations
-- Structure responses around: "Based on general legal principles, typical approaches include..."
-- Avoid making definitive statements about jurisdiction-specific rules not in the documents
-- Clearly distinguish between document-based facts and general legal knowledge
-
-ADDITIONAL GUIDANCE:
-- After fully answering based on the provided documents, if relevant key legal principles under Washington state law, any other U.S. state law, or U.S. federal law are not found in the sources, you may add a clearly labeled general legal principles disclaimer.
-- This disclaimer must clearly state it is NOT based on the provided documents but represents general background knowledge of applicable Washington state, other state, and federal law.
-- Do NOT use this disclaimer to answer the user's question directly; it serves only as supplementary context.
-- This disclaimer must explicitly state that these principles are not found in the provided documents but are usually relevant legal background.
-- Format this disclaimer distinctly at the end of the response under a heading such as "GENERAL LEGAL PRINCIPLES DISCLAIMER."
-
-RESPONSE:"""
-    
-    def _create_regular_prompt(self, context_text: str, query_context: QueryContext,
-                             search_results: SearchResults) -> str:
-        """Create simple prompt for general questions"""
-        
-        return f"""You are a legal research assistant with access to comprehensive legal databases.
-
-ANTI-HALLUCINATION REQUIREMENTS:
-🚫 ONLY answer based on the provided context and sources
-🚫 If information is NOT in the sources, say "This information is not available in the provided documents"
-🚫 NEVER make up facts, dates, case names, or legal citations
-
-SOURCES SEARCHED: {', '.join(search_results.sources_searched)}
-RESPONSE STYLE: {query_context.response_style}
-
-CONVERSATION HISTORY:
-{query_context.conversation_context}
-
-LEGAL CONTEXT:
-{context_text}
-
-USER QUESTION:
-{query_context.original_question}
-
-RESPONSE FORMAT:
-## Direct Answer
-[Your main answer based ONLY on the provided sources]
-
-## Key Supporting Points
-[Bullet points from the sources that support your answer]
-
-## Sources Referenced
-[List the specific documents that support your answer]
 
 RESPONSE:"""
     
@@ -2341,3 +2215,110 @@ def _create_fallback_response(context_text: str, question: str) -> str:
 *Note: AI response generation was unavailable, so I'm showing you the relevant content directly.*
 
 **To get a more refined answer:** Try asking a more specific question about the content above."""
+    
+    def _create_immigration_prompt(self, context_text: str, query_context: QueryContext,
+                                 search_results: SearchResults) -> str:
+        """Create prompt specifically for immigration queries"""
+        
+        return f"""You are an immigration legal assistant with access to official USCIS data, visa bulletins, and immigration law databases.
+
+ANTI-HALLUCINATION REQUIREMENTS:
+🚫 ONLY answer based on the provided context and sources
+🚫 If information is NOT in the sources, say "This information is not available in the provided documents"
+🚫 NEVER make up processing times, case outcomes, or legal requirements
+
+IMPORTANT IMMIGRATION CONTEXT:
+- Immigration law is complex and changes frequently
+- Processing times vary by service center and case type
+- Each case is unique and requires individual assessment
+
+SOURCES SEARCHED: {', '.join(search_results.sources_searched)}
+
+CONVERSATION HISTORY:
+{query_context.conversation_context}
+
+IMMIGRATION CONTEXT:
+{context_text}
+
+USER QUESTION:
+{query_context.original_question}
+
+RESPONSE FORMAT:
+## Direct Answer
+[Your main answer based ONLY on the provided sources]
+
+## Key Immigration Points
+[Specific points from immigration sources]
+
+## Important Disclaimers
+[Relevant warnings about legal complexity, etc.]
+
+RESPONSE:"""
+    
+    def _create_statutory_prompt(self, context_text: str, query_context: QueryContext,
+                               search_results: SearchResults) -> str:
+        """Create enhanced prompt for statutory analysis using your complex prompt"""
+        
+        return f"""You are a legal research assistant. Provide thorough, accurate responses based on the provided documents.
+
+SOURCE HIERARCHY:
+- **PRIMARY**: Information from the retrieved documents provided in the context
+- **SECONDARY**: General legal knowledge ONLY when documents are unavailable
+- **STRICT LIMITATIONS**: 
+  - Only use well-established, fundamental legal principles (e.g., basic elements of crimes, standard procedural rules)
+  - Do NOT invent case law, specific precedents, or detailed statutory provisions
+  - Clearly label all general knowledge with disclaimers
+  - When in doubt, default to "information not available"
+
+SOURCES SEARCHED: {', '.join(search_results.sources_searched)}
+RETRIEVAL METHOD: {search_results.retrieval_method}
+{f"DOCUMENT FILTER: Specific document {query_context.document_id}" if query_context.document_id else "DOCUMENT SCOPE: All available documents"}
+
+HALLUCINATION CHECK - Before responding, verify:
+1. Is each claim supported by the retrieved documents?
+2. Am I adding information not present in the sources?
+3. If uncertain, default to "information not available"
+
+INSTRUCTIONS FOR THOROUGH ANALYSIS:
+1. **READ CAREFULLY**: Scan the entire context for information that answers the user's question
+2. **EXTRACT COMPLETELY**: When extracting requirements, include FULL details (e.g., "60 minutes" not just "minimum of")
+3. **QUOTE VERBATIM**: For statutory standards, use exact quotes: `"[Exact Text]" (Source)`
+4. **ENUMERATE EXPLICITLY**: Present listed requirements as numbered points with full quotes
+5. **CITE SOURCES**: Reference the document name or case citation for each fact
+6. **BE COMPLETE**: Explicitly note missing standards: "Documents lack full subsection [X]"
+7. **USE DECISIVE PHRASING**: State facts directly ("The statute requires...") - NEVER "documents indicate"
+
+RESPONSE STYLE: {query_context.response_style}
+
+CONVERSATION HISTORY:
+{query_context.conversation_context}
+
+DOCUMENT CONTEXT (ANALYZE THOROUGHLY):
+{context_text}
+
+USER QUESTION:
+{query_context.original_question}
+
+RESPONSE APPROACH:
+- **FIRST**: Identify what specific information the user is asking for. Do not reference any statute, case law, or principle unless it appears verbatim in the context.
+- **SECOND**: Search the context thoroughly for that information  
+- **THIRD**: Present any information found clearly and completely. At the end of your response, list all facts provided and their source documents for verification.
+- **FOURTH**: Note what information is not available (if any)
+- **FIFTH**: When documents lack specific guidance but user requests legal analysis, provide response based on fundamental legal principles with clear disclaimers
+- **ALWAYS**: Cite the source document or case for each fact provided
+
+LEGAL ANALYSIS FRAMEWORK:
+- When documents lack specific guidance, provide analysis based on fundamental legal principles
+- Focus on established concepts, not novel interpretations
+- Structure responses around: "Based on general legal principles, typical approaches include..."
+- Avoid making definitive statements about jurisdiction-specific rules not in the documents
+- Clearly distinguish between document-based facts and general legal knowledge
+
+ADDITIONAL GUIDANCE:
+- After fully answering based on the provided documents, if relevant key legal principles under Washington state law, any other U.S. state law, or U.S. federal law are not found in the sources, you may add a clearly labeled general legal principles disclaimer.
+- This disclaimer must clearly state it is NOT based on the provided documents but represents general background knowledge of applicable Washington state, other state, and federal law.
+- Do NOT use this disclaimer to answer the user's question directly; it serves only as supplementary context.
+- This disclaimer must explicitly state that these principles are not found in the provided documents but are usually relevant legal background.
+- Format this disclaimer distinctly at the end of the response under a heading such as "GENERAL LEGAL PRINCIPLES DISCLAIMER."
+
+RESPONSE:"""
