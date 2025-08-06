@@ -104,7 +104,7 @@ class AdaptiveTimeoutHandler:
             ProcessingStage.SEARCHING_INTERNAL: 8,
             ProcessingStage.SEARCHING_EXTERNAL: 12,
             ProcessingStage.EXTRACTING_INFO: 3,
-            ProcessingStage.GENERATING_RESPONSE: 15,
+            ProcessingStage.GENERATING_RESPONSE: 30,  # Increased from 15 to 30
             ProcessingStage.VALIDATING_RESPONSE: 2,
             ProcessingStage.COMPLETING: 2
         }
@@ -113,7 +113,7 @@ class AdaptiveTimeoutHandler:
             'simple': 0.7,      # Short questions, basic queries
             'medium': 1.0,      # Normal complexity
             'complex': 1.5,     # Long questions, multiple parts
-            'comprehensive': 2.0 # Analysis requests, complex legal research
+            'comprehensive': 3.0 # Increased from 2.0 to 3.0 for complex legal analysis
         }
     
     def calculate_adaptive_timeout(self, query: str, query_types: List[str], 
@@ -130,8 +130,8 @@ class AdaptiveTimeoutHandler:
         # Calculate adaptive timeout
         adaptive_timeout = int(base_timeout * multiplier)
         
-        # Apply bounds (min 15s, max 60s)
-        return max(15, min(60, adaptive_timeout))
+        # Apply bounds (min 15s, max 120s) - increased max from 60s to 120s
+        return max(15, min(120, adaptive_timeout))
     
     def _assess_query_complexity(self, query: str, query_types: List[str], 
                                 search_scope: str) -> str:
@@ -162,6 +162,12 @@ class AdaptiveTimeoutHandler:
         legal_indicators = ['bill', 'statute', 'regulation', 'case law', 'precedent']
         if sum(1 for indicator in legal_indicators if indicator in query.lower()) > 2:
             complexity_factors += 0.5
+        
+        # Check for complex analytical requests (new)
+        analytical_indicators = ['develop', 'comprehensive', 'arguments', 'defense', 'prosecution', 
+                                'legal analysis', 'both sides', 'analyze', 'evaluate']
+        if sum(1 for indicator in analytical_indicators if indicator in query.lower()) >= 2:
+            complexity_factors += 2  # Significant boost for analytical queries
         
         # Classify complexity
         if complexity_factors >= 3:
@@ -486,10 +492,21 @@ class QueryProcessor:
             65
         )
         
-        response_timeout = self.timeout_handler.base_timeouts[ProcessingStage.GENERATING_RESPONSE]
+        # Calculate dynamic response timeout based on context and complexity
+        base_response_timeout = self.timeout_handler.base_timeouts[ProcessingStage.GENERATING_RESPONSE]
+        
         # Adjust timeout based on context length
         if len(context_text) > 5000:
-            response_timeout *= 1.3
+            response_timeout = base_response_timeout * 1.5
+        elif len(context_text) > 3000:
+            response_timeout = base_response_timeout * 1.3
+        else:
+            response_timeout = base_response_timeout
+        
+        # Further adjust for complex analytical queries
+        if "complex_multi_part" in query_context.query_types:
+            response_timeout *= 1.5
+            self.logger.info(f"📈 Complex multi-part query - response timeout: {response_timeout}s")
         
         try:
             processing_result = await asyncio.wait_for(
@@ -501,9 +518,16 @@ class QueryProcessor:
         except asyncio.TimeoutError:
             # Create partial response with available context
             self.logger.warning("Response generation timed out, creating partial response")
-            return self._create_partial_response_from_context(
-                context_text, source_info, query_context, search_results
-            )
+            
+            # If it's a complex multi-part query, suggest breakdown
+            if "complex_multi_part" in query_context.query_types:
+                return self._create_breakdown_suggestion_response(
+                    query_context, context_text, source_info, search_results
+                )
+            else:
+                return self._create_partial_response_from_context(
+                    context_text, source_info, query_context, search_results
+                )
         
         progress_tracker.update_stage(
             ProcessingStage.GENERATING_RESPONSE,
@@ -662,6 +686,10 @@ class QueryProcessor:
         query_types = []
         question_lower = question.lower()
         
+        # Check if this is a complex multi-part query that should be broken down
+        if self._should_suggest_breakdown(question):
+            query_types.append("complex_multi_part")
+        
         # Statutory/regulatory patterns
         if self._detect_statutory_question(question):
             query_types.append(QueryType.STATUTORY.value)
@@ -687,6 +715,31 @@ class QueryProcessor:
             query_types.append(QueryType.GENERAL.value)
         
         return query_types
+
+    def _should_suggest_breakdown(self, question: str) -> bool:
+        """Detect if query should be broken down into smaller parts"""
+        question_lower = question.lower()
+        
+        # Check for multi-party analysis requests
+        multi_party_indicators = [
+            ('defense', 'prosecution'),
+            ('plaintiff', 'defendant'),
+            ('both sides', 'each side'),
+            ('arguments for', 'arguments against')
+        ]
+        
+        for pair in multi_party_indicators:
+            if all(term in question_lower for term in pair):
+                self.logger.info("🔄 Multi-party analysis detected - may benefit from breakdown")
+                return True
+        
+        # Check for multiple complex tasks
+        task_words = ['develop', 'analyze', 'evaluate', 'assess', 'compare', 'contrast']
+        if sum(1 for word in task_words if word in question_lower) >= 2:
+            self.logger.info("🔄 Multiple complex tasks detected - may benefit from breakdown")
+            return True
+        
+        return False
 
 
     def _detect_federal_court_query(self, question: str) -> bool:
@@ -1161,7 +1214,24 @@ COMPREHENSIVE COUNTRY CONDITIONS RESEARCH FOR {country.upper()}:
     
     def _process_context(self, search_results: SearchResults) -> Tuple[str, List[Dict]]:
         """Process and format context for LLM"""
-        max_context_length = 8000 if QueryType.STATUTORY.value in [t for t in search_results.sources_searched if 'statutory' in t] else 6000
+        
+        # Check if this is a complex analytical query
+        is_complex_analysis = False
+        for source in search_results.sources_searched:
+            analytical_terms = ['develop', 'comprehensive', 'arguments', 'defense', 
+                              'prosecution', 'legal analysis', 'analyze']
+            if any(term in str(source).lower() for term in analytical_terms):
+                is_complex_analysis = True
+                break
+        
+        # Adjust context length based on query type
+        if is_complex_analysis:
+            max_context_length = 4000  # Reduce for complex analysis to leave room for response
+            self.logger.info("📊 Complex analytical query detected - reducing context to 4000 chars")
+        elif QueryType.STATUTORY.value in [t for t in search_results.sources_searched if 'statutory' in t]:
+            max_context_length = 8000
+        else:
+            max_context_length = 6000
         
         context_text, source_info = format_context_for_llm(
             search_results.internal_results, 
@@ -1241,10 +1311,21 @@ COMPREHENSIVE COUNTRY CONDITIONS RESEARCH FOR {country.upper()}:
             try:
                 prompt = self._create_prompt(query_context, search_results, full_context)
                 
-                # UPDATED: AI generation with increased timeout
+                # Determine timeout based on query complexity
+                is_complex_analysis = any(term in query_context.original_question.lower() 
+                                        for term in ['develop', 'comprehensive', 'arguments', 
+                                                    'defense', 'prosecution', 'analyze', 'evaluate'])
+                
+                if is_complex_analysis:
+                    ai_timeout = 60  # 60 seconds for complex legal analysis
+                    self.logger.info("⚖️ Complex legal analysis detected - using 60s timeout")
+                else:
+                    ai_timeout = 30  # 30 seconds for normal queries
+                
+                # AI generation with adaptive timeout
                 response_text = await asyncio.wait_for(
                     asyncio.to_thread(call_openrouter_api, prompt, OPENROUTER_API_KEY),
-                    timeout=30  # 30 second timeout for complex legal analysis
+                    timeout=ai_timeout
                 )
                 
             except asyncio.TimeoutError:
@@ -1733,6 +1814,60 @@ Your query timed out after {current_progress.progress_percent}% completion.
 *Note: This is a direct excerpt from your documents. AI response generation was unavailable, so I'm showing you the relevant content directly.*
 
 **To get a more refined answer:** Try asking a more specific question about the content above."""
+    
+    def _create_breakdown_suggestion_response(
+        self,
+        query_context: QueryContext,
+        context_text: str,
+        source_info: List[Dict],
+        search_results: SearchResults
+    ) -> QueryResponse:
+        """Create response suggesting query breakdown for complex multi-part queries"""
+        
+        # Analyze the query to suggest specific breakdowns
+        suggestions = []
+        question_lower = query_context.original_question.lower()
+        
+        if 'defense' in question_lower and 'prosecution' in question_lower:
+            suggestions.append("1. 'Develop defense arguments based on the statutory gaps in RCW 10.01.240'")
+            suggestions.append("2. 'Develop prosecution arguments based on the statutory gaps in RCW 10.01.240'")
+        elif 'plaintiff' in question_lower and 'defendant' in question_lower:
+            suggestions.append("1. 'Analyze plaintiff's position regarding [your specific issue]'")
+            suggestions.append("2. 'Analyze defendant's position regarding [your specific issue]'")
+        else:
+            suggestions.append("1. Focus on one party's perspective first")
+            suggestions.append("2. Then ask about the opposing party's perspective")
+        
+        response = f"""⚠️ **Complex Multi-Part Query Detected**
+
+Your query is comprehensive and requires extensive legal analysis that exceeded processing time limits. I found {len(source_info)} relevant document sections, but the analysis is too complex for a single response.
+
+**📚 Documents Found:**
+{context_text[:500]}...
+
+**💡 Recommended Approach:**
+Break your query into smaller, focused parts for better results:
+
+{chr(10).join(suggestions)}
+
+**Why this helps:**
+- Each part gets dedicated processing time
+- More detailed analysis for each perspective
+- Clearer, more organized responses
+- Better citation and source tracking
+
+**Alternative:** You can also try simplifying your current query by focusing on the most critical aspects first."""
+        
+        return QueryResponse(
+            response=response,
+            error="complex_query_timeout",
+            context_found=bool(search_results.internal_results),
+            sources=source_info[:5],
+            session_id=query_context.session_id,
+            confidence_score=0.4,
+            sources_searched=search_results.sources_searched,
+            retrieval_method="partial_with_breakdown_suggestion"
+        )
     
     def _create_partial_response_from_context(
         self, 
