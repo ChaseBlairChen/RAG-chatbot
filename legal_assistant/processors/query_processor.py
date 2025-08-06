@@ -1502,6 +1502,9 @@ RESPONSE FORMAT:
 ## Sources Referenced
 [List the specific documents/databases that support your answer]
 
+## Legal Disclaimer
+**Important Legal Notice:** This analysis is based on the documents provided and general legal principles. It is not a substitute for professional legal advice. Legal outcomes depend on specific facts, jurisdiction, and applicable law. Please consult with a qualified attorney for advice specific to your situation.
+
 RESPONSE:"""
     
     def _validate_response_against_context(self, response: str, context: str, question: str) -> Tuple[str, float]:
@@ -2385,8 +2388,11 @@ RESPONSE FORMAT:
 ## Key Immigration Points
 [Specific points from immigration sources]
 
-## Important Disclaimers
-[Relevant warnings about legal complexity, etc.]
+## Sources Referenced
+[List the specific documents that support your answer]
+
+## Legal Disclaimer
+**Immigration Law Notice:** This information is general guidance only based on the provided documents. Immigration law is complex and changes frequently. Processing times and requirements vary by case type and service center. Each case is unique and requires individual assessment. Please consult with a qualified immigration attorney for advice specific to your situation.
 
 RESPONSE:"""
     
@@ -2434,6 +2440,23 @@ DOCUMENT CONTEXT (ANALYZE THOROUGHLY):
 USER QUESTION:
 {query_context.original_question}
 
+RESPONSE FORMAT:
+## Direct Answer
+[Provide your main answer based on the documents]
+
+## Detailed Analysis
+[Present thorough analysis following the instructions above]
+
+## Sources Referenced
+[List all documents and specific sections cited]
+
+## General Legal Principles
+*(If documents lack specific guidance)*
+[Provide helpful general legal principles with clear markers that this is NOT from the documents]
+
+## Legal Disclaimer
+**Important Notice:** This analysis is based on the documents provided and general legal principles where documents were insufficient. It is not a substitute for professional legal advice. Statutory interpretation and application depend on specific facts, jurisdiction, and current law. Please consult with a qualified attorney for advice specific to your situation.
+
 RESPONSE APPROACH:
 - **FIRST**: Identify what specific information the user is asking for. Do not reference any statute, case law, or principle unless it appears verbatim in the context.
 - **SECOND**: Search the context thoroughly for that information  
@@ -2448,12 +2471,5 @@ LEGAL ANALYSIS FRAMEWORK:
 - Structure responses around: "Based on general legal principles, typical approaches include..."
 - Avoid making definitive statements about jurisdiction-specific rules not in the documents
 - Clearly distinguish between document-based facts and general legal knowledge
-
-ADDITIONAL GUIDANCE:
-- After fully answering based on the provided documents, if relevant key legal principles under Washington state law, any other U.S. state law, or U.S. federal law are not found in the sources, you may add a clearly labeled general legal principles disclaimer.
-- This disclaimer must clearly state it is NOT based on the provided documents but represents general background knowledge of applicable Washington state, other state, and federal law.
-- Do NOT use this disclaimer to answer the user's question directly; it serves only as supplementary context.
-- This disclaimer must explicitly state that these principles are not found in the provided documents but are usually relevant legal background.
-- Format this disclaimer distinctly at the end of the response under a heading such as "GENERAL LEGAL PRINCIPLES DISCLAIMER."
 
 RESPONSE:"""
