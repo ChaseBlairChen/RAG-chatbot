@@ -12,46 +12,62 @@ export const AppHeader: React.FC<AppHeaderProps> = ({ sessionId }) => {
   const { backendCapabilities } = useBackend();
 
   return (
-    <header className="bg-white shadow-sm border-b border-gray-100">
-      <div className="px-6 py-4">
+    <header className="glass-effect border-b border-slate-200/50">
+      <div className="px-8 py-6">
         <div className="flex items-center justify-between">
           {/* Left side - Welcome message */}
-          <div>
-            <h2 className="text-lg font-medium text-gray-900">
+          <div className="space-y-1">
+            <h2 className="text-2xl font-bold text-slate-900">
               Welcome back, {currentUser?.username}
             </h2>
-            <p className="text-sm text-gray-600">
-              Legal document analysis and case management platform
+            <p className="text-slate-600 font-medium">
+              Your AI-powered legal research assistant
             </p>
           </div>
 
           {/* Right side - User info and controls */}
-          <div className="flex items-center gap-3">
-            {/* User Info */}
-            <div className="flex items-center gap-2 px-3 py-1.5 bg-gray-50 rounded-full">
-              <div className="w-2 h-2 rounded-full bg-green-500" />
-              <span className="text-sm text-gray-700">{currentUser?.username}</span>
-            </div>
+          <div className="flex items-center gap-4">
+            {/* Status Indicators */}
+            <div className="flex items-center gap-3">
+              {/* Connection Status */}
+              <div className="flex items-center gap-2 px-3 py-2 bg-green-50 rounded-xl border border-green-200">
+                <div className="w-2 h-2 rounded-full bg-green-500 animate-pulse" />
+                <span className="text-sm font-medium text-green-700">Connected</span>
+              </div>
 
-            {/* Subscription Badge */}
-            <div className={`px-3 py-1.5 rounded-full text-xs font-medium ${getSubscriptionBadgeClass(currentUser?.subscription_tier || 'free')}`}>
-              {currentUser?.subscription_tier.toUpperCase()}
-              {currentUser?.subscription_tier === 'premium' && (
-                <span className="ml-1" title="Has access to external legal databases">🔗</span>
+              {/* Enhanced RAG Status */}
+              {backendCapabilities.enhancedRag && (
+                <div className="flex items-center gap-2 px-3 py-2 bg-blue-50 rounded-xl border border-blue-200">
+                  <span className="text-blue-600">🧠</span>
+                  <span className="text-sm font-medium text-blue-700">Smart RAG</span>
+                </div>
               )}
             </div>
 
-            {/* Enhanced RAG Status */}
-            {backendCapabilities.enhancedRag && (
-              <div className="flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-medium bg-stone-100 text-stone-700 border border-stone-200">
-                <span>🧠</span>
-                <span>Smart RAG</span>
+            {/* User Profile */}
+            <div className="flex items-center gap-3 px-4 py-2 bg-slate-50 rounded-xl border border-slate-200">
+              <div className="w-8 h-8 bg-gradient-to-br from-slate-600 to-slate-800 rounded-full flex items-center justify-center">
+                <span className="text-white font-semibold text-sm">
+                  {currentUser?.username.charAt(0).toUpperCase()}
+                </span>
               </div>
-            )}
+              <div className="flex flex-col">
+                <span className="text-sm font-semibold text-slate-900">{currentUser?.username}</span>
+                <span className="text-xs text-slate-500">{currentUser?.email}</span>
+              </div>
+            </div>
+
+            {/* Subscription Badge */}
+            <div className={`px-4 py-2 rounded-xl text-sm font-semibold ${getSubscriptionBadgeClass(currentUser?.subscription_tier || 'free')}`}>
+              {currentUser?.subscription_tier.toUpperCase()}
+              {currentUser?.subscription_tier === 'premium' && (
+                <span className="ml-2" title="Has access to external legal databases">🔗</span>
+              )}
+            </div>
             
             {/* Session Info */}
             {sessionId && (
-              <div className="text-xs text-gray-500 font-mono bg-gray-50 px-3 py-1.5 rounded-lg">
+              <div className="text-xs text-slate-500 font-mono bg-slate-100 px-3 py-2 rounded-lg border border-slate-200">
                 Session: {sessionId.substring(0, 8)}
               </div>
             )}
@@ -59,7 +75,7 @@ export const AppHeader: React.FC<AppHeaderProps> = ({ sessionId }) => {
             {/* Logout Button */}
             <button
               onClick={logout}
-              className="p-2 bg-gray-50 hover:bg-gray-100 rounded-lg transition-all hover:shadow-sm text-gray-600 hover:text-gray-700"
+              className="p-3 bg-slate-100 hover:bg-slate-200 rounded-xl transition-all duration-200 text-slate-600 hover:text-slate-700 hover:shadow-soft"
               title="Logout"
             >
               <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">

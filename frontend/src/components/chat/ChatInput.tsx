@@ -1,17 +1,17 @@
 // src/components/chat/ChatInput.tsx (COMPLETE REPLACEMENT)
-import React from 'react';
+import React, { useState } from 'react';
 
 interface ChatInputProps {
   input: string;
-  setInput: (value: string) => void;
+  setInput: (input: string) => void;
   onSend: () => void;
   isLoading: boolean;
   responseStyle: string;
-  setResponseStyle: (value: string) => void;
+  setResponseStyle: (style: string) => void;
   searchScope: string;
-  setSearchScope: (value: string) => void;
+  setSearchScope: (scope: string) => void;
   useEnhancedRag: boolean;
-  setUseEnhancedRag: (value: boolean) => void;
+  setUseEnhancedRag: (enabled: boolean) => void;
 }
 
 export const ChatInput: React.FC<ChatInputProps> = ({
@@ -26,6 +26,8 @@ export const ChatInput: React.FC<ChatInputProps> = ({
   useEnhancedRag,
   setUseEnhancedRag
 }) => {
+  const [showAdvanced, setShowAdvanced] = useState(false);
+
   const handleKeyPress = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
@@ -33,167 +35,105 @@ export const ChatInput: React.FC<ChatInputProps> = ({
     }
   };
 
-  // Detect if this is a query that should use external APIs
-  const shouldUseExternalAPIs = () => {
-    const query = input.toLowerCase();
-    const congressionalTerms = ['bill', 'congress', 'house', 'senate', 'legislation', 'passed', 'law'];
-    const legalTerms = ['case', 'court', 'decision', 'ruling', 'supreme court'];
-    const governmentTerms = ['sec', 'enforcement', 'violation', 'fda', 'recent'];
-    
-    return [...congressionalTerms, ...legalTerms, ...governmentTerms].some(term => query.includes(term));
-  };
-
-  const getSearchScopeDescription = (scope: string) => {
-    switch (scope) {
-      case 'all':
-        return 'External APIs + Your Documents (Recommended for legal research)';
-      case 'user_only':
-        return 'Only Your Uploaded Documents';
-      case 'default_only':
-        return 'Only Default Legal Database';
-      default:
-        return scope;
-    }
-  };
-
   return (
-    <div className="p-6 border-t border-gray-100 bg-gray-50">
-      {/* External API Indicator */}
-      {shouldUseExternalAPIs() && searchScope === 'all' && (
-        <div className="mb-4 p-3 bg-green-50 border border-green-200 rounded-lg">
-          <div className="flex items-center gap-2 text-sm text-green-800">
-            <div className="w-2 h-2 bg-green-500 rounded-full animate-pulse" />
-            <span className="font-medium">External Legal APIs Enabled</span>
-            <span className="text-green-600">
-              - Will search Congress.gov, Harvard Caselaw, CourtListener, and Government databases
-            </span>
-          </div>
-        </div>
-      )}
-
-      {/* Controls */}
-      <div className="flex items-center gap-4 mb-4 text-sm">
-        <div className="flex items-center gap-2">
-          <label className="text-gray-600">Style:</label>
-          <select 
-            value={responseStyle} 
-            onChange={(e) => setResponseStyle(e.target.value)}
-            className="bg-white border border-gray-200 rounded px-2 py-1 text-sm"
-          >
-            <option value="concise">Concise</option>
-            <option value="balanced">Balanced</option>
-            <option value="detailed">Detailed</option>
-          </select>
-        </div>
-        
-        <div className="flex items-center gap-2">
-          <label className="text-gray-600">Search:</label>
-          <select 
-            value={searchScope} 
-            onChange={(e) => setSearchScope(e.target.value)}
-            className="bg-white border border-gray-200 rounded px-2 py-1 text-sm"
-            title={getSearchScopeDescription(searchScope)}
-          >
-            <option value="all">🌐 All Sources (External APIs + Documents)</option>
-            <option value="user_only">📁 My Documents Only</option>
-            <option value="default_only">📚 Legal Database Only</option>
-          </select>
-        </div>
-        
-        <div className="flex items-center gap-2">
-          <label className="flex items-center gap-1 text-gray-600">
-            <input 
-              type="checkbox" 
-              checked={useEnhancedRag} 
-              onChange={(e) => setUseEnhancedRag(e.target.checked)}
-              className="w-4 h-4"
-            />
-            Enhanced RAG
-          </label>
-        </div>
-
-        {/* Search Scope Indicator */}
-        <div className="flex items-center gap-2 ml-auto">
-          {searchScope === 'all' && (
-            <span className="text-xs bg-green-100 text-green-700 px-2 py-1 rounded-full">
-              ✅ External APIs Active
-            </span>
-          )}
-          {searchScope === 'user_only' && (
-            <span className="text-xs bg-blue-100 text-blue-700 px-2 py-1 rounded-full">
-              📁 Documents Only
-            </span>
-          )}
-          {searchScope === 'default_only' && (
-            <span className="text-xs bg-gray-100 text-gray-700 px-2 py-1 rounded-full">
-              📚 Database Only
-            </span>
-          )}
-        </div>
-      </div>
-
-      {/* Query Suggestions */}
-      {input.length === 0 && (
-        <div className="mb-4 p-3 bg-blue-50 border border-blue-200 rounded-lg">
-          <h4 className="font-medium text-blue-900 mb-2">💡 Try These External API Queries:</h4>
-          <div className="flex flex-wrap gap-2">
-            {[
-              'recent bills passed in Congress 2025',
-              'Supreme Court immigration decisions',
-              'H.R.1 One Big Beautiful Bill status',
-              'recent SEC enforcement actions',
-              'EPA violations in Washington state'
-            ].map(suggestion => (
-              <button
-                key={suggestion}
-                onClick={() => {
-                  setInput(suggestion);
-                  setSearchScope('all'); // Force external APIs
-                }}
-                className="text-xs bg-blue-100 text-blue-800 px-2 py-1 rounded hover:bg-blue-200 transition-all"
-              >
-                {suggestion}
-              </button>
-            ))}
-          </div>
-        </div>
-      )}
-      
-      {/* Input and Send */}
-      <div className="flex gap-3">
-        <input
-          type="text"
-          value={input}
-          onChange={(e) => setInput(e.target.value)}
-          onKeyPress={handleKeyPress}
-          placeholder="Ask about bills, cases, laws, or your documents..."
-          className="flex-1 px-4 py-3 border border-gray-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-slate-500 focus:border-transparent"
-          disabled={isLoading}
-        />
+    <div className="border-t border-slate-200 bg-slate-50 p-6">
+      {/* Advanced Options Toggle */}
+      <div className="mb-4">
         <button
-          onClick={onSend}
-          disabled={isLoading || !input.trim()}
-          className="bg-slate-900 text-white px-6 py-3 rounded-xl hover:bg-slate-800 disabled:bg-gray-300 disabled:cursor-not-allowed transition-all font-medium"
+          onClick={() => setShowAdvanced(!showAdvanced)}
+          className="text-sm text-slate-600 hover:text-slate-800 font-medium transition-colors"
         >
-          {isLoading ? (
-            <div className="flex items-center">
-              <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin mr-2" />
-              Searching...
-            </div>
-          ) : (
-            'Send'
-          )}
+          {showAdvanced ? '▼' : '▶'} Advanced Options
         </button>
       </div>
 
-      {/* Search Scope Help */}
-      <div className="mt-3 text-xs text-gray-500">
-        <strong>Search Scope:</strong> {getSearchScopeDescription(searchScope)}
-        {shouldUseExternalAPIs() && searchScope !== 'all' && (
-          <span className="ml-2 text-orange-600 font-medium">
-            ⚠️ This query would benefit from External APIs - consider switching to "All Sources"
-          </span>
-        )}
+      {/* Advanced Options */}
+      {showAdvanced && (
+        <div className="mb-4 p-4 bg-white rounded-xl border border-slate-200 space-y-4">
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            {/* Response Style */}
+            <div>
+              <label className="block text-sm font-medium text-slate-700 mb-2">
+                Response Style
+              </label>
+              <select
+                value={responseStyle}
+                onChange={(e) => setResponseStyle(e.target.value)}
+                className="input-field"
+              >
+                <option value="balanced">Balanced</option>
+                <option value="detailed">Detailed</option>
+                <option value="concise">Concise</option>
+                <option value="technical">Technical</option>
+              </select>
+            </div>
+
+            {/* Search Scope */}
+            <div>
+              <label className="block text-sm font-medium text-slate-700 mb-2">
+                Search Scope
+              </label>
+              <select
+                value={searchScope}
+                onChange={(e) => setSearchScope(e.target.value)}
+                className="input-field"
+              >
+                <option value="all">All Sources</option>
+                <option value="user_only">User Documents</option>
+                <option value="external_only">External APIs</option>
+              </select>
+            </div>
+
+            {/* Enhanced RAG Toggle */}
+            <div>
+              <label className="block text-sm font-medium text-slate-700 mb-2">
+                Smart RAG
+              </label>
+              <div className="flex items-center">
+                <input
+                  type="checkbox"
+                  checked={useEnhancedRag}
+                  onChange={(e) => setUseEnhancedRag(e.target.checked)}
+                  className="w-4 h-4 text-slate-600 bg-slate-100 border-slate-300 rounded focus:ring-slate-500"
+                />
+                <span className="ml-2 text-sm text-slate-600">Enhanced Search</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Input Area */}
+      <div className="flex gap-4">
+        <div className="flex-1">
+          <textarea
+            value={input}
+            onChange={(e) => setInput(e.target.value)}
+            onKeyPress={handleKeyPress}
+            placeholder="Ask me anything about legal research, document analysis, or case law..."
+            className="input-field resize-none h-20"
+            disabled={isLoading}
+          />
+        </div>
+        <button
+          onClick={onSend}
+          disabled={!input.trim() || isLoading}
+          className="btn-primary h-20 px-8 disabled:opacity-50 disabled:cursor-not-allowed"
+        >
+          {isLoading ? (
+            <div className="flex items-center gap-2">
+              <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
+              <span>Thinking...</span>
+            </div>
+          ) : (
+            <div className="flex items-center gap-2">
+              <span>Send</span>
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8" />
+              </svg>
+            </div>
+          )}
+        </button>
       </div>
     </div>
   );

@@ -41,14 +41,32 @@ class NoSQLManager:
         }
     
     async def initialize_mongodb(self):
-        """Initialize MongoDB connection"""
+        """Initialize MongoDB connection with security enhancements"""
         try:
             # Get MongoDB connection string from environment
             mongodb_url = os.getenv("MONGODB_URL", "mongodb://localhost:27017")
             database_name = os.getenv("MONGODB_DATABASE", "legal_assistant")
             
-            # Create async MongoDB client
-            self.mongodb_client = AsyncIOMotorClient(mongodb_url)
+            # Security enhancements for production
+            if "mongodb://localhost" not in mongodb_url:
+                # Production: Add SSL and authentication parameters
+                if "?" not in mongodb_url:
+                    mongodb_url += "?ssl=true&ssl_cert_reqs=CERT_NONE"
+                else:
+                    mongodb_url += "&ssl=true&ssl_cert_reqs=CERT_NONE"
+                
+                # Add connection pooling for better performance
+                mongodb_url += "&maxPoolSize=10&minPoolSize=1"
+                
+                logger.info("🔒 Production MongoDB: SSL/TLS enabled")
+            
+            # Create async MongoDB client with security options
+            self.mongodb_client = AsyncIOMotorClient(
+                mongodb_url,
+                serverSelectionTimeoutMS=5000,  # 5 second timeout
+                connectTimeoutMS=10000,         # 10 second connection timeout
+                socketTimeoutMS=20000,          # 20 second socket timeout
+            )
             
             # Test connection
             await self.mongodb_client.admin.command('ping')
@@ -77,15 +95,38 @@ class NoSQLManager:
             self.mongodb_available = False
     
     async def initialize_redis(self):
-        """Initialize Redis connection for caching"""
+        """Initialize Redis connection with security enhancements"""
         try:
             import redis.asyncio as redis
             
             redis_url = os.getenv("REDIS_URL", "redis://localhost:6379")
-            self.redis_client = redis.from_url(redis_url, decode_responses=True)
+            
+            # Security enhancements for production
+            if "redis://localhost" not in redis_url:
+                # Production: Add SSL support
+                if "redis://" in redis_url:
+                    redis_url = redis_url.replace("redis://", "rediss://")
+                
+                logger.info("🔒 Production Redis: SSL/TLS enabled")
+            
+            # Create Redis client with security options
+            self.redis_client = redis.from_url(
+                redis_url, 
+                decode_responses=True,
+                socket_timeout=5,      # 5 second socket timeout
+                socket_connect_timeout=5,  # 5 second connection timeout
+                retry_on_timeout=True,
+                health_check_interval=30,  # Health check every 30 seconds
+            )
             
             # Test connection
             await self.redis_client.ping()
+            
+            # Set up security configurations
+            if "redis://localhost" not in redis_url:
+                # Production: Configure key expiration and access controls
+                await self.redis_client.config_set("maxmemory-policy", "allkeys-lru")
+                await self.redis_client.config_set("timeout", "300")  # 5 minute timeout
             
             self.redis_available = True
             logger.info("✅ Redis connected successfully")

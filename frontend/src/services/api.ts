@@ -13,7 +13,10 @@ export class ApiService {
     options: RequestInit = {}
   ): Promise<T> {
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 30000); // 30s timeout
+    // Increase timeout for research operations
+    const isResearchEndpoint = endpoint.includes('country-conditions') || endpoint.includes('research');
+    const timeout = isResearchEndpoint ? 120000 : 30000; // 2 minutes for research, 30s for others
+    const timeoutId = setTimeout(() => controller.abort(), timeout);
 
     try {
       const response = await fetch(`${this.baseUrl}${endpoint}`, {

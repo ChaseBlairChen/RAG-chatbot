@@ -1,303 +1,406 @@
-"""Comprehensive analysis service"""
-import time
+"""
+Enhanced Analysis Service with AI Agents for Specialized Document Analysis
+"""
 import logging
-from typing import Dict, List, Tuple, Optional
+import asyncio
+from typing import Dict, List, Any, Optional, Tuple
+from dataclasses import dataclass
+from enum import Enum
+import re
+import json
 
-from ..models import ComprehensiveAnalysisRequest, StructuredAnalysisResponse, AnalysisType
-from ..config import COMPREHENSIVE_SEARCH_K, OPENROUTER_API_KEY, OPENAI_API_BASE
-from .container_manager import get_container_manager
-from .ai_service import call_openrouter_api
+from ..models import AnalysisType, DocumentCategory
+from ..services.ai_service import call_openrouter_api
 from ..utils.formatting import format_context_for_llm
 
 logger = logging.getLogger(__name__)
 
-class ComprehensiveAnalysisProcessor:
-    def __init__(self):
-        self.analysis_prompts = {
-            "document_summary": "Analyze this document and provide a comprehensive summary including document type, purpose, main parties, key terms, important dates, and financial obligations.",
-            "key_clauses": "Extract and analyze key legal clauses including termination, indemnification, liability, governing law, confidentiality, payment terms, and dispute resolution. For each clause, provide specific text references and implications.",
-            "risk_assessment": "Identify and assess legal risks including unilateral rights, broad indemnification, unlimited liability, vague obligations, and unfavorable terms. Rate each risk (High/Medium/Low) and suggest mitigation strategies.",
-            "timeline_deadlines": "Extract all time-related information including start/end dates, payment deadlines, notice periods, renewal terms, performance deadlines, and warranty periods. Present chronologically.",
-            "party_obligations": "List all obligations for each party including what must be done, deadlines, conditions, performance standards, and consequences of non-compliance. Organize by party.",
-            "missing_clauses": "Identify commonly expected clauses that may be missing such as force majeure, limitation of liability, dispute resolution, severability, assignment restrictions, and notice provisions. Explain the importance and risks of each missing clause."
+class AnalysisAgent(Enum):
+    """Specialized analysis agents"""
+    CONTRACT_ANALYST = "contract_analyst"
+    IMMIGRATION_SPECIALIST = "immigration_specialist"
+    LITIGATION_ANALYST = "litigation_analyst"
+    COMPLIANCE_OFFICER = "compliance_officer"
+    RISK_ASSESSOR = "risk_assessor"
+    GENERAL_ANALYST = "general_analyst"
+
+@dataclass
+class AnalysisTask:
+    """Analysis task definition"""
+    agent: AnalysisAgent
+    document_content: str
+    document_type: str
+    analysis_focus: List[str]
+    user_context: Optional[str] = None
+    priority: str = "normal"
+
+@dataclass
+class AnalysisResult:
+    """Enhanced analysis result"""
+    agent: AnalysisAgent
+    analysis_type: str
+    findings: Dict[str, Any]
+    recommendations: List[str]
+    risk_level: str
+    confidence_score: float
+    processing_time: float
+    sources_cited: List[str]
+
+class AIAnalysisAgent:
+    """Base class for AI analysis agents"""
+    
+    def __init__(self, agent_type: AnalysisAgent):
+        self.agent_type = agent_type
+        self.specialized_prompts = self._get_specialized_prompts()
+    
+    def _get_specialized_prompts(self) -> Dict[str, str]:
+        """Get specialized prompts for this agent"""
+        return {
+            "contract_analyst": """You are an expert contract analyst. Analyze the document for:
+1. Key Terms and Conditions
+2. Obligations and Rights
+3. Risk Factors and Red Flags
+4. Missing Clauses
+5. Unfavorable Terms
+6. Compliance Issues
+7. Recommendations for Improvement
+
+Structure your analysis with clear sections and actionable insights.""",
+            
+            "immigration_specialist": """You are an immigration law specialist. Analyze the document for:
+1. Immigration Status Implications
+2. Form Requirements and Deadlines
+3. Evidence Requirements
+4. Potential Issues or Red Flags
+5. USCIS Processing Considerations
+6. Legal Strategy Recommendations
+7. Risk Assessment
+
+Focus on practical immigration law applications.""",
+            
+            "litigation_analyst": """You are a litigation analyst. Analyze the document for:
+1. Legal Claims and Defenses
+2. Evidence Strength
+3. Procedural Issues
+4. Statute of Limitations
+5. Jurisdiction and Venue
+6. Settlement Considerations
+7. Trial Strategy Implications
+
+Provide litigation-focused analysis and recommendations.""",
+            
+            "compliance_officer": """You are a compliance officer. Analyze the document for:
+1. Regulatory Compliance Issues
+2. Required Disclosures
+3. Reporting Obligations
+4. Record-Keeping Requirements
+5. Penalty Risks
+6. Compliance Recommendations
+7. Monitoring Requirements
+
+Focus on regulatory and compliance aspects.""",
+            
+            "risk_assessor": """You are a legal risk assessor. Analyze the document for:
+1. Legal Risks and Liabilities
+2. Financial Exposure
+3. Reputational Risks
+4. Operational Risks
+5. Mitigation Strategies
+6. Insurance Considerations
+7. Risk Monitoring Recommendations
+
+Provide comprehensive risk assessment and mitigation strategies."""
         }
     
-    def process_comprehensive_analysis(self, request: ComprehensiveAnalysisRequest) -> StructuredAnalysisResponse:
-        start_time = time.time()
+    async def analyze_document(self, task: AnalysisTask) -> AnalysisResult:
+        """Analyze document using specialized agent"""
+        start_time = asyncio.get_event_loop().time()
         
         try:
-            search_results, sources_searched, retrieval_method = self._enhanced_document_specific_search(
-                request.user_id, 
-                request.document_id, 
-                "comprehensive legal document analysis",
-                k=COMPREHENSIVE_SEARCH_K
+            # Create specialized prompt
+            prompt = self._create_analysis_prompt(task)
+            
+            # Get AI analysis
+            analysis_text = await self._get_ai_analysis(prompt, task.document_content)
+            
+            # Parse and structure results
+            findings = self._parse_analysis_results(analysis_text)
+            
+            # Generate recommendations
+            recommendations = self._extract_recommendations(analysis_text)
+            
+            # Assess risk level
+            risk_level = self._assess_risk_level(findings)
+            
+            # Calculate confidence
+            confidence_score = self._calculate_confidence(findings, task.document_content)
+            
+            processing_time = asyncio.get_event_loop().time() - start_time
+            
+            return AnalysisResult(
+                agent=self.agent_type,
+                analysis_type=task.analysis_focus[0] if task.analysis_focus else "general",
+                findings=findings,
+                recommendations=recommendations,
+                risk_level=risk_level,
+                confidence_score=confidence_score,
+                processing_time=processing_time,
+                sources_cited=[]
             )
             
-            if not search_results:
-                return StructuredAnalysisResponse(
-                    warnings=["No relevant documents found for analysis"],
-                    processing_time=time.time() - start_time,
-                    retrieval_method="no_documents_found"
-                )
-            
-            context_text, source_info = format_context_for_llm(search_results, max_length=8000)
-            
-            response = StructuredAnalysisResponse()
-            response.sources_by_section = {}
-            response.confidence_scores = {}
-            response.retrieval_method = retrieval_method
-            
-            if AnalysisType.COMPREHENSIVE in request.analysis_types:
-                comprehensive_prompt = self._create_comprehensive_prompt(context_text)
-                
-                try:
-                    analysis_result = call_openrouter_api(comprehensive_prompt, OPENROUTER_API_KEY, OPENAI_API_BASE)
-                    parsed_sections = self._parse_comprehensive_response(analysis_result)
-                    
-                    response.document_summary = parsed_sections.get("summary", "")
-                    response.key_clauses = parsed_sections.get("clauses", "")
-                    response.risk_assessment = parsed_sections.get("risks", "")
-                    response.timeline_deadlines = parsed_sections.get("timeline", "")
-                    response.party_obligations = parsed_sections.get("obligations", "")
-                    response.missing_clauses = parsed_sections.get("missing", "")
-                    
-                    response.overall_confidence = self._calculate_comprehensive_confidence(parsed_sections, len(search_results))
-                    
-                    for section in ["summary", "clauses", "risks", "timeline", "obligations", "missing"]:
-                        response.sources_by_section[section] = source_info
-                        response.confidence_scores[section] = response.overall_confidence
-                    
-                except Exception as e:
-                    logger.error(f"Comprehensive analysis failed: {e}")
-                    response.warnings.append(f"Comprehensive analysis failed: {str(e)}")
-                    response.overall_confidence = 0.1
-            
-            else:
-                for analysis_type in request.analysis_types:
-                    section_result = self._process_individual_analysis(analysis_type, context_text, source_info)
-                    
-                    if analysis_type == AnalysisType.SUMMARY:
-                        response.document_summary = section_result["content"]
-                    elif analysis_type == AnalysisType.CLAUSES:
-                        response.key_clauses = section_result["content"]
-                    elif analysis_type == AnalysisType.RISKS:
-                        response.risk_assessment = section_result["content"]
-                    elif analysis_type == AnalysisType.TIMELINE:
-                        response.timeline_deadlines = section_result["content"]
-                    elif analysis_type == AnalysisType.OBLIGATIONS:
-                        response.party_obligations = section_result["content"]
-                    elif analysis_type == AnalysisType.MISSING_CLAUSES:
-                        response.missing_clauses = section_result["content"]
-                    
-                    response.confidence_scores[analysis_type.value] = section_result["confidence"]
-                    response.sources_by_section[analysis_type.value] = source_info
-                
-                confidences = list(response.confidence_scores.values())
-                response.overall_confidence = sum(confidences) / len(confidences) if confidences else 0.0
-            
-            response.processing_time = time.time() - start_time
-            logger.info(f"Comprehensive analysis completed in {response.processing_time:.2f}s with confidence {response.overall_confidence:.2f}")
-            
+        except Exception as e:
+            logger.error(f"Analysis failed for {self.agent_type}: {e}")
+            return self._create_error_result(task, str(e))
+    
+    def _create_analysis_prompt(self, task: AnalysisTask) -> str:
+        """Create specialized analysis prompt"""
+        base_prompt = self.specialized_prompts.get(self.agent_type.value, self.specialized_prompts["general_analyst"])
+        
+        prompt = f"""
+{base_prompt}
+
+DOCUMENT TYPE: {task.document_type}
+ANALYSIS FOCUS: {', '.join(task.analysis_focus)}
+USER CONTEXT: {task.user_context or 'None provided'}
+
+Please analyze the following document and provide a structured response in JSON format with the following structure:
+{{
+    "key_findings": {{
+        "main_issues": ["list of main issues"],
+        "strengths": ["list of strengths"],
+        "weaknesses": ["list of weaknesses"],
+        "risks": ["list of risks"]
+    }},
+    "detailed_analysis": {{
+        "section_1": "detailed analysis of section 1",
+        "section_2": "detailed analysis of section 2"
+    }},
+    "recommendations": ["list of specific recommendations"],
+    "risk_assessment": {{
+        "overall_risk": "low/medium/high",
+        "risk_factors": ["list of risk factors"],
+        "mitigation_strategies": ["list of mitigation strategies"]
+    }},
+    "next_steps": ["list of recommended next steps"]
+}}
+
+DOCUMENT CONTENT:
+{task.document_content[:8000]}  # Limit content length
+"""
+        return prompt
+    
+    async def _get_ai_analysis(self, prompt: str, document_content: str) -> str:
+        """Get AI analysis with enhanced prompting"""
+        try:
+            response = call_openrouter_api(prompt, timeout=120)
             return response
-            
         except Exception as e:
-            logger.error(f"Comprehensive analysis processing failed: {e}")
-            return StructuredAnalysisResponse(
-                warnings=[f"Analysis processing failed: {str(e)}"],
-                processing_time=time.time() - start_time,
-                overall_confidence=0.0,
-                retrieval_method="error"
-            )
+            logger.error(f"AI analysis failed: {e}")
+            return self._create_fallback_analysis(document_content)
     
-    def _enhanced_document_specific_search(self, user_id: str, document_id: Optional[str], query: str, k: int = 15) -> Tuple[List, List[str], str]:
-        all_results = []
-        sources_searched = []
-        retrieval_method = "enhanced_document_specific"
-        
+    def _parse_analysis_results(self, analysis_text: str) -> Dict[str, Any]:
+        """Parse AI analysis results into structured format"""
         try:
-            container_manager = get_container_manager()
-            if document_id:
-                user_results = container_manager.enhanced_search_user_container(
-                    user_id, query, "", k=k, document_id=document_id
-                )
-                sources_searched.append(f"document_{document_id}")
-                logger.info(f"Document-specific search for {document_id}: {len(user_results)} results")
-            else:
-                user_results = container_manager.enhanced_search_user_container(
-                    user_id, query, "", k=k
-                )
-                sources_searched.append("all_user_documents")
-                logger.info(f"All documents search: {len(user_results)} results")
+            # Try to extract JSON from response
+            json_match = re.search(r'\{.*\}', analysis_text, re.DOTALL)
+            if json_match:
+                return json.loads(json_match.group())
             
-            for doc, score in user_results:
-                doc.metadata['source_type'] = 'user_container'
-                doc.metadata['search_scope'] = 'document_specific' if document_id else 'all_user_docs'
-                all_results.append((doc, score))
-            
-            return all_results[:k], sources_searched, retrieval_method
-            
+            # Fallback to text parsing
+            return self._parse_text_analysis(analysis_text)
         except Exception as e:
-            logger.error(f"Error in document-specific search: {e}")
-            return [], [], "error"
+            logger.error(f"Failed to parse analysis results: {e}")
+            return {"error": "Failed to parse analysis results", "raw_text": analysis_text}
     
-    def _create_comprehensive_prompt(self, context_text: str) -> str:
-        """Create a comprehensive analysis prompt with strict anti-hallucination measures"""
-        return f"""You are a legal document analyst providing structured analysis of legal documents.
-
-CRITICAL INSTRUCTIONS - PREVENT HALLUCINATION:
-1. **ONLY analyze what is EXPLICITLY written in the provided document**
-2. **NEVER add information from general legal knowledge or assumptions**
-3. **If information is not in the document, state: "Not specified in the document"**
-4. **Copy the exact words from the document when making claims - use "..." for direct quotes**
-5. **Each statement must be traceable to specific text in the document**
-
-ANALYSIS FRAMEWORK:
-
-## DOCUMENT SUMMARY
-- Document type (contract, agreement, memo, etc.)
-- Primary purpose and scope
-- Parties involved (full legal names as stated)
-- Effective date and term duration
-- Governing law and jurisdiction
-**Required: Copy the exact words from the document that identify each element**
-
-## KEY CLAUSES ANALYSIS
-Identify and copy the exact text of the following clauses if present:
-- Termination provisions (notice period, conditions, penalties)
-- Indemnification (who indemnifies whom, scope, exceptions)
-- Limitation of liability (caps, exclusions, carve-outs)
-- Confidentiality (duration, scope, exceptions)
-- Payment terms (amounts, schedules, late fees)
-- Intellectual property (ownership, licenses, restrictions)
-- Dispute resolution (arbitration, mediation, court selection)
-**For each clause: copy the exact words in quotes and provide section reference**
-
-## RISK ASSESSMENT
-Analyze only risks explicitly present in the document:
-- **HIGH RISK**: Unlimited liability, one-sided indemnification, no termination rights
-- **MEDIUM RISK**: Broad confidentiality, strict deadlines, significant penalties
-- **LOW RISK**: Standard commercial terms, mutual obligations, clear exit rights
-**Required: Copy the exact words from the document that create each risk**
-
-## TIMELINE & DEADLINES
-Extract all time-related provisions in chronological order:
-- Contract commencement date
-- Milestone deadlines
-- Notice periods (termination, breach, cure)
-- Renewal/expiration dates
-- Performance deadlines
-**Format: [Date/Deadline] - [Obligation] - "Copy exact words here" (Section X.X)**
-
-## PARTY OBLIGATIONS
-List all obligations by party as stated in the document:
-
-**[Party A Name]**:
-- Obligation 1: "Copy exact words from document" (Section reference)
-- Obligation 2: "Copy exact words from document" (Section reference)
-
-**[Party B Name]**:
-- Obligation 1: "Copy exact words from document" (Section reference)
-- Obligation 2: "Copy exact words from document" (Section reference)
-
-## MISSING CLAUSES ANALYSIS
-Identify standard legal provisions that are NOT present:
-- Force majeure
-- Severability
-- Entire agreement
-- Amendment procedures
-- Assignment restrictions
-- Warranty disclaimers
-- Insurance requirements
-**Only list if you've confirmed they're actually missing after checking the entire document**
-
-DOCUMENT TEXT TO ANALYZE:
-{context_text}
-
-IMPORTANT REMINDERS:
-- If you cannot find specific information, state: "Not specified in the provided document"
-- Do not suggest what "should" be in the document based on legal standards
-- Do not interpret or infer beyond what is explicitly written
-- Every factual claim must include the exact words from the document
-
-BEGIN ANALYSIS:"""
-    
-    def _parse_comprehensive_response(self, response_text: str) -> Dict[str, str]:
-        sections = {}
-        section_markers = {
-            "summary": ["## DOCUMENT SUMMARY", "# DOCUMENT SUMMARY"],
-            "clauses": ["## KEY CLAUSES ANALYSIS", "# KEY CLAUSES ANALYSIS", "## KEY CLAUSES"],
-            "risks": ["## RISK ASSESSMENT", "# RISK ASSESSMENT", "## RISKS"],
-            "timeline": ["## TIMELINE & DEADLINES", "# TIMELINE & DEADLINES", "## TIMELINE"],
-            "obligations": ["## PARTY OBLIGATIONS", "# PARTY OBLIGATIONS", "## OBLIGATIONS"],
-            "missing": ["## MISSING CLAUSES ANALYSIS", "# MISSING CLAUSES ANALYSIS", "## MISSING CLAUSES"]
+    def _parse_text_analysis(self, text: str) -> Dict[str, Any]:
+        """Parse text-based analysis into structured format"""
+        findings = {
+            "key_findings": {"main_issues": [], "strengths": [], "weaknesses": [], "risks": []},
+            "detailed_analysis": {},
+            "recommendations": [],
+            "risk_assessment": {"overall_risk": "medium", "risk_factors": [], "mitigation_strategies": []},
+            "next_steps": []
         }
         
-        lines = response_text.split('\n')
-        current_section = None
-        current_content = []
+        # Extract recommendations
+        rec_pattern = r'(?:recommend|suggest|advise|should|must).*?(?:\.|$)'
+        recommendations = re.findall(rec_pattern, text, re.IGNORECASE)
+        findings["recommendations"] = [rec.strip() for rec in recommendations[:5]]
         
-        for line in lines:
-            line_strip = line.strip()
-            
-            section_found = None
-            for section_key, markers in section_markers.items():
-                if any(line_strip.startswith(marker) for marker in markers):
-                    section_found = section_key
-                    break
-            
-            if section_found:
-                if current_section and current_content:
-                    sections[current_section] = '\n'.join(current_content).strip()
-                
-                current_section = section_found
-                current_content = []
-            else:
-                if current_section:
-                    current_content.append(line)
+        # Extract risk indicators
+        risk_pattern = r'\b(risk|danger|warning|caution|concern|issue|problem)\b'
+        risk_factors = re.findall(risk_pattern, text, re.IGNORECASE)
+        findings["risk_assessment"]["risk_factors"] = list(set(risk_factors))
         
-        if current_section and current_content:
-            sections[current_section] = '\n'.join(current_content).strip()
-        
-        for section_key in section_markers.keys():
-            if section_key not in sections or not sections[section_key]:
-                sections[section_key] = f"No {section_key.replace('_', ' ').title()} information found in the analysis."
-        
-        return sections
+        return findings
     
-    def _process_individual_analysis(self, analysis_type: AnalysisType, context_text: str, source_info: List[Dict]) -> Dict:
-        try:
-            prompt = self.analysis_prompts.get(analysis_type.value, "Analyze this legal document.")
-            full_prompt = f"{prompt}\n\nLEGAL DOCUMENT CONTEXT:\n{context_text}\n\nPlease provide a detailed analysis based ONLY on the provided context."
-            
-            result = call_openrouter_api(full_prompt, OPENROUTER_API_KEY, OPENAI_API_BASE)
-            
-            return {
-                "content": result,
-                "confidence": 0.7,
-                "sources": source_info
-            }
-        except Exception as e:
-            logger.error(f"Individual analysis failed for {analysis_type}: {e}")
-            return {
-                "content": f"Analysis failed for {analysis_type.value}: {str(e)}",
-                "confidence": 0.1,
-                "sources": []
-            }
+    def _extract_recommendations(self, analysis_text: str) -> List[str]:
+        """Extract actionable recommendations from analysis"""
+        recommendations = []
+        
+        # Look for recommendation patterns
+        patterns = [
+            r'(?:recommend|suggest|advise|should|must|consider|implement).*?(?:\.|$)',
+            r'(?:action item|next step|priority|urgent).*?(?:\.|$)',
+            r'(?:improve|enhance|strengthen|address|resolve).*?(?:\.|$)'
+        ]
+        
+        for pattern in patterns:
+            matches = re.findall(pattern, analysis_text, re.IGNORECASE)
+            recommendations.extend([match.strip() for match in matches])
+        
+        return list(set(recommendations))[:10]  # Limit to 10 unique recommendations
     
-    def _calculate_comprehensive_confidence(self, parsed_sections: Dict[str, str], num_sources: int) -> float:
-        try:
-            successful_sections = sum(1 for content in parsed_sections.values() 
-                                    if content and not content.startswith("No ") and len(content) > 50)
-            section_factor = successful_sections / len(parsed_sections)
-            
-            avg_length = sum(len(content) for content in parsed_sections.values()) / len(parsed_sections)
-            length_factor = min(1.0, avg_length / 200)
-            
-            source_factor = min(1.0, num_sources / 5)
-            
-            confidence = (section_factor * 0.5 + length_factor * 0.3 + source_factor * 0.2)
-            return max(0.1, min(1.0, confidence))
-            
-        except Exception as e:
-            logger.error(f"Error calculating confidence: {e}")
-            return 0.5
+    def _assess_risk_level(self, findings: Dict[str, Any]) -> str:
+        """Assess overall risk level based on findings"""
+        risk_indicators = 0
+        
+        # Count risk factors
+        if "risk_assessment" in findings:
+            risk_factors = findings["risk_assessment"].get("risk_factors", [])
+            risk_indicators += len(risk_factors)
+        
+        # Count issues and weaknesses
+        if "key_findings" in findings:
+            issues = findings["key_findings"].get("main_issues", [])
+            weaknesses = findings["key_findings"].get("weaknesses", [])
+            risk_indicators += len(issues) + len(weaknesses)
+        
+        # Determine risk level
+        if risk_indicators >= 5:
+            return "high"
+        elif risk_indicators >= 2:
+            return "medium"
+        else:
+            return "low"
+    
+    def _calculate_confidence(self, findings: Dict[str, Any], document_content: str) -> float:
+        """Calculate confidence score for analysis"""
+        confidence = 0.5  # Base confidence
+        
+        # Increase confidence based on structured findings
+        if "key_findings" in findings and findings["key_findings"]:
+            confidence += 0.2
+        
+        if "recommendations" in findings and findings["recommendations"]:
+            confidence += 0.2
+        
+        if "risk_assessment" in findings and findings["risk_assessment"]:
+            confidence += 0.1
+        
+        # Decrease confidence for errors
+        if "error" in findings:
+            confidence -= 0.3
+        
+        return min(max(confidence, 0.0), 1.0)
+    
+    def _create_fallback_analysis(self, document_content: str) -> str:
+        """Create fallback analysis when AI fails"""
+        return f"""
+Analysis could not be completed due to technical issues.
+
+Document Summary:
+- Document length: {len(document_content)} characters
+- Document type: General legal document
+- Recommendation: Please review manually or try again later
+
+Key areas to review:
+1. Document structure and completeness
+2. Legal requirements and compliance
+3. Potential risks and issues
+4. Recommended actions
+"""
+    
+    def _create_error_result(self, task: AnalysisTask, error: str) -> AnalysisResult:
+        """Create error result when analysis fails"""
+        return AnalysisResult(
+            agent=self.agent_type,
+            analysis_type="error",
+            findings={"error": error},
+            recommendations=["Please try again or contact support"],
+            risk_level="unknown",
+            confidence_score=0.0,
+            processing_time=0.0,
+            sources_cited=[]
+        )
+
+class AnalysisService:
+    """Enhanced analysis service with multiple AI agents"""
+    
+    def __init__(self):
+        self.agents = {
+            AnalysisAgent.CONTRACT_ANALYST: AIAnalysisAgent(AnalysisAgent.CONTRACT_ANALYST),
+            AnalysisAgent.IMMIGRATION_SPECIALIST: AIAnalysisAgent(AnalysisAgent.IMMIGRATION_SPECIALIST),
+            AnalysisAgent.LITIGATION_ANALYST: AIAnalysisAgent(AnalysisAgent.LITIGATION_ANALYST),
+            AnalysisAgent.COMPLIANCE_OFFICER: AIAnalysisAgent(AnalysisAgent.COMPLIANCE_OFFICER),
+            AnalysisAgent.RISK_ASSESSOR: AIAnalysisAgent(AnalysisAgent.RISK_ASSESSOR),
+            AnalysisAgent.GENERAL_ANALYST: AIAnalysisAgent(AnalysisAgent.GENERAL_ANALYST)
+        }
+    
+    async def analyze_document_comprehensive(self, document_content: str, document_type: str, 
+                                           analysis_types: List[str], user_context: str = None) -> List[AnalysisResult]:
+        """Perform comprehensive document analysis using multiple agents"""
+        results = []
+        
+        # Determine which agents to use based on analysis types
+        agents_to_use = self._select_agents(analysis_types, document_type)
+        
+        # Create analysis tasks
+        tasks = []
+        for agent in agents_to_use:
+            task = AnalysisTask(
+                agent=agent,
+                document_content=document_content,
+                document_type=document_type,
+                analysis_focus=analysis_types,
+                user_context=user_context
+            )
+            tasks.append(task)
+        
+        # Run analyses concurrently
+        analysis_tasks = [self.agents[task.agent].analyze_document(task) for task in tasks]
+        results = await asyncio.gather(*analysis_tasks, return_exceptions=True)
+        
+        # Filter out exceptions and return valid results
+        valid_results = [result for result in results if isinstance(result, AnalysisResult)]
+        
+        return valid_results
+    
+    def _select_agents(self, analysis_types: List[str], document_type: str) -> List[AnalysisAgent]:
+        """Select appropriate agents based on analysis types and document type"""
+        selected_agents = []
+        
+        # Always include general analyst
+        selected_agents.append(AnalysisAgent.GENERAL_ANALYST)
+        
+        # Select specialized agents based on analysis types
+        for analysis_type in analysis_types:
+            if "contract" in analysis_type.lower():
+                selected_agents.append(AnalysisAgent.CONTRACT_ANALYST)
+            elif "immigration" in analysis_type.lower():
+                selected_agents.append(AnalysisAgent.IMMIGRATION_SPECIALIST)
+            elif "litigation" in analysis_type.lower():
+                selected_agents.append(AnalysisAgent.LITIGATION_ANALYST)
+            elif "compliance" in analysis_type.lower():
+                selected_agents.append(AnalysisAgent.COMPLIANCE_OFFICER)
+            elif "risk" in analysis_type.lower():
+                selected_agents.append(AnalysisAgent.RISK_ASSESSOR)
+        
+        # Select based on document type
+        if "contract" in document_type.lower():
+            selected_agents.append(AnalysisAgent.CONTRACT_ANALYST)
+        elif "immigration" in document_type.lower():
+            selected_agents.append(AnalysisAgent.IMMIGRATION_SPECIALIST)
+        
+        # Remove duplicates while preserving order
+        seen = set()
+        unique_agents = []
+        for agent in selected_agents:
+            if agent not in seen:
+                seen.add(agent)
+                unique_agents.append(agent)
+        
+        return unique_agents
+
+# Global instance
+analysis_service = AnalysisService()

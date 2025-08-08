@@ -87,10 +87,53 @@ class UserContainerManager:
             return None
 
     def _get_container_path(self, user_id: str) -> Tuple[str, str]:
-        """Generates container ID and path from a user ID."""
+        """Generates container ID and path from a user ID with security validation."""
+        # Validate user_id to prevent path traversal attacks
+        if not user_id or len(user_id) > 100 or not user_id.replace('_', '').replace('-', '').isalnum():
+            raise ValueError("Invalid user_id format")
+        
         container_id = hashlib.sha256(user_id.encode()).hexdigest()[:16]
         container_path = os.path.join(self.base_path, container_id)
+        
+        # Security: Ensure the path is within the allowed directory
+        container_path = os.path.abspath(container_path)
+        if not container_path.startswith(os.path.abspath(self.base_path)):
+            raise ValueError("Container path outside allowed directory")
+        
         return container_id, container_path
+
+    def _validate_user_access(self, user_id: str, container_id: str) -> bool:
+        """Validate that a user has access to a specific container."""
+        expected_container_id, _ = self._get_container_path(user_id)
+        return container_id == expected_container_id
+
+    def _sanitize_filename(self, filename: str) -> str:
+        """Sanitize filename to prevent path traversal attacks."""
+        if not filename:
+            raise ValueError("Filename cannot be empty")
+        
+        # Remove path separators and dangerous characters
+        dangerous_chars = ['/', '\\', ':', '*', '?', '"', '<', '>', '|']
+        for char in dangerous_chars:
+            filename = filename.replace(char, '_')
+        
+        # Limit filename length
+        if len(filename) > 255:
+            name, ext = os.path.splitext(filename)
+            filename = name[:255-len(ext)] + ext
+        
+        return filename
+
+    def _validate_file_size(self, file_size: int) -> bool:
+        """Validate file size to prevent DoS attacks."""
+        max_size = 100 * 1024 * 1024  # 100MB limit
+        return file_size <= max_size
+
+    def _validate_file_type(self, filename: str) -> bool:
+        """Validate file type to prevent malicious uploads."""
+        allowed_extensions = {'.pdf', '.txt', '.docx', '.doc', '.rtf', '.odt'}
+        file_ext = os.path.splitext(filename.lower())[1]
+        return file_ext in allowed_extensions
 
     def get_container_id(self, user_id: str) -> str:
         """Get container ID for user"""

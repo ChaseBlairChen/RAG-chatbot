@@ -11,7 +11,7 @@ from fastapi.responses import JSONResponse
 from .config import DEFAULT_CHROMA_PATH, USER_CONTAINERS_PATH, FeatureFlags
 from .core.dependencies import initialize_nlp_models
 from .services.container_manager import initialize_container_manager
-from .api.routers import query, documents, health, immigration
+from .api.routers import query, documents, health, immigration, analysis, admin, external
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -99,13 +99,73 @@ async def limit_request_size(request: Request, call_next):
             return JSONResponse(status_code=413, content={"detail": "Request too large"})
     return await call_next(request)
 
+# Rate limiting middleware
+@app.middleware("http")
+async def rate_limit_middleware(request: Request, call_next):
+    """Basic rate limiting middleware"""
+    client_ip = request.client.host
+    
+    # Simple in-memory rate limiting (use Redis in production)
+    if not hasattr(request.app.state, 'rate_limit_store'):
+        request.app.state.rate_limit_store = {}
+    
+    current_time = datetime.utcnow()
+    window_start = current_time - timedelta(minutes=1)
+    
+    # Clean old entries
+    if client_ip in request.app.state.rate_limit_store:
+        request.app.state.rate_limit_store[client_ip] = [
+            timestamp for timestamp in request.app.state.rate_limit_store[client_ip]
+            if timestamp > window_start
+        ]
+    else:
+        request.app.state.rate_limit_store[client_ip] = []
+    
+    # Check rate limit (100 requests per minute)
+    if len(request.app.state.rate_limit_store[client_ip]) >= 100:
+        return JSONResponse(
+            status_code=429,
+            content={"detail": "Rate limit exceeded. Please try again later."}
+        )
+    
+    # Add current request
+    request.app.state.rate_limit_store[client_ip].append(current_time)
+    
+    return await call_next(request)
+
+# Security headers middleware
+@app.middleware("http")
+async def security_headers_middleware(request: Request, call_next):
+    """Add security headers to all responses"""
+    response = await call_next(request)
+    
+    # Security headers
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["X-XSS-Protection"] = "1; mode=block"
+    response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
+    response.headers["Content-Security-Policy"] = "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline';"
+    response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+    response.headers["Permissions-Policy"] = "geolocation=(), microphone=(), camera=()"
+    
+    return response
+
 # Configure CORS
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=[
+        "http://localhost:3000",  # Development frontend
+        "http://localhost:5173",  # Vite dev server
+        "http://127.0.0.1:3000",  # Alternative localhost
+        "http://127.0.0.1:5173",  # Alternative Vite dev server
+        # Add your production domains here:
+        # "https://yourdomain.com",
+        # "https://app.yourdomain.com",
+    ],
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    allow_headers=["Authorization", "Content-Type", "X-Requested-With", "Accept"],
+    max_age=3600,
 )
 
 # Include routers
@@ -113,6 +173,9 @@ app.include_router(health.router, tags=["health"])
 app.include_router(query.router, tags=["queries"])
 app.include_router(documents.router, tags=["documents"])
 app.include_router(immigration.router, prefix="/immigration", tags=["immigration"])
+app.include_router(analysis.router, tags=["analysis"])
+app.include_router(admin.router, prefix="/admin", tags=["admin"])
+app.include_router(external.router, prefix="/external", tags=["external"])
 
 # REMOVED: The old duplicate @app.on_event handlers that were causing conflicts
 

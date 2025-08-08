@@ -1,7 +1,6 @@
 // components/chat/MessageItem.tsx
 import React from 'react';
 import type { Message } from '../../types';
-import { renderMarkdown } from '../../utils/markdown';
 
 interface MessageItemProps {
   message: Message;
@@ -9,56 +8,68 @@ interface MessageItemProps {
 }
 
 export const MessageItem: React.FC<MessageItemProps> = ({ message, onRequestExpansion }) => {
+  const isUser = message.from === 'user';
+  
   return (
-    <div className={`flex ${message.from === 'user' ? 'justify-end' : 'justify-start'}`}>
-      <div className={`max-w-3xl rounded-2xl px-4 py-3 ${
-        message.from === 'user' 
-          ? 'bg-slate-900 text-white' 
-          : 'bg-gray-50 text-gray-900 border border-gray-100'
-      }`}>
-        <div 
-          className="prose prose-sm max-w-none"
-          dangerouslySetInnerHTML={{ __html: renderMarkdown(message.text) }}
-        />
-        
-        {message.from === 'bot' && (message.confidence || (message.sources && message.sources.length > 0)) && (
-          <div className="mt-3 pt-3 border-t border-gray-200 text-xs text-gray-500">
-            {message.confidence && (
-              <div className="flex items-center gap-2 mb-2">
+    <div className={`flex gap-4 p-6 ${isUser ? 'justify-end' : 'justify-start'}`}>
+      {!isUser && (
+        <div className="w-10 h-10 bg-gradient-to-br from-slate-800 to-slate-900 rounded-full flex items-center justify-center flex-shrink-0">
+          <span className="text-white font-semibold text-sm">AI</span>
+        </div>
+      )}
+      
+      <div className={`max-w-3xl ${isUser ? 'order-first' : ''}`}>
+        <div className={`rounded-2xl p-4 ${
+          isUser 
+            ? 'bg-slate-900 text-white' 
+            : 'bg-slate-50 text-slate-900 border border-slate-200'
+        }`}>
+          <div className="prose prose-sm max-w-none">
+            {message.text.split('\n').map((line, index) => (
+              <p key={index} className="mb-2 last:mb-0">
+                {line}
+              </p>
+            ))}
+          </div>
+          
+          {message.confidence && (
+            <div className="mt-3 pt-3 border-t border-slate-200/50">
+              <div className="flex items-center gap-2 text-xs text-slate-500">
                 <span>Confidence:</span>
-                <div className="flex-1 bg-gray-200 rounded-full h-2 max-w-20">
+                <div className="flex-1 bg-slate-200 rounded-full h-2">
                   <div 
-                    className="bg-blue-500 h-2 rounded-full transition-all" 
-                    style={{ width: `${(message.confidence * 100)}%` }}
+                    className="bg-green-500 h-2 rounded-full transition-all duration-300"
+                    style={{ width: `${message.confidence * 100}%` }}
                   />
                 </div>
-                <span>{Math.round((message.confidence || 0) * 100)}%</span>
+                <span>{Math.round(message.confidence * 100)}%</span>
               </div>
-            )}
+            </div>
+          )}
+        </div>
+        
+        {!isUser && onRequestExpansion && (
+          <div className="mt-2 flex gap-2">
+            <button
+              onClick={() => onRequestExpansion(message.text)}
+              className="text-xs text-slate-500 hover:text-slate-700 font-medium transition-colors"
+            >
+               Expand
+            </button>
             {message.sources && message.sources.length > 0 && (
-              <div>
-                <span className="font-medium">Sources: </span>
-                {message.sources.slice(0, 3).map((source: any, i: number) => (
-                  <span key={i} className="mr-2">
-                    {source.file_name}
-                    {i < Math.min(message.sources!.length - 1, 2) ? ',' : ''}
-                  </span>
-                ))}
-                {message.sources.length > 3 && <span>+{message.sources.length - 3} more</span>}
-              </div>
+              <span className="text-xs text-slate-400">
+                📚 {message.sources.length} sources
+              </span>
             )}
           </div>
         )}
-        
-        {message.from === 'bot' && message.expandAvailable && onRequestExpansion && (
-          <button
-            onClick={() => onRequestExpansion(message.text)}
-            className="mt-2 text-xs bg-blue-50 text-blue-600 px-3 py-1 rounded-full hover:bg-blue-100 transition-all"
-          >
-            Expand Answer
-          </button>
-        )}
       </div>
+      
+      {isUser && (
+        <div className="w-10 h-10 bg-gradient-to-br from-orange-500 to-orange-600 rounded-full flex items-center justify-center flex-shrink-0">
+          <span className="text-white font-semibold text-sm">You</span>
+        </div>
+      )}
     </div>
   );
 };

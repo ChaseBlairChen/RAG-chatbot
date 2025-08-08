@@ -15,6 +15,8 @@ export const ImmigrationTools: React.FC = () => {
     country: '',
     testimony: ''
   });
+  const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
+  const [documentResults, setDocumentResults] = useState<any[]>([]);
 
   const apiService = new ApiService(backendUrl, apiToken);
 
@@ -25,6 +27,8 @@ export const ImmigrationTools: React.FC = () => {
     }
 
     setLoading(true);
+    setResults(null); // Clear previous results
+    
     try {
       const requestData = {
         country: formData.country,
@@ -32,10 +36,23 @@ export const ImmigrationTools: React.FC = () => {
         date_range: 'last_2_years'
       };
 
+      console.log('🔍 Starting country research for:', formData.country);
       const data = await apiService.post('/immigration/country-conditions/research', requestData);
+      console.log('✅ Country research completed');
       setResults({ type: 'country_conditions', data, timestamp: new Date().toLocaleString() });
     } catch (error) {
-      setResults({ type: 'country_conditions', error: error instanceof Error ? error.message : 'Unknown error' });
+      console.error('❌ Country research failed:', error);
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+      
+      // Check if it's a timeout error
+      if (errorMessage.includes('timeout') || errorMessage.includes('aborted')) {
+        setResults({ 
+          type: 'country_conditions', 
+          error: 'Research timed out. This can happen with complex country research. Please try again or try a different country.' 
+        });
+      } else {
+        setResults({ type: 'country_conditions', error: errorMessage });
+      }
     }
     setLoading(false);
   };
@@ -62,6 +79,206 @@ export const ImmigrationTools: React.FC = () => {
       setResults({ type: 'testimony_analysis', data, timestamp: new Date().toLocaleString() });
     } catch (error) {
       setResults({ type: 'testimony_analysis', error: error instanceof Error ? error.message : 'Unknown error' });
+    }
+    setLoading(false);
+  };
+
+  // Document processing functions
+  const handleFileSelect = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(event.target.files || []);
+    setSelectedFiles(files);
+  };
+
+  const classifyDocuments = async () => {
+    if (selectedFiles.length === 0) {
+      alert('Please select files to classify');
+      return;
+    }
+
+    setLoading(true);
+    setDocumentResults([]);
+    
+    try {
+      const results = [];
+      
+      for (const file of selectedFiles) {
+        const formData = new FormData();
+        formData.append('file', file);
+        
+        const response = await fetch(`${backendUrl}/immigration/documents/classify`, {
+          method: 'POST',
+          headers: { 'Authorization': `Bearer ${apiToken}` },
+          body: formData,
+        });
+
+        if (response.ok) {
+          const result = await response.json();
+          results.push({
+            filename: file.name,
+            ...result,
+            success: true
+          });
+        } else {
+          results.push({
+            filename: file.name,
+            success: false,
+            error: `HTTP ${response.status}: ${response.statusText}`
+          });
+        }
+      }
+      
+      setDocumentResults(results);
+      setResults({ 
+        type: 'document_classification', 
+        data: { results }, 
+        timestamp: new Date().toLocaleString() 
+      });
+    } catch (error) {
+      setResults({ 
+        type: 'document_classification', 
+        error: error instanceof Error ? error.message : 'Unknown error' 
+      });
+    }
+    setLoading(false);
+  };
+
+  const checkTranslationNeeds = async () => {
+    if (selectedFiles.length === 0) {
+      alert('Please select files to check for translation needs');
+      return;
+    }
+
+    setLoading(true);
+    try {
+      const results = [];
+      
+      for (const file of selectedFiles) {
+        const formData = new FormData();
+        formData.append('file', file);
+        
+        const response = await fetch(`${backendUrl}/immigration/documents/classify`, {
+          method: 'POST',
+          headers: { 'Authorization': `Bearer ${apiToken}` },
+          body: formData,
+        });
+
+        if (response.ok) {
+          const result = await response.json();
+          results.push({
+            filename: file.name,
+            language: result.classification?.language || 'unknown',
+            requires_translation: result.classification?.requires_translation || false,
+            success: true
+          });
+        } else {
+          results.push({
+            filename: file.name,
+            success: false,
+            error: `HTTP ${response.status}: ${response.statusText}`
+          });
+        }
+      }
+      
+      setResults({ 
+        type: 'translation_check', 
+        data: { results }, 
+        timestamp: new Date().toLocaleString() 
+      });
+    } catch (error) {
+      setResults({ 
+        type: 'translation_check', 
+        error: error instanceof Error ? error.message : 'Unknown error' 
+      });
+    }
+    setLoading(false);
+  };
+
+  const runCompletenessCheck = async () => {
+    setLoading(true);
+    try {
+      // This would typically check against a case's required documents
+      // For now, we'll provide a general checklist
+      const checklist = {
+        asylum_case: [
+          'I-589 Application for Asylum',
+          'Personal Statement/Affidavit',
+          'Country Conditions Evidence',
+          'Identity Documents',
+          'Medical Records (if applicable)',
+          'Police Reports (if applicable)',
+          'Witness Statements (if applicable)'
+        ],
+        family_based: [
+          'I-130 Petition',
+          'I-485 Application',
+          'Birth Certificates',
+          'Marriage Certificate',
+          'Financial Support Documents',
+          'Medical Examination'
+        ]
+      };
+      
+      setResults({ 
+        type: 'completeness_check', 
+        data: { checklist }, 
+        timestamp: new Date().toLocaleString() 
+      });
+    } catch (error) {
+      setResults({ 
+        type: 'completeness_check', 
+        error: error instanceof Error ? error.message : 'Unknown error' 
+      });
+    }
+    setLoading(false);
+  };
+
+  const generatePrefilledForms = async () => {
+    if (selectedFiles.length === 0) {
+      alert('Please select documents to extract information from');
+      return;
+    }
+
+    setLoading(true);
+    try {
+      const results = [];
+      
+      for (const file of selectedFiles) {
+        const formData = new FormData();
+        formData.append('file', file);
+        
+        const response = await fetch(`${backendUrl}/immigration/documents/classify`, {
+          method: 'POST',
+          headers: { 'Authorization': `Bearer ${apiToken}` },
+          body: formData,
+        });
+
+        if (response.ok) {
+          const result = await response.json();
+          results.push({
+            filename: file.name,
+            extracted_data: result.classification?.extracted_data || {},
+            form_type: result.classification?.form_type || 'unknown',
+            success: true
+          });
+        } else {
+          results.push({
+            filename: file.name,
+            success: false,
+            error: `HTTP ${response.status}: ${response.statusText}`
+          });
+        }
+      }
+      
+      setResults({ 
+        type: 'form_prefill', 
+        data: { results }, 
+        timestamp: new Date().toLocaleString() 
+      });
+    } catch (error) {
+      setResults({ 
+        type: 'form_prefill', 
+        error: error instanceof Error ? error.message : 'Unknown error' 
+      });
     }
     setLoading(false);
   };
@@ -200,11 +417,212 @@ export const ImmigrationTools: React.FC = () => {
               <h4 className="font-semibold text-green-900 mb-3">💡 Recommendations</h4>
               <ul className="space-y-1">
                 {results.data.recommendations.map((rec: string, idx: number) => (
-                  <li key={idx} className="text-sm text-green-800">• {rec}</li>
+                  <li key={idx} className="text-sm text-green-700">• {rec}</li>
                 ))}
               </ul>
             </div>
           )}
+        </div>
+      );
+    }
+
+    // Document Classification Results
+    if (results.type === 'document_classification' && results.data?.results) {
+      return (
+        <div className="space-y-4">
+          <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
+            <h4 className="font-semibold text-blue-900 mb-2 flex items-center gap-2">
+              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+              </svg>
+              📄 Document Classification Complete
+            </h4>
+          </div>
+
+          <div className="space-y-3">
+            {results.data.results.map((result: any, index: number) => (
+              <div key={index} className={`border rounded-lg p-4 ${result.success ? 'bg-white' : 'bg-red-50 border-red-200'}`}>
+                <div className="flex items-center justify-between mb-2">
+                  <h5 className="font-medium text-gray-900">{result.filename}</h5>
+                  <span className={`text-xs px-2 py-1 rounded-full ${result.success ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'}`}>
+                    {result.success ? 'Success' : 'Failed'}
+                  </span>
+                </div>
+                
+                {result.success ? (
+                  <div className="space-y-2">
+                    <div className="flex items-center gap-2">
+                      <span className="text-sm text-gray-600">Category:</span>
+                      <span className="text-sm font-medium">{result.classification?.category || 'Unknown'}</span>
+                    </div>
+                    {result.classification?.form_type && (
+                      <div className="flex items-center gap-2">
+                        <span className="text-sm text-gray-600">Form Type:</span>
+                        <span className="text-sm font-medium">{result.classification.form_type}</span>
+                      </div>
+                    )}
+                    <div className="flex items-center gap-2">
+                      <span className="text-sm text-gray-600">Language:</span>
+                      <span className="text-sm font-medium">{result.classification?.language || 'Unknown'}</span>
+                    </div>
+                    {result.classification?.requires_translation && (
+                      <div className="flex items-center gap-2">
+                        <span className="text-xs bg-yellow-100 text-yellow-800 px-2 py-1 rounded">
+                          ⚠️ Requires Translation
+                        </span>
+                      </div>
+                    )}
+                  </div>
+                ) : (
+                  <p className="text-sm text-red-600">{result.error}</p>
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
+      );
+    }
+
+    // Translation Check Results
+    if (results.type === 'translation_check' && results.data?.results) {
+      return (
+        <div className="space-y-4">
+          <div className="bg-green-50 border border-green-200 rounded-lg p-4">
+            <h4 className="font-semibold text-green-900 mb-2 flex items-center gap-2">
+              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 5h12M9 3v2m1.048 9.5A18.022 18.022 0 016.412 9m6.088 9h7M11 21l5-10 5 10M12.751 5C11.783 10.77 8.07 15.61 3 18.129" />
+              </svg>
+              🌐 Translation Check Complete
+            </h4>
+          </div>
+
+          <div className="space-y-3">
+            {results.data.results.map((result: any, index: number) => (
+              <div key={index} className={`border rounded-lg p-4 ${result.success ? 'bg-white' : 'bg-red-50 border-red-200'}`}>
+                <div className="flex items-center justify-between mb-2">
+                  <h5 className="font-medium text-gray-900">{result.filename}</h5>
+                  <span className={`text-xs px-2 py-1 rounded-full ${result.requires_translation ? 'bg-red-100 text-red-800' : 'bg-green-100 text-green-800'}`}>
+                    {result.requires_translation ? 'Needs Translation' : 'No Translation Needed'}
+                  </span>
+                </div>
+                
+                {result.success ? (
+                  <div className="space-y-2">
+                    <div className="flex items-center gap-2">
+                      <span className="text-sm text-gray-600">Language:</span>
+                      <span className="text-sm font-medium">{result.language}</span>
+                    </div>
+                    {result.requires_translation && (
+                      <div className="bg-yellow-50 border border-yellow-200 rounded p-3">
+                        <p className="text-sm text-yellow-800">
+                          ⚠️ This document requires certified translation for USCIS submission.
+                        </p>
+                      </div>
+                    )}
+                  </div>
+                ) : (
+                  <p className="text-sm text-red-600">{result.error}</p>
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
+      );
+    }
+
+    // Completeness Check Results
+    if (results.type === 'completeness_check' && results.data?.checklist) {
+      return (
+        <div className="space-y-4">
+          <div className="bg-purple-50 border border-purple-200 rounded-lg p-4">
+            <h4 className="font-semibold text-purple-900 mb-2 flex items-center gap-2">
+              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5H7a2 2 0 00-2 2v10a2 2 0 002 2h8a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" />
+              </svg>
+              ✅ Completeness Checklist
+            </h4>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+            <div className="bg-white border rounded-lg p-4">
+              <h5 className="font-semibold text-gray-900 mb-3">Asylum Case Requirements</h5>
+              <ul className="space-y-2">
+                {results.data.checklist.asylum_case.map((item: string, index: number) => (
+                  <li key={index} className="flex items-center gap-2 text-sm text-gray-700">
+                    <span className="w-2 h-2 bg-blue-500 rounded-full"></span>
+                    {item}
+                  </li>
+                ))}
+              </ul>
+            </div>
+            
+            <div className="bg-white border rounded-lg p-4">
+              <h5 className="font-semibold text-gray-900 mb-3">Family-Based Case Requirements</h5>
+              <ul className="space-y-2">
+                {results.data.checklist.family_based.map((item: string, index: number) => (
+                  <li key={index} className="flex items-center gap-2 text-sm text-gray-700">
+                    <span className="w-2 h-2 bg-green-500 rounded-full"></span>
+                    {item}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    // Form Pre-fill Results
+    if (results.type === 'form_prefill' && results.data?.results) {
+      return (
+        <div className="space-y-4">
+          <div className="bg-orange-50 border border-orange-200 rounded-lg p-4">
+            <h4 className="font-semibold text-orange-900 mb-2 flex items-center gap-2">
+              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+              </svg>
+              📋 Form Pre-fill Data Extracted
+            </h4>
+          </div>
+
+          <div className="space-y-3">
+            {results.data.results.map((result: any, index: number) => (
+              <div key={index} className={`border rounded-lg p-4 ${result.success ? 'bg-white' : 'bg-red-50 border-red-200'}`}>
+                <div className="flex items-center justify-between mb-2">
+                  <h5 className="font-medium text-gray-900">{result.filename}</h5>
+                  <span className={`text-xs px-2 py-1 rounded-full ${result.success ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'}`}>
+                    {result.success ? 'Success' : 'Failed'}
+                  </span>
+                </div>
+                
+                {result.success ? (
+                  <div className="space-y-2">
+                    <div className="flex items-center gap-2">
+                      <span className="text-sm text-gray-600">Form Type:</span>
+                      <span className="text-sm font-medium">{result.form_type}</span>
+                    </div>
+                    {Object.keys(result.extracted_data).length > 0 ? (
+                      <div className="bg-gray-50 rounded p-3">
+                        <h6 className="text-sm font-medium text-gray-900 mb-2">Extracted Data:</h6>
+                        <div className="space-y-1">
+                          {Object.entries(result.extracted_data).map(([key, value]: [string, any]) => (
+                            <div key={key} className="flex justify-between text-xs">
+                              <span className="text-gray-600">{key}:</span>
+                              <span className="text-gray-900">{String(value)}</span>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    ) : (
+                      <p className="text-sm text-gray-500">No data extracted from this document.</p>
+                    )}
+                  </div>
+                ) : (
+                  <p className="text-sm text-red-600">{result.error}</p>
+                )}
+              </div>
+            ))}
+          </div>
         </div>
       );
     }
@@ -279,6 +697,10 @@ export const ImmigrationTools: React.FC = () => {
             <div className="p-4 bg-green-50 rounded-lg border border-green-200 mb-6">
               <p className="text-sm text-green-800 mb-4">
                 Research current human rights conditions, government persecution, and violence in specific countries for asylum cases.
+                <br />
+                <span className="text-xs text-green-700 mt-1 block">
+                  ⏱️ Research may take 1-2 minutes for comprehensive analysis
+                </span>
               </p>
               <div className="flex gap-4 mb-4">
                 <input
@@ -354,7 +776,17 @@ export const ImmigrationTools: React.FC = () => {
             {loading && (
               <div className="text-center py-8">
                 <div className="w-8 h-8 border-4 border-gray-200 border-t-blue-600 rounded-full animate-spin mx-auto mb-4"></div>
-                <p className="text-gray-600">Processing immigration research...</p>
+                <p className="text-gray-600 font-medium mb-2">Researching country conditions...</p>
+                <p className="text-sm text-gray-500">
+                  This may take 1-2 minutes for comprehensive research. 
+                  <br />
+                  Searching documents and analyzing current conditions...
+                </p>
+                <div className="mt-4 flex justify-center space-x-2">
+                  <div className="w-2 h-2 bg-blue-600 rounded-full animate-pulse"></div>
+                  <div className="w-2 h-2 bg-blue-600 rounded-full animate-pulse" style={{animationDelay: '0.2s'}}></div>
+                  <div className="w-2 h-2 bg-blue-600 rounded-full animate-pulse" style={{animationDelay: '0.4s'}}></div>
+                </div>
               </div>
             )}
           </div>
@@ -369,14 +801,48 @@ export const ImmigrationTools: React.FC = () => {
             Immigration Document Tools
           </h3>
           
+          {/* File Upload Section */}
+          <div className="mb-6 p-4 bg-gray-50 rounded-lg border border-gray-200">
+            <h4 className="font-medium text-gray-900 mb-3">📁 Select Documents</h4>
+            <div className="flex items-center gap-4">
+              <input
+                type="file"
+                multiple
+                accept=".pdf,.doc,.docx,.txt"
+                onChange={handleFileSelect}
+                className="flex-1 px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+              />
+              <span className="text-sm text-gray-600">
+                {selectedFiles.length} file(s) selected
+              </span>
+            </div>
+            {selectedFiles.length > 0 && (
+              <div className="mt-3">
+                <p className="text-sm text-gray-700 mb-2">Selected files:</p>
+                <div className="space-y-1">
+                  {selectedFiles.map((file, index) => (
+                    <div key={index} className="flex items-center justify-between text-sm bg-white rounded p-2">
+                      <span className="text-gray-900">{file.name}</span>
+                      <span className="text-gray-500">({(file.size / 1024 / 1024).toFixed(2)} MB)</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+          
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
             <div className="p-4 bg-blue-50 rounded-lg border border-blue-200">
               <h4 className="font-medium text-blue-900 mb-3">📄 Document Classification</h4>
               <p className="text-sm text-blue-800 mb-4">
                 Automatically classify uploaded documents by type (I-589, evidence, identity docs, etc.)
               </p>
-              <button className="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700 transition-all">
-                Upload & Classify Documents
+              <button 
+                onClick={classifyDocuments}
+                disabled={loading || selectedFiles.length === 0}
+                className="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700 transition-all disabled:bg-gray-400 disabled:cursor-not-allowed"
+              >
+                {loading ? 'Classifying...' : 'Upload & Classify Documents'}
               </button>
             </div>
             
@@ -385,8 +851,12 @@ export const ImmigrationTools: React.FC = () => {
               <p className="text-sm text-green-800 mb-4">
                 Detect document language and identify documents that need certified translation
               </p>
-              <button className="bg-green-600 text-white px-4 py-2 rounded hover:bg-green-700 transition-all">
-                Check Translation Needs
+              <button 
+                onClick={checkTranslationNeeds}
+                disabled={loading || selectedFiles.length === 0}
+                className="bg-green-600 text-white px-4 py-2 rounded hover:bg-green-700 transition-all disabled:bg-gray-400 disabled:cursor-not-allowed"
+              >
+                {loading ? 'Checking...' : 'Check Translation Needs'}
               </button>
             </div>
             
@@ -395,8 +865,12 @@ export const ImmigrationTools: React.FC = () => {
               <p className="text-sm text-purple-800 mb-4">
                 Verify all required documents are present for specific case types
               </p>
-              <button className="bg-purple-600 text-white px-4 py-2 rounded hover:bg-purple-700 transition-all">
-                Run Completeness Check
+              <button 
+                onClick={runCompletenessCheck}
+                disabled={loading}
+                className="bg-purple-600 text-white px-4 py-2 rounded hover:bg-purple-700 transition-all disabled:bg-gray-400 disabled:cursor-not-allowed"
+              >
+                {loading ? 'Checking...' : 'Run Completeness Check'}
               </button>
             </div>
             
@@ -405,11 +879,38 @@ export const ImmigrationTools: React.FC = () => {
               <p className="text-sm text-orange-800 mb-4">
                 Extract information from documents to pre-fill USCIS forms
               </p>
-              <button className="bg-orange-600 text-white px-4 py-2 rounded hover:bg-orange-700 transition-all">
-                Generate Pre-filled Forms
+              <button 
+                onClick={generatePrefilledForms}
+                disabled={loading || selectedFiles.length === 0}
+                className="bg-orange-600 text-white px-4 py-2 rounded hover:bg-orange-700 transition-all disabled:bg-gray-400 disabled:cursor-not-allowed"
+              >
+                {loading ? 'Extracting...' : 'Generate Pre-filled Forms'}
               </button>
             </div>
           </div>
+          
+          {/* Results Display */}
+          {results && (
+            <div className="mt-6">
+              <div className="flex items-center justify-between mb-4">
+                <h3 className="font-medium text-gray-900 capitalize">
+                  {results.type.replace('_', ' ')} Results
+                </h3>
+                <span className="text-xs text-gray-500">{results.timestamp}</span>
+              </div>
+              {renderResult()}
+            </div>
+          )}
+
+          {loading && (
+            <div className="text-center py-8">
+              <div className="w-8 h-8 border-4 border-gray-200 border-t-blue-600 rounded-full animate-spin mx-auto mb-4"></div>
+              <p className="text-gray-600 font-medium mb-2">Processing documents...</p>
+              <p className="text-sm text-gray-500">
+                Analyzing immigration documents and extracting information...
+              </p>
+            </div>
+          )}
           
           <div className="mt-6 p-4 bg-yellow-50 border border-yellow-200 rounded-lg">
             <h4 className="font-medium text-yellow-900 mb-2">💡 Document Processing Tips:</h4>

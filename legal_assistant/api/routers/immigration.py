@@ -1,5 +1,6 @@
 """Immigration law specific endpoints"""
 import logging
+import os
 from typing import List
 from datetime import datetime, timedelta
 from fastapi import APIRouter, Depends, HTTPException, Form, File, UploadFile

@@ -1,14 +1,13 @@
 // components/results/ResultsTab.tsx
 import React from 'react';
-import type { AnalysisResult } from '../../types';
 import { AnalysisResultComponent } from './AnalysisResult';
 import { EmptyState } from '../common/EmptyState';
 
 interface ResultsTabProps {
-  analysisResults: AnalysisResult[];
+  analysisResults: any[];
   isAnalyzing: boolean;
   onRerunAnalysis: (documentId: string) => void;
-  onDownloadResult: (resultId: number) => void;
+  onDownloadResult: (id: number) => void;
   onClearResults: () => void;
   onSetActiveTab: (tab: string) => void;
 }
@@ -21,46 +20,97 @@ export const ResultsTab: React.FC<ResultsTabProps> = ({
   onClearResults,
   onSetActiveTab
 }) => {
+  if (analysisResults.length === 0) {
+    return (
+      <EmptyState
+        icon="📊"
+        title="No Analysis Results"
+        description="Run document analysis to see results here."
+        action={{
+          label: "Run Analysis",
+          onClick: () => onSetActiveTab('analysis')
+        }}
+      />
+    );
+  }
+
+  const completedResults = analysisResults.filter(r => r.status === 'completed');
+  const processingResults = analysisResults.filter(r => r.status === 'processing');
+  const failedResults = analysisResults.filter(r => r.status === 'failed');
+
   return (
-    <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-8">
-      <div className="flex items-center justify-between mb-6">
-        <h2 className="text-2xl font-semibold text-gray-900">Analysis Results</h2>
-        <div className="flex items-center gap-4 text-sm text-gray-500">
-          <span>{analysisResults.length} result{analysisResults.length !== 1 ? 's' : ''}</span>
-          {analysisResults.length > 0 && (
-            <button
-              onClick={onClearResults}
-              className="text-red-600 hover:text-red-700 font-medium"
-            >
-              Clear All Results
-            </button>
-          )}
+    <div className="space-y-6">
+      {/* Header */}
+      <div className="flex items-center justify-between">
+        <div>
+          <h1 className="text-3xl font-bold text-gray-900">Analysis Results</h1>
+          <p className="text-gray-600 mt-1">
+            {completedResults.length} completed, {processingResults.length} processing, {failedResults.length} failed
+          </p>
+        </div>
+        
+        <div className="flex gap-3">
+          <button
+            onClick={() => onSetActiveTab('analysis')}
+            className="bg-blue-600 text-white px-4 py-2 rounded-lg font-medium hover:bg-blue-700 transition-all"
+          >
+            Run New Analysis
+          </button>
+          <button
+            onClick={onClearResults}
+            className="bg-gray-100 text-gray-700 px-4 py-2 rounded-lg font-medium hover:bg-gray-200 transition-all"
+          >
+            Clear All
+          </button>
         </div>
       </div>
-      
-      {analysisResults.length === 0 ? (
-        <EmptyState
-          icon={
-            <svg className="w-8 h-8 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
-            </svg>
-          }
-          title="No analysis results"
-          description="Run analysis tools to see comprehensive results here"
-          action={{
-            label: "Go to Analysis Tools",
-            onClick: () => onSetActiveTab('analysis')
-          }}
-        />
-      ) : (
-        <div className="space-y-6">
-          {analysisResults.map((result) => (
+
+      {/* Processing Results */}
+      {processingResults.length > 0 && (
+        <div className="bg-blue-50 border border-blue-200 rounded-2xl p-6">
+          <h2 className="text-lg font-semibold text-blue-900 mb-4">Processing...</h2>
+          <div className="space-y-3">
+            {processingResults.map((result) => (
+              <div key={result.id} className="flex items-center gap-3">
+                <div className="w-4 h-4 border-2 border-blue-600 border-t-transparent rounded-full animate-spin" />
+                <span className="text-blue-800">{result.toolTitle} on {result.document}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Failed Results */}
+      {failedResults.length > 0 && (
+        <div className="bg-red-50 border border-red-200 rounded-2xl p-6">
+          <h2 className="text-lg font-semibold text-red-900 mb-4">Failed Analyses</h2>
+          <div className="space-y-3">
+            {failedResults.map((result) => (
+              <div key={result.id} className="flex items-center justify-between">
+                <span className="text-red-800">{result.toolTitle} on {result.document}</span>
+                <button
+                  onClick={() => onRerunAnalysis(result.documentId)}
+                  className="text-sm text-red-600 hover:text-red-700 font-medium"
+                >
+                  Retry
+                </button>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Completed Results */}
+      {completedResults.length > 0 && (
+        <div className="space-y-4">
+          <h2 className="text-xl font-semibold text-gray-900">Completed Analyses</h2>
+          {completedResults.map((result) => (
             <AnalysisResultComponent
               key={result.id}
               result={result}
               isAnalyzing={isAnalyzing}
-              onRerun={onRerunAnalysis}
               onDownload={onDownloadResult}
+              onRerun={onRerunAnalysis}
             />
           ))}
         </div>

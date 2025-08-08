@@ -1038,39 +1038,120 @@ class QueryProcessor:
         )
     
     def _detect_query_types(self, question: str) -> List[str]:
-        """Detect query types for intelligent processing"""
+        """
+        Enhanced query type detection with better context understanding
+        """
         query_types = []
         question_lower = question.lower()
         
-        # Check if this is a complex multi-part query that should be broken down
-        if self._should_suggest_breakdown(question):
-            query_types.append("complex_multi_part")
+        # Enhanced pattern matching with context
+        patterns = {
+            "statutory": [
+                r"\b(statute|law|act|code|regulation|rule)\b",
+                r"\b(what does|how does|interpret|meaning of)\b.*\b(section|paragraph|clause)\b",
+                r"\b(legal requirement|compliance|violation)\b",
+                r"\b(amendment|repeal|enact)\b"
+            ],
+            "immigration": [
+                r"\b(visa|green card|citizenship|asylum|deportation|removal)\b",
+                r"\b(uscis|immigration court|border|refugee)\b",
+                r"\b(i-130|i-485|i-589|i-751|n-400)\b",
+                r"\b(adjustment of status|consular processing)\b"
+            ],
+            "case_law": [
+                r"\b(case|precedent|ruling|decision|judgment)\b",
+                r"\b(court|judge|appeal|supreme court)\b",
+                r"\b(holding|dicta|stare decisis)\b",
+                r"\b(legal precedent|binding authority)\b"
+            ],
+            "procedural": [
+                r"\b(procedure|process|filing|deadline|timeline)\b",
+                r"\b(how to|steps|requirements|forms)\b",
+                r"\b(appeal|motion|petition|hearing)\b",
+                r"\b(legal procedure|administrative process)\b"
+            ],
+            "comprehensive_analysis": [
+                r"\b(analyze|analysis|comprehensive|detailed|thorough)\b",
+                r"\b(review|examine|assess|evaluate)\b",
+                r"\b(legal analysis|case analysis|document review)\b",
+                r"\b(risk assessment|legal implications)\b"
+            ],
+            "data_lookup": [
+                r"\b(data|statistics|numbers|figures|records)\b",
+                r"\b(lookup|find|search|retrieve)\b",
+                r"\b(database|records|filing|registration)\b",
+                r"\b(public records|government data)\b"
+            ],
+            "factual": [
+                r"\b(what is|who is|when|where|how many)\b",
+                r"\b(fact|information|details|specific)\b",
+                r"\b(definition|explanation|description)\b",
+                r"\b(basic information|general knowledge)\b"
+            ]
+        }
         
-        # Statutory/regulatory patterns
-        if self._detect_statutory_question(question):
-            query_types.append(QueryType.STATUTORY.value)
+        # Check patterns with context scoring
+        for query_type, pattern_list in patterns.items():
+            score = 0
+            for pattern in pattern_list:
+                if re.search(pattern, question_lower):
+                    score += 1
+            
+            # Require multiple matches for complex types
+            if query_type in ["comprehensive_analysis", "case_law"]:
+                if score >= 2:
+                    query_types.append(query_type)
+            elif score >= 1:
+                query_types.append(query_type)
         
-        # Immigration patterns
-        if self._detect_immigration_query(question):
-            query_types.append(QueryType.IMMIGRATION.value)
+        # Add context-based detection
+        if self._detect_complex_legal_question(question):
+            query_types.append("comprehensive_analysis")
         
-        # Legal search patterns
-        if self._detect_legal_search_intent(question):
-            query_types.append(QueryType.LEGAL_SEARCH.value)
+        if self._detect_urgent_question(question):
+            query_types.append("urgent")
+            
+        if self._detect_multi_part_question(question):
+            query_types.append("multi_step")
         
-        # Government data patterns
-        if self._detect_government_data_need(question):
-            query_types.append(QueryType.GOVERNMENT_DATA.value)
+        return list(set(query_types))  # Remove duplicates
+    
+    def _detect_complex_legal_question(self, question: str) -> bool:
+        """Detect complex legal questions requiring comprehensive analysis"""
+        complexity_indicators = [
+            r"\b(however|although|despite|while)\b",  # Complex reasoning
+            r"\b(if|when|unless|provided that)\b",    # Conditional logic
+            r"\b(and|or|but|also|furthermore)\b",     # Multiple concepts
+            r"\b(compare|contrast|difference|similarity)\b",  # Comparative analysis
+            r"\b(implications|consequences|effects)\b",  # Impact analysis
+            r"\b(legal strategy|approach|options)\b"   # Strategic thinking
+        ]
         
-        # Enhanced query type detection for comprehensive API routing
-        comprehensive_types = self._detect_comprehensive_query_types(question)
-        query_types.extend(comprehensive_types)
+        score = sum(1 for pattern in complexity_indicators if re.search(pattern, question.lower()))
+        return score >= 2
+    
+    def _detect_urgent_question(self, question: str) -> bool:
+        """Detect urgent questions requiring immediate attention"""
+        urgency_indicators = [
+            r"\b(urgent|emergency|immediate|asap|quick)\b",
+            r"\b(deadline|due date|expiration|time sensitive)\b",
+            r"\b(critical|important|essential|vital)\b",
+            r"\b(help|assist|support|guidance)\b.*\b(now|today|immediately)\b"
+        ]
         
-        # Default to general if no specific types detected
-        if not query_types:
-            query_types.append(QueryType.GENERAL.value)
+        return any(re.search(pattern, question.lower()) for pattern in urgency_indicators)
+    
+    def _detect_multi_part_question(self, question: str) -> bool:
+        """Detect multi-part questions requiring step-by-step processing"""
+        multi_part_indicators = [
+            r"\b(and|also|furthermore|additionally|moreover)\b",
+            r"\b(first|second|third|finally|lastly)\b",
+            r"\b(part|section|aspect|element)\b",
+            r"\b(question|query|inquiry)\b.*\b(about|regarding|concerning)\b"
+        ]
         
-        return query_types
+        score = sum(1 for pattern in multi_part_indicators if re.search(pattern, question.lower()))
+        return score >= 2
 
     def _should_suggest_breakdown(self, question: str) -> bool:
         """Detect if query should be broken down into smaller parts"""

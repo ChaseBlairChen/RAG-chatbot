@@ -57,24 +57,90 @@ class OpenRouterService:
         self._session = requests.Session()
         self._session.headers.update(self.headers)
 
-    def _create_payload(self, prompt: str, model: str) -> Dict[str, Any]:
+    def _create_payload(self, prompt: str, model: str, query_type: str = "general", response_style: str = "balanced") -> Dict[str, Any]:
         """
-        Creates the JSON payload for the chat completion request.
+        Creates the JSON payload for the chat completion request with advanced prompt engineering.
         """
+        # Enhanced system prompts based on query type
+        system_prompts = {
+            "legal_analysis": """You are an expert legal assistant with deep knowledge of US law, regulations, and legal procedures. 
+Your responses should be:
+- Accurate and well-reasoned based on legal sources
+- Clear and accessible to both legal professionals and laypersons
+- Comprehensive but concise
+- Properly cited when referencing specific laws or cases
+- Cautious about providing legal advice (disclaimers when appropriate)
+
+Always structure your responses with clear headings, bullet points for key points, and actionable insights when possible.""",
+            
+            "immigration": """You are a specialized immigration law expert with extensive knowledge of:
+- USCIS forms and procedures
+- Immigration court processes
+- Asylum and refugee law
+- Family-based immigration
+- Employment-based immigration
+- Removal proceedings
+
+Provide practical, accurate guidance while being clear about limitations and the need for professional legal counsel.""",
+            
+            "statutory": """You are a statutory interpretation expert. When analyzing statutes:
+- Focus on plain meaning first
+- Consider legislative intent and history
+- Reference relevant case law interpretations
+- Identify key terms and definitions
+- Note any ambiguities or areas requiring judicial interpretation
+- Provide practical applications when possible""",
+            
+            "comprehensive_analysis": """You are conducting a comprehensive legal analysis. Structure your response with:
+1. Executive Summary
+2. Key Legal Issues
+3. Relevant Laws and Regulations
+4. Analysis and Interpretation
+5. Practical Implications
+6. Recommendations
+7. Risk Assessment
+8. Next Steps
+
+Be thorough but organized, and always cite your sources.""",
+            
+            "general": """You are a knowledgeable legal assistant. Provide helpful, accurate information while:
+- Being clear about the limitations of your advice
+- Suggesting when professional legal counsel is needed
+- Providing practical, actionable information
+- Citing relevant sources when possible
+- Maintaining a helpful, professional tone"""
+        }
+        
+        # Select appropriate system prompt
+        system_prompt = system_prompts.get(query_type, system_prompts["general"])
+        
+        # Adjust parameters based on response style
+        style_params = {
+            "concise": {"temperature": 0.3, "max_tokens": 1000},
+            "balanced": {"temperature": 0.5, "max_tokens": 2000},
+            "detailed": {"temperature": 0.7, "max_tokens": 3000},
+            "comprehensive": {"temperature": 0.4, "max_tokens": 4000}
+        }
+        
+        params = style_params.get(response_style, style_params["balanced"])
+        
         return {
             "model": model,
             "messages": [
                 {
                     "role": "system",
-                    "content": "You are a legal assistant. Respond only to the current query."
+                    "content": system_prompt
                 },
                 {
                     "role": "user",
                     "content": prompt
                 }
             ],
-            "temperature": 0.5,
-            "max_tokens": 2000
+            "temperature": params["temperature"],
+            "max_tokens": params["max_tokens"],
+            "top_p": 0.9,
+            "frequency_penalty": 0.1,
+            "presence_penalty": 0.1
         }
 
     def call_api(self, prompt: str) -> Optional[str]:
@@ -123,7 +189,7 @@ class OpenRouterService:
         return None
 
 # FIXED: Add backward compatible function that was missing
-def call_openrouter_api(prompt: str, api_key: str = None, api_base: str = None) -> str:
+def call_openrouter_api(prompt: str, api_key: str = None, api_base: str = None, timeout: int = 60) -> str:
     """
     Backward compatible function for existing code
     This function was missing and causing import errors
@@ -131,7 +197,8 @@ def call_openrouter_api(prompt: str, api_key: str = None, api_base: str = None) 
     try:
         service = OpenRouterService(
             api_key=api_key or OPENROUTER_API_KEY,
-            api_base=api_base or OPENAI_API_BASE
+            api_base=api_base or OPENAI_API_BASE,
+            timeout=timeout
         )
         response = service.call_api(prompt)
         return response or "I apologize, but I couldn't generate a response at this time."

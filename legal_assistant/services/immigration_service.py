@@ -197,7 +197,8 @@ Focus on: {', '.join(request.topics)}
 
 Organize the information by topic and include specific examples with dates."""
         
-        analysis = call_openrouter_api(prompt)
+        # Use longer timeout for research analysis
+        analysis = call_openrouter_api(prompt, timeout=120)
         
         return {
             "country": request.country,

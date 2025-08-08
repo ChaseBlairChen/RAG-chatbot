@@ -1,15 +1,15 @@
 // components/documents/DocumentsTab.tsx
 import React from 'react';
-import type { DocumentAnalysis } from '../../types';
 import { DocumentItem } from './DocumentItem';
 import { EmptyState } from '../common/EmptyState';
+import type { DocumentAnalysis } from '../../types';
 
 interface DocumentsTabProps {
   documentAnalyses: DocumentAnalysis[];
   userDocuments: any[];
   isAnalyzing: boolean;
-  onAnalyze: (docId: string) => void;
-  onDelete: (docId: string) => void;
+  onAnalyze: (documentId: string) => void;
+  onDelete: (documentId: string) => void;
   onSetActiveTab: (tab: string) => void;
 }
 
@@ -21,42 +21,79 @@ export const DocumentsTab: React.FC<DocumentsTabProps> = ({
   onDelete,
   onSetActiveTab
 }) => {
+  if (userDocuments.length === 0) {
+    return (
+      <EmptyState
+        icon=""
+        title="No Documents Yet"
+        description="Upload your first legal document to get started with AI-powered analysis."
+        actionText="Upload Documents"
+        onAction={() => onSetActiveTab('upload')}
+      />
+    );
+  }
+
   return (
-    <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-8">
-      <div className="flex items-center justify-between mb-6">
-        <h2 className="text-2xl font-semibold text-gray-900">My Documents</h2>
-        <div className="text-sm text-gray-500">
-          {userDocuments.length} document{userDocuments.length !== 1 ? 's' : ''}
+    <div className="space-y-6">
+      {/* Header */}
+      <div className="flex items-center justify-between">
+        <div>
+          <h1 className="text-3xl font-bold text-gray-900">My Documents</h1>
+          <p className="text-gray-600 mt-1">
+            {userDocuments.length} document{userDocuments.length !== 1 ? 's' : ''} uploaded
+          </p>
+        </div>
+        
+        <button
+          onClick={() => onSetActiveTab('upload')}
+          className="bg-blue-600 text-white px-6 py-3 rounded-xl font-medium hover:bg-blue-700 transition-all"
+        >
+          Upload More
+        </button>
+      </div>
+
+      {/* Documents Grid */}
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+        {userDocuments.map((document) => {
+          const analysis = documentAnalyses.find(d => d.id === document.file_id);
+          
+          return (
+            <DocumentItem
+              key={document.file_id}
+              document={document}
+              analysis={analysis}
+              isAnalyzing={isAnalyzing}
+              onAnalyze={() => onAnalyze(document.file_id)}
+              onDelete={() => onDelete(document.file_id)}
+            />
+          );
+        })}
+      </div>
+
+      {/* Quick Actions */}
+      <div className="bg-gray-50 rounded-2xl p-6">
+        <h3 className="text-lg font-semibold text-gray-900 mb-4">Quick Actions</h3>
+        <div className="flex flex-wrap gap-4">
+          <button
+            onClick={() => onSetActiveTab('analysis')}
+            className="bg-green-600 text-white px-4 py-2 rounded-lg font-medium hover:bg-green-700 transition-all"
+          >
+            🔍 Run Analysis
+          </button>
+          <button
+            onClick={() => onSetActiveTab('results')}
+            className="bg-purple-600 text-white px-4 py-2 rounded-lg font-medium hover:bg-purple-700 transition-all"
+          >
+            📊 View Results
+          </button>
+          <button
+            onClick={() => onSetActiveTab('upload')}
+            className="bg-blue-600 text-white px-4 py-2 rounded-lg font-medium hover:bg-blue-700 transition-all"
+          >
+            📤 Upload More
+          </button>
         </div>
       </div>
-      
-      {userDocuments.length === 0 ? (
-        <EmptyState
-          icon={
-            <svg className="w-8 h-8 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
-            </svg>
-          }
-          title="No documents uploaded"
-          description="Upload your first legal document to get started"
-          action={{
-            label: "Upload Document",
-            onClick: () => onSetActiveTab('upload')
-          }}
-        />
-      ) : (
-        <div className="space-y-4">
-          {documentAnalyses.map((doc) => (
-            <DocumentItem
-              key={doc.id}
-              document={doc}
-              isAnalyzing={isAnalyzing}
-              onAnalyze={onAnalyze}
-              onDelete={onDelete}
-            />
-          ))}
-        </div>
-      )}
     </div>
   );
 };
